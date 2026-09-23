@@ -609,11 +609,15 @@ struct BatchSelectionScreen: View {
     /// running one again can make the second copy the whole area exists to prevent, and skipping it
     /// silently can leave a video the user wanted untouched. So it is named, explained and left for
     /// the user to tick by hand, which is the same arrangement a copy this app made has.
+    ///
+    /// Said of the copy rather than of what BatchShrink did, because the one-video flow raises the
+    /// same question without stopping in the middle of anything: it asked Photos for a copy and never
+    /// learned whether one was made.
     static func unaccountedExplanation(_ count: Int) -> String {
         guard count > 1 else {
-            return "BatchShrink stopped while Photos was taking a copy of this video, so it cannot tell whether a copy already exists. Running it again could make a second copy, so it is left out of Select all. Tick it by hand if you have checked Photos."
+            return "BatchShrink asked Photos for a copy of this video and could not find out whether it was made, so it cannot tell whether a copy already exists. Running it again could make a second copy, so it is left out of Select all. Tick it by hand if you have checked Photos."
         }
-        return "BatchShrink stopped while Photos was taking copies of these videos, so it cannot tell whether a copy already exists for each one. Running them again could make a second copy, so they are left out of Select all. Tick one by hand if you have checked Photos."
+        return "BatchShrink asked Photos for copies of these videos and could not find out whether each one was made, so it cannot tell whether a copy already exists for each one. Running them again could make a second copy, so they are left out of Select all. Tick one by hand if you have checked Photos."
     }
 
     private var footer: String {
@@ -985,7 +989,25 @@ struct BatchProcessingScreen: View {
 
     private var subhead: String {
         if batch.isStopping { return "Stopping after this step. Saved copies are safe." }
-        return "\(batch.finishedCount) of \(batch.items.count) finished."
+        return Self.processingSubhead(finished: batch.finishedCount,
+                                      total: batch.items.count,
+                                      toCheck: batch.summary.needsCheckCount)
+    }
+
+    /// What the working screen's count accounts for, and what it does not.
+    ///
+    /// It read "\(finishedCount) of \(items.count) finished", and `isFinished` is true for a video
+    /// whose save Photos never confirmed - the claim round 20 took off the paused screen, left
+    /// standing one screen earlier. A run of four saved videos and one question read "5 of 5
+    /// finished" directly above a card whose own row says Photos did not confirm that save. The count
+    /// now covers the copies the run can account for and names the one it cannot, in the paused
+    /// screen's own words. Static and internal so a case can state the sentence.
+    static func processingSubhead(finished: Int, total: Int, toCheck: Int) -> String {
+        guard toCheck > 0 else { return "\(finished) of \(total) finished." }
+        let accounted = finished - toCheck
+        return toCheck == 1
+            ? "\(accounted) of \(total) finished. One more needs a look in Photos."
+            : "\(accounted) of \(total) finished. \(toCheck) more need a look in Photos."
     }
 
     private var estimateCard: some View {

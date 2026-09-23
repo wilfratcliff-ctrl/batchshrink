@@ -308,6 +308,35 @@ import UIKit
         XCTAssertEqual(reader.copyMeasurements().first?.longEdge, 1_920)
     }
 
+    /// The one-video flow's record of a save it never heard back about is kept where the other flow
+    /// reads it, and dropped when the app learns the answer either way.
+    func testTheHistoryStoreKeepsACopyTheOneVideoFlowNeverHeardBackAbout() throws {
+        let name = "videoshrink.services.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+
+        let writer = UserDefaultsShrinkHistoryStore(defaults: defaults)
+        XCTAssertTrue(writer.unconfirmedSaveIdentifiers().isEmpty)
+
+        // Written before Photos is asked, and read back by the launch that follows a kill.
+        writer.noteUnconfirmedSave(identifier: "original")
+        let reader = UserDefaultsShrinkHistoryStore(defaults: defaults)
+        XCTAssertEqual(reader.unconfirmedSaveIdentifiers(), ["original"])
+
+        // A second one piles up in one session too - a save that throws leaves the flow able to choose
+        // another video - and both are held.
+        writer.noteUnconfirmedSave(identifier: "another")
+        XCTAssertEqual(writer.unconfirmedSaveIdentifiers(), ["original", "another"])
+
+        // An answer clears one of them and leaves the other, and a repeat is not a second entry.
+        writer.noteUnconfirmedSave(identifier: "original")
+        XCTAssertEqual(writer.unconfirmedSaveIdentifiers().count, 2)
+        writer.clearUnconfirmedSave(identifier: "original")
+        XCTAssertEqual(writer.unconfirmedSaveIdentifiers(), ["another"])
+        writer.clearUnconfirmedSave(identifier: "another")
+        XCTAssertTrue(UserDefaultsShrinkHistoryStore(defaults: defaults).unconfirmedSaveIdentifiers().isEmpty)
+    }
+
     func testMeasurementsDropTheOldestSoTheNewestStillRetuneTheBand() throws {
         let name = "videoshrink.services.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -1084,6 +1113,84 @@ import UIKit
         XCTAssertEqual(batchFixture.batch.selectableAssets.map(\.id), ["other"])
     }
 
+    /// A save is the one step whose outcome the app cannot recover from not knowing, and this flow
+    /// has no queue to journal it in - so the note goes to the store before Photos is asked, and the
+    /// answer takes it away again. Both halves are pinned here: what the store held *at the moment of
+    /// the call* is read inside it, not afterwards.
+    func testTheOneVideoFlowNotesASaveBeforePhotosIsAskedAndClearsItOnTheAnswer() async throws {
+        let name = "videoshrink.services.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsShrinkHistoryStore(defaults: defaults)
+
+        let oneVideo = OneVideoServiceFixture(history: store)
+        var heldDuringTheCall: Set<String>?
+        oneVideo.photos.onSave = { heldDuringTheCall = store.unconfirmedSaveIdentifiers() }
+
+        oneVideo.model.chooseVideo()
+        await eventually { oneVideo.model.showingPicker }
+        oneVideo.model.selected(identifier: "original")
+        await eventually { oneVideo.model.canSave }
+        oneVideo.model.save()
+        await eventually { oneVideo.model.stage == .saved }
+
+        XCTAssertEqual(heldDuringTheCall, ["original"],
+                       "the app has to know a copy may exist before Photos is asked for one")
+        XCTAssertTrue(store.unconfirmedSaveIdentifiers().isEmpty,
+                      "Photos answered with an identifier, so there is nothing left to ask about")
+        XCTAssertEqual(store.createdCopyIdentifiers(), ["created-1"])
+    }
+
+    /// And when Photos never answers - it throws, or hands back no identifier - the note stays, so the
+    /// batch flow's automatic selection still leaves that video alone.
+    func testASavePhotosNeverAnswersLeavesTheOneVideoFlowsNoteInPlace() async throws {
+        let name = "videoshrink.services.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsShrinkHistoryStore(defaults: defaults)
+
+        let oneVideo = OneVideoServiceFixture(history: store)
+        oneVideo.photos.saveFailure = .save
+
+        oneVideo.model.chooseVideo()
+        await eventually { oneVideo.model.showingPicker }
+        oneVideo.model.selected(identifier: "original")
+        await eventually { oneVideo.model.canSave }
+        oneVideo.model.save()
+        await eventually { oneVideo.model.stage == .failed }
+
+        XCTAssertEqual(store.unconfirmedSaveIdentifiers(), ["original"])
+        XCTAssertTrue(store.createdCopyIdentifiers().isEmpty,
+                      "nothing was written down as this app's own copy, because nothing confirmed one")
+    }
+
+    /// Photos can finish the transaction and hand back no identifier at all. The copy is real and this
+    /// app cannot name it, so the note is not the honest thing to leave: asking the user whether a copy
+    /// exists would contradict the sentence the screen is about to show. What the original needs is the
+    /// one thing the app can say about it - it has been shrunk, so no automatic selection may run it.
+    func testASaveWithNoIdentifierRecordsTheOriginalRatherThanAShrug() async throws {
+        let name = "videoshrink.services.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsShrinkHistoryStore(defaults: defaults)
+
+        let oneVideo = OneVideoServiceFixture(history: store)
+        oneVideo.photos.saveWithoutIdentifier = true
+
+        oneVideo.model.chooseVideo()
+        await eventually { oneVideo.model.showingPicker }
+        oneVideo.model.selected(identifier: "original")
+        await eventually { oneVideo.model.canSave }
+        oneVideo.model.save()
+        await eventually { oneVideo.model.stage == .saved }
+
+        XCTAssertEqual(store.completedIdentifiers(), ["original"])
+        XCTAssertTrue(store.createdCopyIdentifiers().isEmpty,
+                      "there is no identifier to record for the copy itself")
+        XCTAssertTrue(store.unconfirmedSaveIdentifiers().isEmpty,
+                      "the transaction finished, so there is nothing left to ask about")
+    }
+
     // MARK: - Helpers
 
     private func scan(_ fixture: ServiceFixture) async {
@@ -1250,6 +1357,16 @@ private final class ServiceMonitorStatus {
     var deletedIdentifiers: [String] = []
     /// What Photos hands back when the app asks for the copy it just saved.
     var readBackURL: URL? = URL(fileURLWithPath: "/photos/readback.mov")
+    /// What the fake throws instead of answering a save, so a case can drive the one state where
+    /// nobody knows whether the copy exists.
+    var saveFailure: PipelineError?
+    /// Finishes the transaction without handing an identifier back, which Photos does when it has no
+    /// placeholder to name the new asset with.
+    var saveWithoutIdentifier = false
+    /// Called at the top of `save`, which is the moment the one-video flow has just written down that
+    /// Photos is about to be asked. It exists so a case can read the store *during* the call rather
+    /// than after it, which is the only way to tell that write from one made afterwards.
+    var onSave: (() -> Void)?
 
     func requestAccess() async throws -> Bool { false }
 
@@ -1265,6 +1382,9 @@ private final class ServiceMonitorStatus {
 
     func save(videoAt url: URL, identity: AssetIdentity) async throws -> String? {
         saveCount += 1
+        onSave?()
+        if let saveFailure { throw saveFailure }
+        guard !saveWithoutIdentifier else { return nil }
         let identifier = "created-\(saveCount)"
         createdIdentifiers.append(identifier)
         return identifier

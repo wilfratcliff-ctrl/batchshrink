@@ -27,10 +27,23 @@ is absent from `completedIdentifiers` too, so it can be run again. This is the o
 The batch's counterpart is the whole `needsCheck` record plus `midSaveFindings`, and it exists
 because a save Photos was asked for but did not confirm is never a clean failure.
 
-**Open.** The narrowest fix is a pending-save marker written to the shared
-`ShrinkHistoryStoring` store before `photos.save` and cleared when it returns either way; a marker
-left at launch is an unresolved question, and the batch already has the consumer for it. The
-one-video welcome would then need one sentence.
+**Fixed in round 24**, unverified, and mostly in the shape this section named. The shared
+`ShrinkHistoryStoring` store gained a bounded list of *unconfirmed saves*: the one-video flow writes
+the original's identifier immediately before `photos.save` and clears it only when Photos hands back
+an identifier, so a throw or a nil answer leaves it standing. The batch flow adopts every entry at
+launch, before it restores its queue, as the same unresolved question it raises for its own
+mid-save stops - which is what keeps the video out of `selectableAssets` and names it on the
+selection screen. The entry is dropped where the question is answered: a fresh look that settles the
+video, the "I checked Photos" tap, a tick by hand, and a later one-video save that Photos confirms.
+
+Two deliberate departures from the suggestion, and one limit. The entry is a *list*, not one marker,
+because two of them can only pile up across a relaunch and the single value would lose the older.
+The one-video welcome still says nothing: the harm this finding names is only reachable through the
+batch flow's automatic selection, which is where the app now both excludes the video and explains
+why, and the one-video flow has no way to name the copy either. And the copy itself is still not
+nameable - without the identifier Photos never returned, no automatic rule can exclude it - so what
+the card asks the user to do (look for a second copy) is still the only instrument for the copy
+itself. What is prevented is the app making a third copy of the original on its own.
 
 ### SV2 — [P2] The recovery screen's "Shrink one video instead" was drawn live and did nothing
 `VideoShrink/Presentation/BatchScreens.swift` (the recovery screen); `ContentView.switchTo`

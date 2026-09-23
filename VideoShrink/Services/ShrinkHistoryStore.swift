@@ -17,6 +17,7 @@ import Foundation
     private let identifiersKey = "shrink.completedIdentifiers"
     private let createdCopyIdentifiersKey = "shrink.createdCopyIdentifiers"
     private let measurementsKey = "shrink.copyMeasurements"
+    private let unconfirmedSavesKey = "shrink.unconfirmedSaves"
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -56,6 +57,26 @@ import Foundation
     /// alone. Nothing else about the copy is kept: no media, filename, location or date.
     func recordCreatedCopy(identifier: String) {
         append(identifier, forKey: createdCopyIdentifiersKey)
+    }
+
+    /// The originals this app has asked Photos for a copy of and never heard back about.
+    ///
+    /// A list rather than one identifier, under the same bound as the other lists, because more than
+    /// one can be outstanding at a time: a save that throws leaves the flow able to choose another
+    /// video and throw again, and a relaunch can add more on top. One identifier appears once however
+    /// many times it is written.
+    func unconfirmedSaveIdentifiers() -> Set<String> {
+        Set(defaults.stringArray(forKey: unconfirmedSavesKey) ?? [])
+    }
+
+    func noteUnconfirmedSave(identifier: String) {
+        append(identifier, forKey: unconfirmedSavesKey)
+    }
+
+    func clearUnconfirmedSave(identifier: String) {
+        var identifiers = defaults.stringArray(forKey: unconfirmedSavesKey) ?? []
+        identifiers.removeAll { $0 == identifier }
+        defaults.set(identifiers, forKey: unconfirmedSavesKey)
     }
 
     /// Adds one identifier to the end of a list and holds that list to `identifierLimit`. A

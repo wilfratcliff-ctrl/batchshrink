@@ -84,4 +84,24 @@ protocol VideoVerifying {
     func record(identifier: String, measurement: CopyMeasurement?)
     /// Remembers one copy Photos handed back to this app, bounded like the shrunk originals.
     func recordCreatedCopy(identifier: String)
+    /// The originals this app has asked Photos for a copy of and never learned the outcome of.
+    ///
+    /// The batch flow journals a save in the queue it writes before every Photos step, so this is for
+    /// the flow that has no queue of its own: a copy the one-video pipeline was handing to Photos
+    /// when the app stopped would otherwise leave no trace at all. That is the one state this store
+    /// exists to prevent, because a copy nothing has written down is a copy the batch flow's
+    /// automatic selection cannot tell from an untouched original - and neither can it tell that
+    /// original, whose own copy may already be in the library.
+    func unconfirmedSaveIdentifiers() -> Set<String>
+    /// Writes down that Photos is about to be asked for a copy of this original, before it is asked.
+    func noteUnconfirmedSave(identifier: String)
+    /// Drops the entry once the app knows what became of the copy, by either answer.
+    func clearUnconfirmedSave(identifier: String)
+}
+
+extension ShrinkHistoryStoring {
+    /// A store with nothing to say about a save under way says so rather than guessing.
+    @MainActor func unconfirmedSaveIdentifiers() -> Set<String> { [] }
+    @MainActor func noteUnconfirmedSave(identifier: String) {}
+    @MainActor func clearUnconfirmedSave(identifier: String) {}
 }

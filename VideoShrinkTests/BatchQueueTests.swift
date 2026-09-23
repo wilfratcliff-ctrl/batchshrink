@@ -1019,6 +1019,93 @@ import Photos
         XCTAssertEqual(fixture.store.stored?.questions?.isEmpty, true)
     }
 
+    // MARK: - A copy the one-video flow never heard back about
+
+    /// Only the one-video flow can leave one of these: it has no queue of its own, so the copy it was
+    /// handing to Photos when the app stopped was written down in the history store instead. The
+    /// batch flow has to carry it as the same question it carries any other, or an automatic
+    /// selection would tick both that copy's original and the copy itself.
+    func testACopyTheOtherFlowNeverHeardAboutKeepsItsVideoOutOfSelectAll() async {
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        fixture.history.unconfirmedSaves = ["a"]
+
+        let batch = fixture.makeBatch()
+
+        XCTAssertEqual(batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.selectAll()
+
+        XCTAssertEqual(batch.selection, ["b"])
+        XCTAssertEqual(batch.unaccountedAssets.map(\.id), ["a"])
+        XCTAssertEqual(batch.midSaveQuestion(for: "a"), MidSaveFinding.unknownQuestion)
+    }
+
+    func testTickingThatVideoByHandAnswersTheOtherFlowsQuestion() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.history.unconfirmedSaves = ["a"]
+        let batch = fixture.makeBatch()
+
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.toggle("a")
+        batch.start()
+        await eventually { batch.phase != .processing }
+
+        XCTAssertTrue(batch.unaccountedIdentifiers.isEmpty)
+        // And the store is told, or the next launch would ask again about a video the user has just
+        // run: the entry is read at every launch, not once.
+        XCTAssertTrue(fixture.history.unconfirmedSaves.isEmpty)
+    }
+
+    func testAFreshLookThatSettlesTheQuestionDropsTheOtherFlowsEntry() {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.history.unconfirmedSaves = ["a"]
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+
+        // The queue named this video precisely and a fresh look found its copy, so the app has an
+        // answer. The other flow's entry was the same question, so it goes with it.
+        XCTAssertEqual(relaunched.midSaveFindings["a"], MidSaveFinding.copyInPhotos)
+        XCTAssertTrue(fixture.history.unconfirmedSaves.isEmpty)
+    }
+
+    func testTheCheckedPhotosTapAlsoDropsTheOtherFlowsEntry() {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.history.unconfirmedSaves = ["a"]
+        fixture.photos.revalidation = .unavailable
+
+        let relaunched = fixture.makeBatch()
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+
+        relaunched.requeueUncertain()
+
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.pending)
+        XCTAssertTrue(fixture.history.unconfirmedSaves.isEmpty)
+    }
+
+    /// Both stores can have something to say about one video. The queue's question is the more
+    /// specific one, so adopting the other flow's entry first must not write over it.
+    func testAQuestionTheQueueNamesMorePreciselyWinsOverTheOtherFlowsEntry() {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = BatchQueueRecord(
+            settings: .init(resolution: "hd1080", frameRate: "original"),
+            items: [],
+            questions: [.init(identifier: "a", kind: .limitedAccess)])
+        fixture.history.unconfirmedSaves = ["a"]
+
+        let relaunched = fixture.makeBatch()
+
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
+    }
+
     // MARK: - Why a restored run stopped
 
     func testARestoredRunRemembersWhyItStopped() async {
@@ -1386,12 +1473,17 @@ private final class QueueMockVerifier: VideoVerifying {
 @MainActor private final class QueueMockHistory: ShrinkHistoryStoring {
     var identifiers: Set<String> = []
     var createdCopies: Set<String> = []
+    /// The one-video flow's record of a copy it asked Photos for and never heard back about.
+    var unconfirmedSaves: Set<String> = []
 
     func completedIdentifiers() -> Set<String> { identifiers }
     func copyMeasurements() -> [CopyMeasurement] { [] }
     func record(identifier: String, measurement: CopyMeasurement?) { identifiers.insert(identifier) }
     func createdCopyIdentifiers() -> Set<String> { createdCopies }
     func recordCreatedCopy(identifier: String) { createdCopies.insert(identifier) }
+    func unconfirmedSaveIdentifiers() -> Set<String> { unconfirmedSaves }
+    func noteUnconfirmedSave(identifier: String) { unconfirmedSaves.insert(identifier) }
+    func clearUnconfirmedSave(identifier: String) { unconfirmedSaves.remove(identifier) }
 }
 
 @MainActor private final class QueueMockScreenAwake: ScreenAwakeControlling {

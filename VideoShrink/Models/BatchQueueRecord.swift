@@ -293,7 +293,13 @@ enum MidSaveFinding: Equatable, Sendable {
 
     /// The question left open when neither the record nor Photos can narrow it, or when the app
     /// can see only part of the library for reasons of its own.
-    static let unknownQuestion = "BatchShrink stopped while Photos was taking a copy of this video. Look in Photos: if there are two copies, that copy was made; if there is one, it wasn't."
+    ///
+    /// Worded about the *copy* rather than about what BatchShrink did, because two different things
+    /// raise it: the batch flow's own stop in the middle of a save, and the one-video flow asking
+    /// Photos for a copy and never hearing what became of it (a save that threw, or one Photos
+    /// finished without handing an identifier back). "BatchShrink stopped" was true of the first and
+    /// false of the second, where the flow went on to report the copy saved.
+    static let unknownQuestion = "BatchShrink asked Photos for a copy of this video and never learned whether it was made. Look in Photos: if there are two copies, that copy was made; if there is one, it wasn't."
     /// The same question when access covers part of the library, which makes a copy the app cannot
     /// see no evidence at all that it was never written.
     static let limitedAccessQuestion = "Photos access covers only some of your library, so BatchShrink cannot tell whether this video was copied. Look in Photos before running it again."

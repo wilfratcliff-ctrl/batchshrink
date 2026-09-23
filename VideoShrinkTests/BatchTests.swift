@@ -1016,6 +1016,20 @@ import SwiftUI
                        "1 of 4 saved. Copies already saved are in Photos. 2 more need a look in Photos.")
     }
 
+    /// The same rule on the screen a run spends its whole life on, which had the same sentence.
+    ///
+    /// The working screen said "\(finishedCount) of \(items.count) finished", and a video whose save
+    /// Photos never confirmed counts as finished - so a run of four saved videos and one question read
+    /// "5 of 5 finished" directly above a card whose own row says Photos did not confirm that save.
+    func testTheWorkingCountAlsoAccountsForWhatIsStillAQuestion() {
+        XCTAssertEqual(BatchProcessingScreen.processingSubhead(finished: 3, total: 5, toCheck: 0),
+                       "3 of 5 finished.")
+        XCTAssertEqual(BatchProcessingScreen.processingSubhead(finished: 5, total: 5, toCheck: 1),
+                       "4 of 5 finished. One more needs a look in Photos.")
+        XCTAssertEqual(BatchProcessingScreen.processingSubhead(finished: 4, total: 6, toCheck: 2),
+                       "2 of 6 finished. 2 more need a look in Photos.")
+    }
+
     /// The paused screen names a deletion that has happened, and never a state the run has not
     /// reached.
     func testThePausedScreenNamesOnlyDeletionsThatHaveAlreadyHappened() {

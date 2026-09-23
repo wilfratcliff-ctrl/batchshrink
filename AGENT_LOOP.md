@@ -386,6 +386,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 21 | see below | The highest-value open finding from round 20's audits: a video that may already have a copy was bulk-selectable again | local gates PASS; `prove:guardrails` 67/67; **CI blocked** | 375 tests, none executed |
 | 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
 | 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
+| 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 400 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -784,7 +785,7 @@ The flow that had never been traced, written up in **[docs/AUDIT_SINGLE_VIDEO.md
 
 | ID | Priority | Item | Status |
 |----|----------|------|--------|
-| SV1 | 2 | A save interrupted while Photos holds it leaves a real copy that nothing remembers, and the batch's Select all can then copy the copy | **open.** The narrowest fix is a pending-save marker in the shared history store, written before the save and cleared when it returns; the batch already has the consumer for it |
+| SV1 | 2 | A save interrupted while Photos holds it leaves a real copy that nothing remembers, and the batch's Select all can then copy the copy | **done, round 24**, unverified, and **not as far as this row's first wording claimed**. The shared history store keeps a bounded list of unconfirmed saves: the one-video flow writes the original before `photos.save` and clears it on the two answers that are answers - a copy Photos named, and a save Photos finished without naming, where the *original* is recorded as one this iPhone has shrunk instead of a question being raised about a copy the app knows exists. A throw leaves the entry. The batch adopts every entry at launch **and at every scan** (so a save in the other flow during the same session still reaches the selection screen), where it is an unresolved question: out of `selectableAssets`, named with the sentence. The entry goes wherever the question is answered - a settling look, the "I checked Photos" tap, a tick by hand, or a later one-video save Photos confirms - and it is deliberately **not** copied into the queue file, which would let it outlive the answer the other flow gave. **The copy itself stays unnameable**, because Photos never returned its identifier, so an automatic selection can still shrink the copy; what this round prevents is the app making a *third* copy of the original on its own. The one-video flow still says nothing on its own screens, and whether `UserDefaults` has reached disk by the time the process dies inside `performChanges` is unverified - the batch uses a real file for the same job |
 | SV2 | 2 | The recovery screen's "Shrink one video instead" was live and did nothing | done, round 21, unverified. The deeper question - whether a *failed* batch should hold the user at all - is open and is a `canLeaveFlow` change |
 | SV3 | 3 | The ready-to-save screen said preview "before saving" when its own text said saving was off | done, round 21, unverified |
 | SV4 | 3 | A copy that came out bigger was drawn as "No size reduction" under an equals sign over two different figures | done, round 21, unverified |
@@ -819,6 +820,25 @@ rather than trusting the revision it was written against.
 |----|----------|------|--------|
 | Q1 | 3 | **A video the app has *concluded* has a copy would be reachable by Select all again.** `unaccountedIdentifiers` holds only an *open* question, and the app's own answer to one - `.copyInPhotos` - both keeps the video out of that set and records only the **copy's** identifier (`rememberCreatedCopy`), never the original's. An item that keeps that conclusion without settling into `.saved` (a receipt with no measured sizes, which `resolveMidSaveItems` refuses to claim) would leave the **original** in `selectableAssets` | **open, and an independent read that doubted the reachability was checked against the code that writes the receipt.** The reviewer argued from field dates - `copyEvidence` arrived in round 1, `attemptedSave` in round 6 - that a build in between could leave that shape. The writer settles it the other way: rounds 1 and 5 both persist `.saved` **before** `confirmReadBack` writes the receipt, so a `.saving` record on disk never carried one, and the repo's own `LegacyMidSaveQueue` fixture asserts exactly that (`copyEvidence: nil`). Rounds 6 and later write the identity and the sizes in the same checkpoint. So the door needs a hand-edited or corrupt file, which is why this is 3 rather than 2 - and the fix is unchanged: one set to decide automatic selection, and a third card sentence for "the copy is there", so a video the app has *concluded* about is not named with a sentence about not being able to tell |
 | Q2 | 3 | The `.choosing -> .cancelled` edge in `PipelineStage.allows` now has no caller, after SV5 moved picker cancellation to `.idle` | open, and a decision rather than a fix: it is the only move into `.cancelled` from a stage `canCancel` is false for, and pruning it is the riskier edit of the two |
+
+### Round 24's audit — the accessibility wave, re-read after four rounds of UI changes
+
+Round 19's ten accessibility findings were recorded as unverified, and rounds 20 to 23 then changed a
+great deal of the same UI. The re-read is in
+**[docs/AUDIT_ACCESSIBILITY_RECHECK.md](docs/AUDIT_ACCESSIBILITY_RECHECK.md)**, with the string, the
+site, the reachability and a confidence per finding. It found all ten round-19 items still present,
+and eight new things:
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| AX1 | 2 | Round 23's notice about a record that could not be read said the app had **"set it aside"**, and nothing in the code moves, deletes or clears that file - the store answers a Bool and the record stays. It also meant the notice returns on every launch until a run overwrites the record, which the sentence did not say | **done, round 24.** The sentence now says what is true: nothing could be restored, nothing in Photos was changed, the record stays, and the notice comes back until a run writes one of its own. Found by an independent audit of the *accessibility* of the screens, which is a reminder that this class of defect is not confined to what a test asserts |
+| AX2 | 3 | The **working** screen's "N of M finished" counted a video whose save Photos never confirmed as finished - the same claim round 20 took off the paused screen, left standing one screen earlier, directly above a card whose own row says Photos did not confirm that save | **done, round 24**, as `BatchProcessingScreen.processingSubhead` in the paused screen's own words, with a case pinning both plural forms |
+| AX3 | 3 | The finished screen says "lighter" and "a smaller copy in Photos" in the state round 19's `E8` declared in scope (a stored `.saved` whose copy is not smaller), while its own row and totals card say the opposite | open. Same caveat `E8` accepted; a stored non-shrinking saving has to be handled once, in one place |
+| AX4 | 3 | The finished screen's overflow hint names all three actions ("Delete originals, try the failed ones again, or run the ones you checked") whatever subset the menu actually holds, so a run with only failures reads a hint promising a Delete that is not there | open, and cheap: the trigger and the contents already come from one list, and the hint is the one string that does not |
+| AX5 | 3 | "Delete 1 originals" in that menu, and six other counts with no singular form (`1 videos to explore`, `1 videos left`, `All 1 copies confirmed`, `From 1 copies measured`, `1 originals may already have been deleted`, `1 of 1 videos`). The confirmation dialog for the same count pluralizes correctly, so one control names its own count two ways | open, and a batch rather than a one-off: several screens want one small plural helper, which is why it is not being patched string by string |
+| AX6 | 3, latent | "To look at in Photos" heads every `.needsCheck` item, including one whose finding the app has already answered, which the notice above it can describe as "Nothing is left to check". Latent: both halves need the state `Q1` records as unreachable from any shipped build | open with `Q1`, and it is the heading half of `Q1`'s own proposed fix |
+| AX7 | 3 | An empty library announces "Nothing to shrink yet." twice, once as the header and once as the notice title, with "0 videos in your Photos library." between them | open, cosmetic |
+| AX8 | 3 | The working screen's time estimate is a bare figure with its explanation as a separate element (the fix `A3` made in the quality sheet is five lines away), and a stage is announced three times over - the orb's label, the card's text and the bar's label, where `A7` hid only the percentage | open |
 
 ## Round 19 — the numbers tell the truth, and the app stops asking too early
 
@@ -1163,3 +1183,84 @@ with the right sentence, the video survives a later run *and* that run's relaunc
 its question while a run with nothing outstanding still clears the record, a hand tick answers the
 question, a restored run remembers why it stopped, and every reason maps through the file. **None of
 it has been compiled.**
+
+### Round 24 — the copy the other flow could not account for
+
+`SV1` was the last P2 on the one-video flow's list, and it is the same class as round 23's work on the
+batch side: a copy that exists and is written down nowhere. The one-video pipeline asks Photos for a
+copy, and if the app stops inside that transaction, Photos may have committed it - but the copy's
+identifier is only ever learned *after* the call returns, so nothing on the device names it. The
+original is not recorded either, because nothing completed. The batch flow's automatic selection
+therefore saw two ordinary videos: this app's own output, and the original it came from.
+
+The batch flow had already solved this for its own saves, by journalling them in the queue it writes
+before every Photos step. The one-video flow has no queue, so the journal went where the two flows
+already share memory: `ShrinkHistoryStoring` gained a bounded list of **unconfirmed saves**, written
+with the original's identifier immediately before `photos.save` and cleared only when Photos hands
+back an identifier. A throw and a nil answer both leave it, deliberately - those are exactly the two
+cases where nobody knows whether the copy exists - and a later save that *is* confirmed clears it.
+
+The batch flow adopts every entry at launch, **before** it restores its queue, as the same unresolved
+question it raises for its own mid-save stops: the video leaves `selectableAssets`, the selection
+screen names it and explains why, and the card's own hint says how to answer it. The order matters
+and is the reason the adoption is a separate step: a question the queue can name more precisely -
+the one where access covers only part of the library, or a finding a fresh look settles - has to
+replace the adopted one rather than be written over by it. The entry is dropped wherever the question
+is answered: the settling look, the "I checked Photos" tap, the tick by hand, and the one-video
+flow's own confirmed save.
+
+**What this round did not do, deliberately.** The copy itself is still not nameable: without the
+identifier Photos never returned, no rule can exclude it from a selection, and the card's advice -
+look in Photos for a second copy - remains the only instrument for it. That is a real limit and it is
+written into the audit rather than papered over. The one-video flow also still says nothing on its
+own screens about a previous unconfirmed save; the harm this finding names is only reachable through
+the batch flow's automatic selection, which is where the app now excludes the video and explains
+itself, and the alternative - a sentence about a video this flow cannot name either - would be a
+claim without an instrument. `Q2` (the `.choosing -> .cancelled` edge with no caller) and `Q1` (the
+concluded-copy exclusion) are still open, unchanged.
+
+**A second, independent audit ran alongside it**, on the part of the app nobody had re-read since
+round 19: what the batch screens say to VoiceOver, after four rounds of changes to those same
+screens. Its eight findings and its sound list are in `docs/AUDIT_ACCESSIBILITY_RECHECK.md`, and the
+table above is the index. The most valuable one is **not** an accessibility defect at all: round 23's
+own notice about an unreadable record said the app had "set it aside", and no code sets anything
+aside - which is what an independent read of a *different* subject is for. Both that sentence and the
+working screen's count are fixed here; the other six are recorded rather than rushed, three of them
+because they want one shared plural helper rather than six string patches.
+
+**An independent review of the round found two routes the first version missed, and both are fixed
+here.** The store was read only when the model was built, so an entry created while the app stayed
+open - the batch flow handed to the one-video flow and back - never reached the selection screen;
+`adoptUnconfirmedSaves()` now runs where the model already re-reads the store, on every scan, and it
+leaves an existing open finding alone so a re-read cannot downgrade the queue's more specific kind.
+And the second store could resurrect a question the first had answered: `openQuestionRecords` was
+writing adopted entries into the queue file, which the one-video flow answers without ever touching,
+so the file's stale copy would put the video back under "Left out of Select all" with a sentence
+about a copy the app had since recorded. A question the store carries is now deliberately left out of
+the file - one fact, in the store that every launch and every scan reads.
+
+The same review corrected three claims the round had made about itself, which is worth recording
+because the file's whole purpose is that its sentences are true. The headline said the batch "can no
+longer be made to copy a copy": only the *original* is protected, and the copy stays unnameable. A
+comment said two entries "can only pile up across a relaunch" - a save that throws leaves the flow
+able to choose another video and throw again, and the round's own new case piles two up in one
+session. And the handoff said the four test doubles implement none of the new requirements, when the
+one the batch cases drive implements all three. It also read the two new sentences against the route
+that raises them without stopping: "BatchShrink stopped while Photos was taking a copy" is false for a
+one-video save that *failed*, so both the row's question and the card's paragraph now say what
+happened to the copy rather than what happened to a flow. And it named one honest gap: the note's
+durability rests on `UserDefaults` having reached disk before the process dies inside
+`performChanges`, which is not something this machine can show - the batch uses a real file with a
+protection class for the same job, and this is the one place the one-video flow's journal is weaker.
+
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 400
+XCTest cases present), the call-site checker PASS over 52 files, 1,226 declarations and 7,944 call
+sites with 0 findings, `npm run typecheck` clean, the pod mirror verified, and `prove:guardrails` 70
+of 70 caught across four gates. Ten new cases pin the round: the store's round trip and its
+two-entries-in-one-session behaviour; the one-video flow writing the note before the call (read from
+inside the save fake, which is the only way to tell that write from one made afterwards) and clearing
+it on the answer; a save that throws leaving it; a save Photos finishes without naming the copy
+recording the original instead of raising a question; the batch excluding and naming the video; the
+tick by hand, the "I checked Photos" tap and a settling look each dropping the entry; the queue's
+more specific question winning over the adopted one; and the working screen's count naming what is
+still a question. **None of it has been compiled.**

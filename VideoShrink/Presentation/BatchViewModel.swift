@@ -248,6 +248,7 @@ private enum RunAccess: Equatable, Sendable {
         createdCopyIdentifiers = history.createdCopyIdentifiers()
         measurements = history.copyMeasurements()
         cleanWorkspace()
+        adoptUnconfirmedSaves()
         restoreQueue()
         // The library can change under the app, and access can change while it is suspended. The
         // monitor reports both and decides nothing itself; what they mean is decided here.
@@ -505,6 +506,11 @@ private enum RunAccess: Equatable, Sendable {
         completedIdentifiers = history.completedIdentifiers()
         createdCopyIdentifiers = history.createdCopyIdentifiers()
         measurements = history.copyMeasurements()
+        // The fourth read from the same store, for the same reason: the other flow can have asked
+        // Photos for a copy since this model was built, and a question raised while the app stayed
+        // open has to reach the selection screen that leaves the video out of Select all - a relaunch
+        // is not the only way the two flows hand work to each other.
+        adoptUnconfirmedSaves()
         runTask = Task { [weak self] in
             guard let self else { return }
             defer {
@@ -900,7 +906,13 @@ private enum RunAccess: Equatable, Sendable {
         // busy making the copy that answers it. The decision is taken at the tick and not when the
         // video is reached: a run that refuses this video before touching it does not put the
         // question back, because the user's own choice is not the app's guess to overrule.
-        for asset in chosen { midSaveFindings[asset.id] = nil }
+        for asset in chosen {
+            midSaveFindings[asset.id] = nil
+            // A copy the other flow asked Photos for is the same question, and the tick answers it
+            // the same way. Without this the entry would outlive the answer: it is read at every
+            // launch, so the next launch would ask again about a video the user has just run.
+            history.clearUnconfirmedSave(identifier: asset.id)
+        }
         // A fresh run starts with no history of cancellations against any video.
         cancelledAttempts = [:]
         // And with no history of anything else either. Every dictionary below is keyed by a video
@@ -1095,6 +1107,9 @@ private enum RunAccess: Equatable, Sendable {
             // ones not requeued keep their finding on purpose: those are the videos whose copy the
             // app can see, and its own answer is not the user's to withdraw.
             midSaveFindings[items[index].id] = nil
+            // The other flow's entry for the same video is the same question, and the tap answers it
+            // too - so it is dropped here as well, or the next launch would ask again.
+            history.clearUnconfirmedSave(identifier: items[index].id)
         }
         persistQueue()
         phase = .paused
@@ -1739,7 +1754,13 @@ private enum RunAccess: Equatable, Sendable {
     /// file.
     private var openQuestionRecords: [BatchQueueRecord.Question] {
         let inThisRun = items.map(\.id)
-        return unaccountedIdentifiers.subtracting(inThisRun).sorted().map { identifier in
+        // A question the shared store already carries is deliberately not written here. The store is
+        // read at every launch *and* at every scan, so the file would be a second copy of one fact -
+        // and a copy that outlives it, because the one flow that can answer this question (a
+        // one-video save Photos confirms) writes to the store and never to this file. Left in, that
+        // answer would be undone by the next launch reading the file.
+        let fromTheStore = history.unconfirmedSaveIdentifiers()
+        return unaccountedIdentifiers.subtracting(inThisRun).subtracting(fromTheStore).sorted().map { identifier in
             BatchQueueRecord.Question(
                 identifier: identifier,
                 kind: BatchQueueRecord.Question.Kind(question: midSaveQuestion(for: identifier)))
@@ -1810,6 +1831,30 @@ private enum RunAccess: Equatable, Sendable {
     /// sentence rather than growing two that could drift apart.
     private static let recordStillThereWarning = "BatchShrink couldn't replace the record it had saved, so the next launch may offer that run again. Check Photos before letting it run."
 
+    /// Takes on the copies the *other* flow asked Photos for and never heard back about.
+    ///
+    /// The one-video pipeline journals nothing of its own, so a copy it was handing to Photos when
+    /// the app stopped is invisible in every other way: the copy is not in `createdCopyIdentifiers`
+    /// and its original is not in `completedIdentifiers`, so a bulk selection would tick both and
+    /// make a copy of a copy. The entry names the original, and the only honest thing the app can say
+    /// about it is that it does not know - which is exactly what a question means here, and what
+    /// keeps the video out of an automatic selection until someone looks.
+    ///
+    /// This runs before `restoreQueue()`, so a question the queue itself can name more precisely -
+    /// the one where access covers only part of the library, or a finding a fresh look settles -
+    /// replaces this one rather than being written over by it.
+    ///
+    /// It is called again on every scan, because the store is not read only at launch: the other flow
+    /// can ask Photos for a copy while this model is alive, and a scan is where the batch refreshes
+    /// everything else it knows from the shared store. A finding this app already has is left alone -
+    /// the queue names a kind the store cannot, and re-reading must not downgrade it.
+    private func adoptUnconfirmedSaves() {
+        for identifier in history.unconfirmedSaveIdentifiers() {
+            guard midSaveFindings[identifier]?.isOpenQuestion != true else { continue }
+            midSaveFindings[identifier] = .unresolved(question: MidSaveFinding.unknownQuestion)
+        }
+    }
+
     private func restoreQueue() {
         guard let record = queueStore.load() else {
             // No record, or one this build cannot read. The second is not the same as no run at all:
@@ -1818,7 +1863,11 @@ private enum RunAccess: Equatable, Sendable {
             // say what it held, so the only honest thing left is to say that much where the user
             // lands.
             if queueStore.hasUnreadableRecord() {
-                queueReadWarning = "BatchShrink has set it aside, and nothing about the library was changed by this launch. If you had a run going, look in Photos before running the same videos again."
+                // Nothing is moved or cleared: the store only answers whether such a file is there,
+                // and the record is left exactly where it is. An earlier wording said the app had
+                // "set it aside", which named an action no code performs - and the notice returns on
+                // every launch until a run writes a record of its own, which the sentence now says.
+                queueReadWarning = "Nothing could be restored from it, and nothing in Photos was changed. The record stays where it is, so this notice comes back until a run writes one of its own. If you had a run going, look in Photos before running the same videos again."
                 log.error("A stored queue could not be read")
             }
             return
@@ -1943,6 +1992,10 @@ private enum RunAccess: Equatable, Sendable {
             case .unresolved:
                 break
             }
+            // Whatever the app worked out here is an answer, and the other flow's entry for the same
+            // video was the same question. An unresolved finding keeps it: that is the case where
+            // nobody has answered anything yet.
+            if !finding.isOpenQuestion { history.clearUnconfirmedSave(identifier: id) }
         }
         // What a launch settled on has to reach disk, or the next one is asked the same question.
         if settled { persistQueue() }

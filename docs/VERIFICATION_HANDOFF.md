@@ -36,8 +36,8 @@ current answer.
 
 Three rounds of Swift sit on `main` that **no compiler has ever seen** — every change after
 `31b6245`, because the account's Actions minutes ran out on 2026-09-23 and reset on 1 October. It is
-about 2,100 lines across seventeen files. The local gates pass, and since round 22 the call-site
-checker resolves **7,804 call sites** with no findings — up from 6,190, because it now sees two
+about 2,200 lines across eighteen files. The local gates pass, and since round 22 the call-site
+checker resolves **7,944 call sites** with no findings — up from 6,190, because it now sees two
 shapes it could not before: enum cases with associated values, and calls written with a leading dot
 like `.planning(resolution:frameRate:)`, of which the scan scope holds 1,371. Everything the checker
 judges is still only *names and argument labels*: it checks no types, no members' types, no
@@ -62,6 +62,7 @@ Ranked by how likely a compile error is to be in them, with the narrowest revert
 | Round 21's selection rule | `BatchViewModel.swift` | `unaccountedIdentifiers` builds a `Set<String>` by `compactMap` over a dictionary whose value is Equatable |
 | Round 23's record (`RR2`, `RR3`, `RR5`) | `BatchQueueRecord.swift`, `BatchQueueStore.swift`, `BatchViewModel.swift`, `BatchScreens.swift` | three new stored members on `BatchQueueRecord` (the memberwise order is now `version, settings, items, refusals, questions, pause`), a protocol requirement whose default lives in a protocol extension (`hasUnreadableRecord()`), and `reset()`'s questions-only write. The memberwise call sites, and the `@MainActor` default that satisfies an isolated requirement, are the likeliest errors; the narrowest revert is the `questions` and `pause` fields with the restore that reads them |
 | Round 23's one-video fixes | `CompressionViewModel.swift`, `PipelineModels.swift`, `QualitySelector.swift`, `BatchFlow.swift`, `SingleVideoFlow.swift` | `QualitySheet` gained a fourth stored property with a default that names a `static let` of its own type, and `BatchFlow`'s call moved off a trailing closure to a named `estimate:` argument. If the compiler dislikes either shape, the revert is the parameter and its two call sites |
+| Round 24's one-video journal (`SV1`) | `ServiceProtocols.swift`, `ShrinkHistoryStore.swift`, `CompressionViewModel.swift`, `BatchViewModel.swift` | three new requirements on `ShrinkHistoryStoring` whose defaults live in a protocol extension (three of the four test doubles are unchanged; the one the batch cases drive implements them), and the note written immediately before `photos.save`. The likeliest error is the `@MainActor` default that satisfies an isolated requirement; the narrowest revert is the three requirements and the call sites that write and clear one |
 
 If the gate fails, the fastest route is the compiler's own file and line, then `git log -1` on that
 file. Every round since 19 also left its reasoning in `AGENT_LOOP.md`, and the two audits' findings

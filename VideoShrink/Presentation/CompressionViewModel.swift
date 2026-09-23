@@ -48,6 +48,12 @@ import Photos
     @Published private var work: Task<Void, Never>?
     private var outputURL: URL?
     private var identity = AssetIdentity.unknown
+    /// The video the picker handed this flow, which is the original a copy would be made of.
+    ///
+    /// Kept for one reason: a save is the moment this flow can ask Photos for a copy and never learn
+    /// whether it was made, and the only thing that can mark that is the original's identifier. See
+    /// `history.noteUnconfirmedSave(identifier:)`.
+    private var originalIdentifier: String?
     private let log = Logger(subsystem: "VideoShrink", category: "Pipeline")
     /// Snapshot taken when a run starts, so changing quality never affects work in flight.
     private var activeSettings = TranscodeSettings.standard
@@ -95,6 +101,7 @@ import Photos
         guard canChoose else { return }
         source = nil; output = nil; message = nil; previewURL = nil
         outputURL = nil; identity = .unknown; retrievingFromCloud = false
+        originalIdentifier = nil
         cancelling = false
         activeSettings = settings.transcode
         move(to: .waitingForPermission)
@@ -118,6 +125,7 @@ import Photos
             return
         }
         move(to: .retrieving)
+        originalIdentifier = identifier
         work = Task {
             defer { work = nil; cancelling = false }
             // The figure the step in hand asked the workspace for, kept beside the call so a space
@@ -205,13 +213,37 @@ import Photos
                 demanded = saveRoom
                 try temporary.requireCapacity(for: saveRoom)
                 demanded = nil
+                // Written down *before* Photos is asked, because this is the one step whose outcome
+                // the app cannot recover from not knowing: a save Photos has accepted cannot be
+                // taken back, and this flow has no queue to journal it in. The batch flow reads this
+                // store, so a copy that is never confirmed still keeps both the copy and its
+                // original out of an automatic selection there. It is left in place when Photos
+                // throws or answers with no identifier, which are exactly the two cases where
+                // nobody knows whether the copy exists.
+                if let originalIdentifier { history.noteUnconfirmedSave(identifier: originalIdentifier) }
                 let created = try await photos.save(videoAt: url, identity: identity)
                 // Written down at the moment the identifier exists, in the same store the batch
                 // flow reads, so a later bulk selection leaves this app's own copy alone. The
                 // copy never enters `completedIdentifiers`: that set means "this original was
                 // shrunk", and the copy is not an original. It stays visible in the library and
                 // can still be chosen by hand.
-                if let created { history.recordCreatedCopy(identifier: created) }
+                if let created {
+                    history.recordCreatedCopy(identifier: created)
+                    // Photos answered, so the question the note above stood for is answered with it.
+                    if let originalIdentifier { history.clearUnconfirmedSave(identifier: originalIdentifier) }
+                } else if let originalIdentifier {
+                    // Photos finished the transaction without handing an identifier back, so the copy
+                    // is real and this app cannot name it - which is why the note is not left standing
+                    // here. The screen is about to say a copy was saved, and the note would ask the
+                    // user whether one was made. What the original needs is the one thing the app can
+                    // say about it honestly: it has been shrunk, so no automatic selection may run it
+                    // again. The copy itself stays unnameable, and that is the whole of the loss.
+                    let measurement = CopyMeasurement(bitsPerSecond: checked.duration > 0
+                                                      ? Double(checked.bytes) * 8 / checked.duration : 0,
+                                                      longEdge: checked.longEdge)
+                    history.record(identifier: originalIdentifier, measurement: measurement)
+                    history.clearUnconfirmedSave(identifier: originalIdentifier)
+                }
                 output = checked
                 move(to: .saved)
                 message = "A separate copy was saved. Your original is unchanged. No iCloud storage has been reclaimed."
