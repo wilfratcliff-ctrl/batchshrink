@@ -31,7 +31,8 @@ struct BatchFlow: View {
                 Button("Shrink \(selectionCount) \(selectionNoun)") { batch.start() }
                 Button("Not yet", role: .cancel) {}
             } message: {
-                Text(startMessage)
+                Text(Self.confirmationMessage(settings: batch.settings.transcode,
+                                              deletion: batch.effectiveDeletionMode))
             }
             .onChange(of: scenePhase) { _, value in
                 if value == .background { batch.enteredBackground() }
@@ -59,13 +60,28 @@ struct BatchFlow: View {
     /// the choice the Originals sheet is showing. The two deleting modes borrow that sheet's own
     /// wording instead of restating it, so the confirmation and the choice cannot drift apart.
     /// Deleting is off unless the user turned it on.
-    private var startMessage: String {
-        let copies = "Each smaller copy is saved to Photos as it finishes, at \(batch.settings.resolution.title)."
-        let mode = batch.effectiveDeletionMode
-        guard mode.deletesOriginals else {
+    ///
+    /// The picture size is named as a ceiling because `TranscodeSettings.effectiveResolution` never
+    /// upscales: a 720p original in a run set to 4K is copied at 720p, which is the rule
+    /// `QualitySelector` states and the export obeys. The sentence used to promise a copy "at 4K"
+    /// for videos that would be copied smaller. The frame rate is named too, in the model's own
+    /// terms - the target a lowering works towards, and one that is never raised - because this is
+    /// the last screen before a run and it used to mention neither choice's effect.
+    ///
+    /// Static and internal so a case can read the sentence, which is the product here.
+    static func confirmationMessage(settings: TranscodeSettings, deletion: DeletionMode) -> String {
+        let copies = "Each smaller copy is saved to Photos as it finishes, at up to \(settings.resolution.title)\(frameRateClause(settings.frameRate))."
+        guard deletion.deletesOriginals else {
             return "\(copies) Your originals stay exactly where they are."
         }
-        return "\(copies) \(mode.detail) Deleted originals sit in Recently Deleted for 30 days."
+        return "\(copies) \(deletion.detail) Deleted originals sit in Recently Deleted for 30 days."
+    }
+
+    /// The frame-rate half of the confirmation, in the words the model uses for it: a target the
+    /// export lowers towards, or every frame when nothing is asked of it.
+    private static func frameRateClause(_ frameRate: FrameRateOption) -> String {
+        guard let target = frameRate.framesPerSecond else { return ", keeping every frame" }
+        return ", targeting \(Int(target)) fps"
     }
 
     @ViewBuilder private var screen: some View {

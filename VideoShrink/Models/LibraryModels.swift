@@ -52,9 +52,32 @@ struct LibraryAsset: Identifiable, Equatable, Sendable {
 /// band per resolution and is replaced by copy sizes measured on this iPhone once enough
 /// of them exist.
 struct CopySizeModel: Equatable, Sendable {
+    /// The band the estimate came from, named with the frame rate that scaled it.
+    ///
+    /// The frame rate travels inside the basis rather than beside it so the caption cannot claim
+    /// a scaling the arithmetic did not apply: `make(for:frameRate:measured:)` puts the same
+    /// choice it scaled the band with into the basis it hands back, and everything that describes
+    /// the numbers reads it from here.
     enum Basis: Equatable, Sendable {
-        case planning(resolution: CopyResolution)
-        case measured(samples: Int)
+        case planning(resolution: CopyResolution, frameRate: FrameRateOption)
+        case measured(samples: Int, frameRate: FrameRateOption)
+
+        var frameRate: FrameRateOption {
+            switch self {
+            case .planning(_, let frameRate), .measured(_, let frameRate): return frameRate
+            }
+        }
+
+        /// How the caption names the frame-rate scaling, or nil when there was none to name.
+        ///
+        /// This is read off the same `frameRateScale(_:)` the band was scaled with, so a caption
+        /// cannot name a scaling that did not happen. The band is documented as a 30 fps band, so
+        /// 30 fps is a no-op here and stays an implementation detail of this file, exactly as the
+        /// comment on `frameRateScale` says it should.
+        var frameRateScaling: String? {
+            guard CopySizeModel.frameRateScales(frameRate) else { return nil }
+            return "scaled for \(frameRate.shortTitle)"
+        }
     }
 
     let lowBitsPerSecond: Double
@@ -65,18 +88,20 @@ struct CopySizeModel: Equatable, Sendable {
                      frameRate: FrameRateOption,
                      measured: [CopyMeasurement]) -> CopySizeModel {
         let matching = measured.filter { $0.isValid && matches($0.longEdge, resolution: resolution) }
-        let scale = frameRateScale(frameRate)
         let band: ClosedRange<Double>
         let basis: Basis
         if matching.count >= 3,
            let lowest = matching.map(\.bitsPerSecond).min(),
            let highest = matching.map(\.bitsPerSecond).max() {
             band = max(250_000, lowest * 0.9)...min(80_000_000, highest * 1.1)
-            basis = .measured(samples: matching.count)
+            basis = .measured(samples: matching.count, frameRate: frameRate)
         } else {
             band = resolution.planningBand
-            basis = .planning(resolution: resolution)
+            basis = .planning(resolution: resolution, frameRate: frameRate)
         }
+        // The scale is taken from the basis the caption is built from rather than from the
+        // parameter beside it, so the two cannot be told different things.
+        let scale = frameRateScale(basis.frameRate)
         let low = band.lowerBound * scale
         return CopySizeModel(lowBitsPerSecond: low,
                              highBitsPerSecond: max(band.upperBound * scale, low * 1.05),
@@ -95,6 +120,15 @@ struct CopySizeModel: Equatable, Sendable {
     static func frameRateScale(_ frameRate: FrameRateOption) -> Double {
         guard let wanted = frameRate.framesPerSecond else { return 1 }
         return min(1, max(0.4, wanted / 30))
+    }
+
+    /// True when a frame-rate choice actually moves this band.
+    ///
+    /// A choice that leaves the band where it was must not be named in the caption beside the
+    /// estimate: the interface names the scaling, and "scaled for 30 fps" claimed a scaling that
+    /// never happened because 30 fps is this band's own baseline.
+    static func frameRateScales(_ frameRate: FrameRateOption) -> Bool {
+        frameRateScale(frameRate) < 1
     }
 
     /// Copy size range for a video of this duration, in bytes.
@@ -143,17 +177,39 @@ struct AssetSavings: Equatable, Sendable {
 struct SavingsEstimate: Equatable, Sendable {
     let sizedCount: Int
     let sizedBytes: Int64
+    /// Original bytes of the videos the band expects a copy of: the ones whose copy is smaller
+    /// than its original even at the bottom of the band.
+    ///
+    /// A video whose band never dips below its own size is one the run is expected to skip rather
+    /// than copy, so its original is part of `sizedBytes` and deliberately not part of this.
+    /// Without the split, a video the run will leave alone was counted in the "copies about"
+    /// figure at its full size.
+    let copiedBytes: Int64
     let conservativeBytes: Int64
     let optimisticBytes: Int64
     let likelyNoReductionCount: Int
     let basis: CopySizeModel.Basis
-    let frameRate: FrameRateOption
 
     var hasNumbers: Bool { sizedCount > 0 }
 
-    /// Bytes a copy of the selection is expected to take, from the same band.
+    /// How many of the sized videos the conservative end of the band still shrinks: the ones the
+    /// summary can name as able to get lighter.
+    var likelyShrinkCount: Int { sizedCount - likelyNoReductionCount }
+
+    /// True when the band predicts no saving at all, even at its bottom, so a run is expected to
+    /// skip every video in the estimate.
+    ///
+    /// The two cards that draw the band say what they found rather than setting a zero in their
+    /// largest type: `ShrinkFormat.byteRange(low: 0, high: 0)` renders "Zero KB", which is true
+    /// and tells the user nothing.
+    var predictsNoSaving: Bool { hasNumbers && optimisticBytes == 0 }
+
+    /// Bytes the copies are expected to take, from the same band.
+    ///
+    /// The midpoint of the band is what the "copies about" line shows, over the videos a copy is
+    /// expected for, and never above any one original: a copy is never larger than what it copies.
     var estimatedCopyBytes: Int64 {
-        max(0, sizedBytes - (conservativeBytes + optimisticBytes) / 2)
+        max(0, copiedBytes - (conservativeBytes + optimisticBytes) / 2)
     }
 
     static func make(assets: [LibraryAsset],
@@ -161,6 +217,7 @@ struct SavingsEstimate: Equatable, Sendable {
                      measured: [CopyMeasurement]) -> SavingsEstimate {
         var sized = 0
         var sizedBytes: Int64 = 0
+        var copiedBytes: Int64 = 0
         var conservative: Int64 = 0
         var optimistic: Int64 = 0
         var noReduction = 0
@@ -171,27 +228,36 @@ struct SavingsEstimate: Equatable, Sendable {
         // so reversing the selection cannot change what the caption claims.
         var bands: [(basis: CopySizeModel.Basis, bytes: Int64)] = []
         for asset in assets {
-            guard let saving = asset.savings(settings: settings, measured: measured),
-                  let bytes = asset.bytes else { continue }
+            guard let bytes = asset.bytes, asset.isEligible, asset.duration > 0 else { continue }
             let effective = settings.effectiveResolution(sourceLongEdge: asset.longEdge)
-            let basis = CopySizeModel.make(for: effective, frameRate: settings.frameRate,
-                                           measured: measured).basis
-            if let index = bands.firstIndex(where: { $0.basis == basis }) {
+            // One model per video: this is the band the video's own figures come from and the band
+            // the caption may end up naming, so the two read the same numbers.
+            let model = CopySizeModel.make(for: effective, frameRate: settings.frameRate,
+                                           measured: measured)
+            guard let saving = model.savings(sourceBytes: bytes, duration: asset.duration) else {
+                continue
+            }
+            if let index = bands.firstIndex(where: { $0.basis == model.basis }) {
                 bands[index] = (basis: bands[index].basis, bytes: bands[index].bytes + bytes)
             } else {
-                bands.append((basis: basis, bytes: bytes))
+                bands.append((basis: model.basis, bytes: bytes))
             }
             sized += 1
             sizedBytes += bytes
             conservative += saving.conservativeBytes
             optimistic += saving.optimisticBytes
             if !saving.likelyShrinks { noReduction += 1 }
+            // A video the band predicts no saving for at all is one the estimate expects the run
+            // to skip, so it is not one of the originals the copy figure describes.
+            if saving.optimisticBytes > 0 { copiedBytes += bytes }
         }
         return SavingsEstimate(sizedCount: sized, sizedBytes: sizedBytes,
+                               copiedBytes: copiedBytes,
                                conservativeBytes: conservative, optimisticBytes: optimistic,
                                likelyNoReductionCount: noReduction,
-                               basis: dominantBand(bands) ?? .planning(resolution: settings.resolution),
-                               frameRate: settings.frameRate)
+                               basis: dominantBand(bands)
+                                   ?? .planning(resolution: settings.resolution,
+                                                frameRate: settings.frameRate))
     }
 
     /// The band that carries most of the sized original bytes, or nil when nothing was sized.
@@ -222,8 +288,8 @@ struct SavingsEstimate: Equatable, Sendable {
 
     private static func rank(_ band: CopySizeModel.Basis) -> (kind: Int, size: Int) {
         switch band {
-        case .planning(let resolution): return (kind: 0, size: resolution.longEdge)
-        case .measured(let samples): return (kind: 1, size: samples)
+        case .planning(let resolution, _): return (kind: 0, size: resolution.longEdge)
+        case .measured(let samples, _): return (kind: 1, size: samples)
         }
     }
 }

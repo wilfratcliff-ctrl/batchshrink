@@ -69,6 +69,13 @@ private enum RunAccess: Equatable, Sendable {
     /// user's. It is a finding and never an instruction: nothing here creates or removes anything,
     /// and finding a copy is not evidence enough to delete an original.
     @Published private(set) var midSaveFindings: [String: MidSaveFinding] = [:]
+    /// The room a space check asked for when it refused one video, by original.
+    ///
+    /// The refusal carries no figure of its own, because a stored failure keeps a stable code and
+    /// no sentence, and Photos or the encoder can report running out of room where nothing in the
+    /// app measured one. A refusal taken at a size this run measured is the case the run can
+    /// answer, so the figure the check held is kept beside the item and the finished row names it.
+    @Published private(set) var storageDemands: [String: Int64] = [:]
     @Published private(set) var deletionOutcomes: [String: DeletionOutcome] = [:]
     @Published private(set) var deletionInProgress = false
     @Published private(set) var limitedAccess = false
@@ -922,6 +929,7 @@ private enum RunAccess: Equatable, Sendable {
         copyEvidence = [:]
         revalidationOutcomes = [:]
         midSaveFindings = [:]
+        storageDemands = [:]
         deletionOutcomes = [:]
         activeDeletionMode = settings.deletionMode
         checkpointFailure = false
@@ -1096,6 +1104,8 @@ private enum RunAccess: Equatable, Sendable {
         copyEvidence[id] = nil
         revalidationOutcomes[id] = nil
         readBackOutcomes[id] = nil
+        // A refusal of an earlier attempt's space check described that attempt, not this one.
+        storageDemands[id] = nil
         // A fresh attempt makes a new copy, so the sizes measured for the last one describe a
         // different file. They stay in the record only for an item whose copy is still a question,
         // which is what `attemptedSaves` is for; an attempt that reaches this step writes its own.
@@ -1110,7 +1120,13 @@ private enum RunAccess: Equatable, Sendable {
         currentID = id
         currentProgress = nil
         currentStage = .retrieving
-        activeStartedAt = Date()
+        // One instant is both what the estimator learns from and what the remaining-time estimate
+        // subtracts, so the two clocks span the same work. The sample used to be taken around the
+        // export alone while the elapsed ran from here: a long iCloud retrieval was then subtracted
+        // from a prediction that had never counted one, and the wait could read "a moment" while
+        // the copy was still being fetched.
+        let attemptStarted = Date()
+        activeStartedAt = attemptStarted
         setState(.retrieving(nil), for: id)
         var destination: URL?
         var workingIdentity = AssetIdentity.unknown
@@ -1119,6 +1135,10 @@ private enum RunAccess: Equatable, Sendable {
         // video in the run. A refusal of it is the device's answer about the run, not about this
         // video, so it stops the run once instead of failing each remaining item in turn.
         var refusingFloor = false
+        // The room the most recent space check asked for, while this attempt is at a size it
+        // measured. A refusal of that check fails only this video, and the figure is what lets the
+        // finished row say how much room was wanted instead of only that there was not enough.
+        var demandedStorage: Int64?
         // Set the moment Photos is handed the copy, so a failure arriving after that is read as the
         // question it is: Photos may already hold the copy, whatever it answered. It is per attempt
         // on purpose - the sizes `attemptedSaves` keeps describe the copy this attempt makes, and an
@@ -1147,10 +1167,11 @@ private enum RunAccess: Equatable, Sendable {
             // One file is about to be written, not two: the original is already on the disk and
             // was just measured, so its bytes are already spent. Demanding a second copy of it
             // turned away phones that had room to finish the export.
-            try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(original.bytes))
+            let copyRoom = DiskHeadroom.neededToWrite(original.bytes)
+            demandedStorage = copyRoom
+            try temporary.requireCapacity(for: copyRoom)
             setState(.transcoding(nil), for: id)
             currentStage = .transcoding
-            let started = Date()
             let written = try await transcoder.transcode(retrieved, metadata: original,
                                                         settings: activeSettings) { [weak self] value in
                 guard let self, self.currentID == id else { return }
@@ -1163,12 +1184,14 @@ private enum RunAccess: Equatable, Sendable {
             currentStage = .verifying
             currentProgress = nil
             let output = try await verifier.verify(written, source: original, expecting: activeSettings.codec)
-            let processingSeconds = Date().timeIntervalSince(started)
+            let processingSeconds = Date().timeIntervalSince(attemptStarted)
             estimator.record(processingSeconds: processingSeconds, contentSeconds: original.duration)
             try checkStop()
             let saving = Savings(originalBytes: original.bytes, compressedBytes: output.bytes)
             if saving.isSmaller {
-                try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(output.bytes))
+                let saveRoom = DiskHeadroom.neededToWrite(output.bytes)
+                demandedStorage = saveRoom
+                try temporary.requireCapacity(for: saveRoom)
                 // The sizes this run measured go down with the intent, so a launch that finds the
                 // copy in Photos afterwards can say what was saved instead of asking the user to
                 // work it out.
@@ -1256,6 +1279,15 @@ private enum RunAccess: Equatable, Sendable {
                         log.error("Batch item failed")
                     }
                 }
+            } else if normalized == .insufficientStorage, let demandedStorage {
+                // This refusal was taken at a size the run measured, and the check held the figure
+                // when it refused. A later video may be small enough, so only this one fails - but
+                // it fails with the room the check asked for rather than with the general sentence
+                // the one-video flow already avoids. A stop the user asked for is settled above
+                // first: that video waits for the resume that picks it up rather than failing.
+                storageDemands[id] = demandedStorage
+                setState(.failed(normalized), for: id)
+                log.error("Batch item failed on space for its own copy")
             } else {
                 setState(.failed(normalized), for: id)
                 log.error("Batch item failed")

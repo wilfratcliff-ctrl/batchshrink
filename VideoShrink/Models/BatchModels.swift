@@ -122,9 +122,18 @@ struct BatchSummary: Equatable, Sendable {
 ///
 /// It reports nothing until this device has finished at least one video, and it always
 /// reports a range: compression speed varies with content, temperature and power state.
+///
+/// A sample covers one video's whole attempt - the retrieval, the format check, the export and the
+/// check of what came out - because that is what waiting for one video is made of, and because
+/// `remainingSeconds` subtracts the elapsed part of the attempt in progress from the prediction.
+/// A sample of the export alone cannot answer for a wait that spent minutes fetching an original
+/// from iCloud, and subtraction against it is what made the wait read "a moment" while the copy
+/// was still being downloaded.
 struct ProcessingEstimator: Equatable, Sendable {
     struct Sample: Equatable, Sendable {
+        /// Everything one video's attempt took, from the moment the run started on it.
         let processingSeconds: Double
+        /// The original's own length, when it was known.
         let contentSeconds: Double?
     }
 

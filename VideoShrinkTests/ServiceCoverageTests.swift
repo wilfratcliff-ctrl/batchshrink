@@ -959,6 +959,92 @@ import UIKit
 
     // MARK: - A copy the one-video flow made
 
+    // MARK: - Watching Photos without asking for it
+
+    /// Launching the app must not put iOS's Photos permission alert on screen.
+    ///
+    /// This was observed before it was reasoned about. The app-launch-smoke job's first run left
+    /// the alert in its log - "BatchShrink would like full access to your Photo Library" - up
+    /// before the test had touched anything, and XCUITest's default handler answered it "Don't
+    /// Allow", which is what put the run on a recovery screen. The cause is one line: the monitor
+    /// reached for `PHPhotoLibrary.shared()` from `BatchViewModel`'s initialiser. That also broke a
+    /// promise the app makes on its own first screen, whose footnote reads "Photos access is
+    /// requested when you scan".
+    ///
+    /// The registration is watched through the injected closures rather than through a real
+    /// library, because a real one cannot be built in a test and reaching for it is the behaviour
+    /// under test.
+    func testNothingTouchesPhotosUntilTheAppMayReadTheLibrary() {
+        let status = ServiceMonitorStatus(.notDetermined)
+        var registrations = 0
+        var unregistrations = 0
+        let monitor = LibraryChangeMonitor(
+            authorizationStatus: { status.value },
+            registerObserver: { _ in registrations += 1 },
+            unregisterObserver: { _ in unregistrations += 1 }
+        )
+
+        monitor.start()
+
+        XCTAssertFalse(monitor.isObservingChanges)
+        XCTAssertEqual(registrations, 0,
+                       "a launch nobody has asked anything of must not reach for Photos")
+
+        // Returning to the foreground while still unauthorised changes nothing.
+        monitor.enteredForeground()
+        XCTAssertEqual(registrations, 0)
+
+        // The user allows access - here as a grant in Settings while the app was suspended, which
+        // is the moment the monitor re-reads the status and the moment the observer can finally be
+        // registered. The first listing after a grant has to be watched like any other.
+        status.value = .authorized
+        monitor.enteredForeground()
+
+        XCTAssertTrue(monitor.isObservingChanges)
+        XCTAssertEqual(registrations, 1)
+        // And once only: every foreground report re-checks, and a second registration would double
+        // every change report.
+        monitor.enteredForeground()
+        XCTAssertEqual(registrations, 1)
+
+        monitor.stop()
+        XCTAssertFalse(monitor.isObservingChanges)
+        XCTAssertEqual(unregistrations, 1)
+    }
+
+    /// The ordinary case, so the wait above cannot be satisfied by never registering at all.
+    func testAnAppThatMayAlreadyReadTheLibraryWatchesItFromTheStart() {
+        var registrations = 0
+        let monitor = LibraryChangeMonitor(
+            authorizationStatus: { .authorized },
+            registerObserver: { _ in registrations += 1 },
+            unregisterObserver: { _ in }
+        )
+
+        monitor.start()
+
+        XCTAssertTrue(monitor.isObservingChanges)
+        XCTAssertEqual(registrations, 1)
+    }
+
+    /// And the whole batch flow, built the way the app builds it: nothing is asked for.
+    func testBuildingTheBatchFlowAsksPhotosForNothing() {
+        let status = ServiceMonitorStatus(.notDetermined)
+        var registrations = 0
+        let monitor = LibraryChangeMonitor(
+            authorizationStatus: { status.value },
+            registerObserver: { _ in registrations += 1 },
+            unregisterObserver: { _ in }
+        )
+        let fixture = ServiceBatchFixture(assets: [], monitor: monitor)
+
+        _ = fixture.batch
+
+        XCTAssertEqual(registrations, 0)
+        // The introduction is gated on this phase, so a new user still reads it.
+        XCTAssertEqual(fixture.batch.phase, .start)
+    }
+
     /// The one-video flow saved a copy and dropped the identifier Photos returned, and it had no
     /// history store at all, so only the batch flow ever called `recordCreatedCopy`. The created-copy
     /// set is the only thing `selectableAssets` filters on, so the next batch run's "Select all"
@@ -1092,9 +1178,10 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
                                     queueStore: queue, screenAwake: screenAwake,
                                     libraryChanges: monitor, settings: settings)
 
-    init(assets: [LibraryAsset], stored: BatchQueueRecord? = nil) {
+    init(assets: [LibraryAsset], stored: BatchQueueRecord? = nil,
+         monitor: LibraryChangeMonitor? = nil) {
         self.assets = assets
-        self.monitor = LibraryChangeMonitor(authorizationStatus: { .authorized })
+        self.monitor = monitor ?? LibraryChangeMonitor(authorizationStatus: { .authorized })
         queue.stored = stored
     }
 }
@@ -1121,6 +1208,15 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
 @MainActor private final class ServiceMockScreenAwake: ScreenAwakeControlling {
     var values: [Bool] = []
     func hold(_ hold: Bool) { values.append(hold) }
+}
+
+/// A mutable authorization status, so a test can drive the moment access is granted.
+///
+/// Deliberately not main-actor isolated: the monitor reads it through a plain escaping closure,
+/// which is evaluated outside the actor.
+private final class ServiceMonitorStatus {
+    var value: PHAuthorizationStatus
+    init(_ value: PHAuthorizationStatus) { self.value = value }
 }
 
 @MainActor private final class ServiceMockQueue: BatchQueueStoring {

@@ -11,7 +11,7 @@ import Photos
         let hd = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
         XCTAssertEqual(hd.lowBitsPerSecond, 4_000_000, accuracy: 1)
         XCTAssertEqual(hd.highBitsPerSecond, 8_000_000, accuracy: 1)
-        XCTAssertEqual(hd.basis, .planning(resolution: .hd1080))
+        XCTAssertEqual(hd.basis, .planning(resolution: .hd1080, frameRate: .original))
         XCTAssertEqual(CopySizeModel.make(for: .uhd4k, frameRate: .original, measured: []).lowBitsPerSecond,
                        12_000_000, accuracy: 1)
         XCTAssertEqual(CopySizeModel.make(for: .hd720, frameRate: .original, measured: []).highBitsPerSecond,
@@ -31,15 +31,15 @@ import Photos
                             CopyMeasurement(bitsPerSecond: 5_400_000, longEdge: 1920),
                             CopyMeasurement(bitsPerSecond: 5_200_000, longEdge: 1920)]
         let hd = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: measurements)
-        XCTAssertEqual(hd.basis, .measured(samples: 3))
+        XCTAssertEqual(hd.basis, .measured(samples: 3, frameRate: .original))
         XCTAssertEqual(hd.lowBitsPerSecond, 4_500_000, accuracy: 1)
         XCTAssertEqual(hd.highBitsPerSecond, 5_940_000, accuracy: 1)
         XCTAssertEqual(CopySizeModel.make(for: .uhd4k, frameRate: .original, measured: measurements).basis,
-                       .planning(resolution: .uhd4k))
+                       .planning(resolution: .uhd4k, frameRate: .original))
         // Two samples are not enough to retune the band.
         XCTAssertEqual(CopySizeModel.make(for: .hd1080, frameRate: .original,
                                           measured: [CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1920)]).basis,
-                       .planning(resolution: .hd1080))
+                       .planning(resolution: .hd1080, frameRate: .original))
     }
 
     func testResolutionIsNeverRaisedAndNeverExceedsTheSource() {
@@ -101,7 +101,7 @@ import Photos
         XCTAssertEqual(estimate.sizedCount, 1)
         XCTAssertEqual(estimate.sizedBytes, 3_000_000_000)
         XCTAssertGreaterThan(estimate.conservativeBytes, 0)
-        XCTAssertEqual(estimate.basis, .planning(resolution: .hd1080))
+        XCTAssertEqual(estimate.basis, .planning(resolution: .hd1080, frameRate: .original))
         XCTAssertLessThan(estimate.estimatedCopyBytes, estimate.sizedBytes)
     }
 
@@ -1526,6 +1526,215 @@ import Photos
         XCTAssertTrue(unavailable.contains("Settings"))
     }
 
+    // MARK: - The words the batch screens show
+
+    /// The summary promises only what the estimate beside it measured.
+    ///
+    /// The headline used to count every eligible video: "4 videos can get lighter" including the
+    /// ones the card below says will not shrink, and it said it even when nothing had been measured
+    /// at all, while that card read "No sizes yet".
+    func testTheSummaryHeadlineClaimsOnlyWhatTheEstimateMeasured() {
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 0, estimate: nil),
+                       "Nothing to shrink yet.")
+
+        // Nothing measured: the headline says so rather than promising anything about videos
+        // nothing has a size for.
+        let unmeasured = SavingsEstimate.make(assets: [asset("a", bytes: nil)],
+                                              settings: TranscodeSettings(), measured: [])
+        XCTAssertFalse(unmeasured.hasNumbers)
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 3, estimate: unmeasured),
+                       "No sizes to estimate from yet.")
+
+        // A measured selection nothing is predicted to shrink: the old headline claimed all of it.
+        let nothingShrinks = SavingsEstimate.make(assets: [asset("a", bytes: 50_000_000)],
+                                                  settings: TranscodeSettings(), measured: [])
+        XCTAssertTrue(nothingShrinks.predictsNoSaving)
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 4, estimate: nothingShrinks),
+                       "Nothing here is likely to get lighter.")
+
+        // One video of four can get lighter, and the headline names the one rather than the four.
+        let one = SavingsEstimate.make(assets: [asset("a", bytes: 3_000_000_000)],
+                                       settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 4, estimate: one),
+                       "One video can get lighter.")
+
+        let two = SavingsEstimate.make(assets: [asset("a", bytes: 3_000_000_000),
+                                                asset("b", bytes: 2_000_000_000)],
+                                       settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 4, estimate: two),
+                       "2 videos can get lighter.")
+    }
+
+    /// The basis caption names the frame-rate scaling only when the arithmetic applied one.
+    ///
+    /// It read "Planning band 4–8 Mbps, scaled for 30 fps" while 30 fps is the band's own baseline
+    /// and the scale for it is 1.0 - a scaling that did not happen - and it said nothing at all
+    /// about the 0.8x a measured band at 24 fps gets.
+    func testTheBasisCaptionNamesAScalingOnlyWhenThereWasOne() {
+        let band = "Planning band 4–8 Mbps"
+        let thirty = SavingsEstimate.make(
+            assets: [asset("a", bytes: 3_000_000_000)],
+            settings: TranscodeSettings(resolution: .hd1080, frameRate: .fps30), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.basisText(thirty),
+                       "\(band), until this iPhone has measured some.")
+        XCTAssertFalse(BatchSummaryScreen.basisText(thirty).contains("30 fps"),
+                       "30 fps must stay an implementation detail of the band it is the baseline of")
+
+        let twentyFour = SavingsEstimate.make(
+            assets: [asset("a", bytes: 3_000_000_000)],
+            settings: TranscodeSettings(resolution: .hd1080, frameRate: .fps24), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.basisText(twentyFour),
+                       "\(band), scaled for 24 fps.")
+
+        // A measured band is scaled the same way, and its caption named the scaling nowhere.
+        let measurements = (0..<3).map { _ in CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1_920) }
+        let measuredAt24 = SavingsEstimate.make(
+            assets: [asset("a", bytes: 3_000_000_000)],
+            settings: TranscodeSettings(resolution: .hd1080, frameRate: .fps24), measured: measurements)
+        XCTAssertEqual(BatchSummaryScreen.basisText(measuredAt24),
+                       "From 3 copies measured on this iPhone, scaled for 24 fps.")
+        let measuredAtOriginal = SavingsEstimate.make(
+            assets: [asset("a", bytes: 3_000_000_000)],
+            settings: TranscodeSettings(), measured: measurements)
+        XCTAssertEqual(BatchSummaryScreen.basisText(measuredAtOriginal),
+                       "From 3 copies measured on this iPhone.")
+    }
+
+    /// The confirmation before a run is the last thing read before work starts.
+    ///
+    /// It promised a copy "at 4K" for videos that will be copied smaller - `effectiveResolution`
+    /// never upscales - and it named neither the ceiling nor the frame-rate choice.
+    func testTheConfirmationNamesTheSizeAsACeilingAndTheFrameRateChoice() {
+        XCTAssertEqual(
+            BatchFlow.confirmationMessage(settings: TranscodeSettings(resolution: .uhd4k, frameRate: .original),
+                                          deletion: .off),
+            "Each smaller copy is saved to Photos as it finishes, at up to 4K, keeping every frame. Your originals stay exactly where they are.")
+        XCTAssertEqual(
+            BatchFlow.confirmationMessage(settings: TranscodeSettings(resolution: .hd1080, frameRate: .fps24),
+                                          deletion: .afterRun),
+            "Each smaller copy is saved to Photos as it finishes, at up to 1080p, targeting 24 fps. \(DeletionMode.afterRun.detail) Deleted originals sit in Recently Deleted for 30 days.")
+        XCTAssertEqual(
+            BatchFlow.confirmationMessage(settings: TranscodeSettings(resolution: .hd720, frameRate: .fps30),
+                                          deletion: .afterEachCopy),
+            "Each smaller copy is saved to Photos as it finishes, at up to 720p, targeting 30 fps. \(DeletionMode.afterEachCopy.detail) Deleted originals sit in Recently Deleted for 30 days.")
+    }
+
+    /// A selection that will not shrink is a finding, not the figure "Zero KB".
+    ///
+    /// Both cards that draw the band set that zero in their largest type: the summary under the
+    /// heading "ROOM TO RECLAIM", and the quality chooser where the saving goes.
+    func testBothEstimateCardsSayThereIsNoSavingRatherThanZero() {
+        let estimate = SavingsEstimate.make(assets: [asset("a", bytes: 50_000_000)],
+                                            settings: TranscodeSettings(), measured: [])
+        XCTAssertTrue(estimate.predictsNoSaving)
+        // The figure both cards used to draw, for the record: it is what the formatter makes of a
+        // pair of zeroes, which is why the cards branch before they reach it.
+        XCTAssertEqual(ShrinkFormat.byteRange(low: estimate.conservativeBytes,
+                                              high: estimate.optimisticBytes),
+                       ShrinkFormat.bytes(0))
+        XCTAssertEqual(EstimateCopy.noSavingHeadline, "No saving expected")
+        XCTAssertEqual(EstimateCopy.noSavingNote,
+                       "BatchShrink only keeps a copy that comes out smaller than its original, so these videos are likely to be left as they are.")
+        // The action bar draws the same band, and it read "Estimated Zero KB smaller" over these
+        // videos. It says the same thing the cards do.
+        XCTAssertEqual(BatchSelectionScreen.selectionSaving(estimate), EstimateCopy.noSavingHeadline)
+        let saving = SavingsEstimate.make(assets: [asset("a", bytes: 3_000_000_000)],
+                                         settings: TranscodeSettings(), measured: [])
+        XCTAssertTrue(BatchSelectionScreen.selectionSaving(saving).hasPrefix("Estimated "))
+        XCTAssertTrue(BatchSelectionScreen.selectionSaving(saving).hasSuffix(" smaller"))
+        XCTAssertNotEqual(BatchSelectionScreen.selectionSaving(saving),
+                          BatchSelectionScreen.selectionSaving(estimate))
+    }
+
+    /// The selection line names the videos its figure covers.
+    ///
+    /// It read "3 selected · 2.1 GB of originals" where one of the three had no reported size: the
+    /// count was the whole selection and the figure was the subtotal of the measurable ones, so the
+    /// line claimed a total the selection did not have.
+    func testTheSelectionLineNamesTheVideosItsFigureCovers() {
+        let estimate = SavingsEstimate.make(assets: [asset("a", bytes: 3_000_000_000),
+                                                     asset("b", bytes: 2_000_000_000),
+                                                     asset("c", bytes: nil)],
+                                            settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(estimate.sizedCount, 2)
+        XCTAssertEqual(BatchSelectionScreen.selectionSummary(selectedCount: 3, estimate: estimate),
+                       "3 selected · \(ShrinkFormat.bytes(estimate.sizedBytes)) of 2 measured")
+    }
+
+    /// A stored `.saved` whose copy is not smaller shows no figure, and says what it found.
+    ///
+    /// Only a queue file this app did not write can hold one - every path that writes `.saved` is
+    /// gated on `isSmaller` - and the row rendered its negative saving as "--1.2 GB" while the
+    /// totals card beside it said no smaller copies. A saving of exactly zero rendered as
+    /// "-Zero KB", which is the same defect with a tidier number.
+    func testAStoredCopyThatIsNotSmallerShowsNoFigureAndSaysSo() {
+        let smaller = BatchFinishedRow(item: BatchItem(asset: asset("row", bytes: 200_000_000),
+            state: .saved(Savings(originalBytes: 200_000_000, compressedBytes: 50_000_000))))
+        XCTAssertEqual(smaller.savingDisplay?.figure, "-\(ShrinkFormat.bytes(150_000_000))")
+        XCTAssertEqual(smaller.savingDisplay?.spokenLabel, "\(ShrinkFormat.bytes(150_000_000)) saved")
+        XCTAssertTrue(smaller.detail.hasPrefix("Saved a smaller copy"))
+
+        let grown = BatchFinishedRow(item: BatchItem(asset: asset("row", bytes: 200_000_000),
+            state: .saved(Savings(originalBytes: 200_000_000, compressedBytes: 250_000_000))))
+        XCTAssertNil(grown.savingDisplay, "there is no saving to put in the figure slot")
+        XCTAssertTrue(grown.detail.contains("its recorded size is not smaller than the original"))
+        XCTAssertFalse(grown.detail.contains("Saved a smaller copy"))
+
+        let unchanged = BatchFinishedRow(item: BatchItem(asset: asset("row", bytes: 200_000_000),
+            state: .saved(Savings(originalBytes: 200_000_000, compressedBytes: 200_000_000))))
+        XCTAssertNil(unchanged.savingDisplay, "a zero saving is not a saving either")
+    }
+
+    /// A space refusal taken at a size the run measured names the room the check asked for.
+    ///
+    /// The run computed the figure and threw it away, so the row said only that there was not
+    /// enough room. The floor refusal that stops a whole run was already explained this way.
+    func testASizeSpecificStorageRefusalNamesTheRoomItAskedFor() async throws {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.files.refuseDemand = 2
+        fixture.files.capacityError = .insufficientStorage
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // The second demand of the run is the room for the first video's own copy, measured by the
+        // verifier's inspect. The second video's own demand is left alone, so it still runs.
+        let room = DiskHeadroom.neededToWrite(fixture.verifier.inspectBytes)
+        XCTAssertEqual(fixture.batch.storageDemands["a"], room)
+        XCTAssertNil(fixture.batch.storageDemands["b"])
+        let failed = try XCTUnwrap(fixture.batch.items.first { $0.id == "a" })
+        let row = BatchFinishedRow(item: failed, storageDemand: fixture.batch.storageDemands["a"])
+        XCTAssertEqual(row.detail, PipelineError.insufficientStorageSentence(needed: room))
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+    }
+
+    /// The time sample covers the whole attempt, which is what the elapsed subtraction measures.
+    ///
+    /// The sample used to be the export alone while the elapsed ran from the moment the run started
+    /// on the video, so a slow iCloud retrieval was subtracted from a prediction that had never
+    /// counted one and the wait could read "a moment" while the copy was still being fetched. A
+    /// retrieval that takes time and an export that takes none is exactly the case that separates
+    /// the two: a sample of the export alone is a fraction of a millisecond.
+    func testTheTimeSampleCoversTheWholeAttemptIncludingTheRetrieval() async throws {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 20_000_000)])
+        fixture.verifier.inspectBytes = 20_000_000
+        fixture.verifier.outputs = [10_000_000]
+        fixture.photos.retrievalDelay = .milliseconds(60)
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        let sample = try XCTUnwrap(fixture.batch.estimator.samples.first)
+        XCTAssertGreaterThan(sample.processingSeconds, 0.05,
+                             "the retrieval is part of what waiting for this video is made of")
+        XCTAssertEqual(sample.contentSeconds, 120)
+    }
+
     // MARK: - Helpers
 
     private func scan(_ fixture: BatchFixture) async {
@@ -1655,6 +1864,9 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     var deleteError: PipelineError?
     var retrieveCount = 0
     var holdRetrieval = false
+    /// How long a retrieval takes, so a case can drive the work the time estimate has to account
+    /// for without a real iCloud download.
+    var retrievalDelay: Duration?
     var retrieveGate: CheckedContinuation<Void, Error>?
     var saveCount = 0
     var deletedIdentifiers: [String] = []
@@ -1674,6 +1886,7 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     func retrieve(identifier: String, progress: @escaping @MainActor (Double) -> Void) async throws -> RetrievedVideo {
         retrieveCount += 1
         if let failure = retrievalFailures[identifier] { throw failure }
+        if let retrievalDelay { try await Task.sleep(for: retrievalDelay) }
         if holdRetrieval { try await withCheckedThrowingContinuation { retrieveGate = $0 } }
         try Task.checkCancellation()
         return RetrievedVideo(asset: AVURLAsset(url: URL(fileURLWithPath: "/mock-\(identifier).mov")),

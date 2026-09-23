@@ -280,6 +280,8 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N38 | 1 | **No CI job ran the local gates at all.** `npm run typecheck`, `npm run validate:native` and the mirror check were documented for a human to run on Windows and were run by nothing else, so the one gate that reads the *whole* tree was the one most likely to be skipped on the push that broke it | done, round 18: job 1 runs all three, for a few seconds |
 | N39 | 2 | **A batch run's workspace sweep deleted the one-video flow's kept copy.** Both flows shared one temporary directory and `cleanWorkspace()` removes the whole root, so after a batch run the one-video screen could still offer "Save copy to Photos" over a file that no longer existed, and the save would fail its own re-verify. Found by the round-18 agent that made the flow switch legal, and it was reachable before that too: a reload lands on the batch flow with the copy kept | done, round 18: `TemporaryWorkspace` gives each flow its own directory inside the app's temporary area, each manager can remove only its own, and a test pins both directions |
 | N40 | 1 | **The app had never rendered a screen, and nothing could observe a launch.** Every status block in the repository says so, and no instrument existed that could change it without a device or EAS build minutes | done, round 18: a `VideoShrinkUITests` target launches the standalone app on a simulator, waits for the introduction, taps Skip and waits for the batch screen. Job 3 runs it on every push. It proves a screen renders and one navigation works; it proves nothing about Photos, iCloud or any pipeline step |
+| N41 | 1 | **The app asked for Photos access at launch, before the user asked for anything.** `LibraryChangeMonitor.start()` reached for `PHPhotoLibrary.shared()` from `BatchViewModel`'s initialiser, which puts iOS's permission alert on screen - breaking the promise the app's own introduction makes, "Photos access is requested when you scan" | done, round 19: the change observer is registered only once the authorization status says the app may read, and the foreground re-check registers it the moment a grant arrives. Found by the round-18 launch test, from the alert in its log |
+| N42 | 2 | A `.denied` report with nothing in hand moves the flow off `.start`, so on a device where Photos was already refused the introduction is replaced by a recovery screen | **considered and deliberately left, round 19.** `testAccessRefusedOnTheWayInStillFailsTheFlow` pins it, with the reasoning that a refusal is the one access state the user can undo in Settings and a start screen whose only button fails is less useful than the route back. With N41 fixed nothing reaches this on a first launch, and the intro-versus-recovery question only arises for a refusal that predates the app's first run. Revisit if that is ever seen on a device |
 
 ## Round log
 
@@ -644,27 +646,86 @@ Numbering is new and local to these lists: `E` for the numbers audit, `A` for th
 audit. Each is a finding with a file and a line in the agent's report, which is worth re-reading
 rather than re-deriving; what is recorded here is only what the next round must not lose.
 
-| ID | Priority | Item |
-|----|----------|------|
-| E1 | 2 | The scan summary's headline says every eligible video "can get lighter", including the ones the estimate its own screen shows says will not shrink. `SavingsEstimate.likelyNoReductionCount` is computed and read by nothing but a test |
-| E2 | 2 | The basis caption names a frame-rate scaling that did not happen (30 fps is a ×1.0 no-op) and hides the one that did (a measured band at 24 fps is 0.8×) |
-| E3 | 2 | The confirmation before a batch promises copies "at 4K" for videos that will be copied smaller, on the last screen read before work starts |
-| E4 | 2 | A per-video space refusal in a batch names no figure, although the run computed one and the one-video flow already has the sentence for it |
-| E5 | 3 | The time estimate's two clocks measure different spans: the sample is transcode-only, the elapsed subtraction includes retrieval |
-| E6 | 3 | "copies about X" counts a copy for every sized video, including ones the run will skip entirely |
-| E7 | 3 | A selection that will not shrink renders as the bold figure "Zero KB" |
-| E8 | 3 | A stored non-shrinking saving renders as "--1.2 GB" in a finished row |
-| E9 | 3 | "N selected · X of originals" pairs the full selection count with a subtotal of the sized ones only |
-| A1 | 1 | The batch working screen's saved-so-far figure is `.accessibilityHidden(true)` inside a `.combine` container, so VoiceOver never reads the number the comment says it reads |
-| A2 | 1 | The finished screen's action bar can stack five controls — about 304pt, and more at accessibility sizes — against a landscape viewport of roughly 330pt, crushing the screen it exists to show |
-| A3 | 2 | The quality estimate reads as a bare number with its explanation as a separate element |
-| A4 | 2 | The word mark cannot fit beside "Skip" at accessibility sizes |
-| A5 | 2 | The selection header keeps the sort pill beside a `.largeTitle` headline at accessibility sizes, truncating the order the user cannot otherwise read |
-| A6 | 3 | Five section headings inside cards are not VoiceOver headers, unlike every title above them |
-| A7 | 3 | The working screen can announce the same percentage three times |
-| A8 | 3 | Two surfaces bypass `ShrinkHairline`, so Increase Contrast misses the two things a user must distinguish |
-| A9 | 3 | The app's haptics switch does not cover the quality pills |
-| A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert |
+Both audits are now written to disk rather than left in a conversation, because a finding that
+exists only in a chat is lost at the next compaction: **[docs/AUDIT_NUMBERS.md](docs/AUDIT_NUMBERS.md)**
+and **[docs/AUDIT_ACCESSIBILITY.md](docs/AUDIT_ACCESSIBILITY.md)** carry the file, the line, the
+evidence, the proposed fix and — just as important — the list of what was checked and found
+correct, so the next round does not walk settled ground. The table below is the index; those
+documents are the detail.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| E1 | 2 | The scan summary's headline says every eligible video "can get lighter", including the ones the estimate its own screen shows says will not shrink. `SavingsEstimate.likelyNoReductionCount` is computed and read by nothing but a test | **done, round 19.** The headline is derived from `likelyShrinkCount` (`sizedCount - likelyNoReductionCount`) and reads "Nothing here is likely to get lighter." or "No sizes to estimate from yet." where those are the truth |
+| E2 | 2 | The basis caption names a frame-rate scaling that did not happen (30 fps is a ×1.0 no-op) and hides the one that did (a measured band at 24 fps is 0.8×) | **done, round 19.** The frame rate moved *inside* `CopySizeModel.Basis`, so the caption and the arithmetic read the same value and cannot be told different things; `Basis.frameRateScaling` returns a clause only when the choice actually moved the band |
+| E3 | 2 | The confirmation before a batch promises copies "at 4K" for videos that will be copied smaller, on the last screen read before work starts | **done, round 19.** "at up to 4K" plus the frame-rate target; the sentence is now a static function so a case can read it |
+| E4 | 2 | A per-video space refusal in a batch names no figure, although the run computed one and the one-video flow already has the sentence for it | **done, round 19.** The measured demand is carried per item and rendered with `insufficientStorageSentence(needed:)`, the sentence the paused screen already used |
+| E5 | 3 | The time estimate's two clocks measure different spans: the sample is transcode-only, the elapsed subtraction includes retrieval | **done, round 19.** One `attemptStarted` feeds both sides, so a sample spans retrieval, format check, export and verify. Worth watching on a device: a single very slow iCloud retrieval now enters the mean |
+| E6 | 3 | "copies about X" counts a copy for every sized video, including ones the run will skip entirely | **done, round 19.** A `copiedBytes` subtotal counts only originals whose copy is smaller even at the bottom of the band |
+| E7 | 3 | A selection that will not shrink renders as the bold figure "Zero KB" | **done, round 19.** `SavingsEstimate.predictsNoSaving` with one shared wording; `byteRange` itself is untouched |
+| E8 | 3 | A stored non-shrinking saving renders as "--1.2 GB" in a finished row | **done, round 19**, on the view side. The alternative half — clamping a foreign stored `.saved` in `BatchQueueReconciliation.live` — is still open and would be the better place if a second reader of that record appears |
+| E9 | 3 | "N selected · X of originals" pairs the full selection count with a subtotal of the sized ones only | **done, round 19.** "5 selected · 2.1 GB of 4 measured" |
+| A1 | 1 | The batch working screen's saved-so-far figure is `.accessibilityHidden(true)` inside a `.combine` container, so VoiceOver never reads the number the comment says it reads | open, round 19 |
+| A2 | 1 | The finished screen's action bar can stack five controls — about 304pt, and more at accessibility sizes — against a landscape viewport of roughly 330pt, crushing the screen it exists to show | open, round 19 |
+| A3 | 2 | The quality estimate reads as a bare number with its explanation as a separate element | open, round 19 |
+| A4 | 2 | The word mark cannot fit beside "Skip" at accessibility sizes | open, round 19 |
+| A5 | 2 | The selection header keeps the sort pill beside a `.largeTitle` headline at accessibility sizes, truncating the order the user cannot otherwise read | open, round 19 |
+| A6 | 3 | Five section headings inside cards are not VoiceOver headers, unlike every title above them | open, round 19 |
+| A7 | 3 | The working screen can announce the same percentage three times | open, round 19 |
+| A8 | 3 | Two surfaces bypass `ShrinkHairline`, so Increase Contrast misses the two things a user must distinguish | open, round 19 |
+| A9 | 3 | The app's haptics switch does not cover the quality pills | open, round 19 |
+| A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert | open, round 19 |
 
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.
+
+## Round 19 — the numbers tell the truth, and the app stops asking too early
+
+The round began as the audit-fixing round: the two read-only audits from round 18 produced nine
+number findings and ten accessibility findings, and this round takes them in two waves, numbers
+first, because they grow in the same two files and overlapping edits are how this loop has been
+bitten before.
+
+**The numbers (E1-E9).** All nine are fixed, and the change is larger than it looks because two
+of them were not really wording problems. E1 found a value — `likelyNoReductionCount` — that the
+model computed and no screen read: the summary promised every video could get lighter while the
+card beneath it said some would not shrink. E2 found the caption and the arithmetic disagreeing
+about the frame rate, and the fix that stops it recurring was to move the frame rate *inside*
+`CopySizeModel.Basis`, so there is one value to read rather than two to keep in step. E3 was the
+last sentence read before a run, promising copies "at 4K" for videos that would be copied
+smaller. The rest are the class this project cares most about: a figure shown without the fact it
+depends on. Every one of them asserts on the sentence in a test, because here the sentence is the
+product.
+
+**The finding the new launch test made, which is in neither audit (N41).** Round 18's third CI job
+launches the app on a simulator. Its first two runs failed, and both times the answer came from
+the diagnostics rather than from a guess — the second run printed the whole element tree and
+named its own application state. The app was on the *recovery* screen, saying Photos access was
+unavailable, on a fresh install, before the user had asked for anything. The first run's log had
+the cause: **the system permission alert was up before the test touched anything**, and XCUITest's
+default handler answered it "Don't Allow".
+
+One line put it there. `LibraryChangeMonitor.start()` resolved `PHPhotoLibrary.shared()` — which
+is what makes iOS ask — and `BatchViewModel` starts the monitor in its initialiser, so the alert
+was opened at launch. The app's own introduction promises on its first screen that "Photos access
+is requested when you scan", so this was a broken promise as well as a hostile first minute. The
+monitor now registers its change observer only once the authorization status says the app may
+read, and `enteredForeground` — which already re-read the status on every activation — registers
+it the moment a grant arrives, so the first listing after a grant is watched like any other.
+
+That fix is provable without a Photos library, which is why the monitor grew two closure seams:
+`PHPhotoLibrary` cannot be built in a test, and reaching for the real one is the behaviour under
+test, so a test counts registrations instead. Three cases cover it: nothing is touched when
+nothing has been asked, the observer is registered once and only once when access exists, and an
+app that may already read watches from the start — the last is what stops the first from passing
+on an implementation that never registers at all.
+
+**One thing the round deliberately did not change.** The "first-run dead end" instinct says a
+refusal with nothing in hand should leave the introduction alone, exactly as a device restriction
+now does. It does not, and `testAccessRefusedOnTheWayInStillFailsTheFlow` pins that with its own
+reasoning: a refusal is undoable in Settings, so the route back is worth more to the user than a
+start screen whose only button will fail. With N41 fixed, nothing reaches that path on a first
+launch. It is recorded as N42 rather than quietly changed, because a deliberate decision deserves
+a test and a reason, not a re-litigation.
+
+**The accessibility wave (A1-A10)** is the second half of the round and touches the same two
+files.

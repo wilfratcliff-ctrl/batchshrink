@@ -31,6 +31,18 @@ import Combine
     private let library: PHPhotoLibrary?
     private let notificationCenter: NotificationCenter
     private let authorizationStatus: () -> PHAuthorizationStatus
+    /// How the change observer is registered and unregistered.
+    ///
+    /// These are parameters rather than direct calls on the library because `PHPhotoLibrary`
+    /// cannot be built in a test, and reaching for the real one is the very behaviour being
+    /// checked below: a test can count these calls instead, which makes "this app never touches
+    /// Photos before it may read it" something a test can prove rather than something a reader
+    /// has to take on trust.
+    private let registerObserver: (PHPhotoLibraryChangeObserver) -> Void
+    private let unregisterObserver: (PHPhotoLibraryChangeObserver) -> Void
+    /// Whether the change observer is currently registered. Deliberately not the same thing as
+    /// `isWatching`, which is true from `start()`; that difference is the fix below.
+    private(set) var isObservingChanges = false
     private var foregroundToken: NSObjectProtocol?
     private var isWatching = false
     private lazy var changes = LibraryChangeObserverProxy { [weak self] in
@@ -38,18 +50,30 @@ import Combine
         self.report(.libraryChanged)
     }
 
-    /// Pass `library` only to watch something other than `PHPhotoLibrary.shared()`. The shared
-    /// library is resolved when `start()` is called, so building a monitor reads no Photos
-    /// state beyond the authorization status.
+    /// Pass `library` only to watch something other than `PHPhotoLibrary.shared()`. Neither
+    /// building nor starting a monitor resolves the shared library: it is resolved the first time
+    /// the change observer is registered, and that waits until the authorization status says this
+    /// app may read (see `observeChangesIfReadable`). Building one reads no Photos state beyond
+    /// the authorization status.
     init(library: PHPhotoLibrary? = nil,
          notificationCenter: NotificationCenter = .default,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = {
              PHPhotoLibrary.authorizationStatus(for: .readWrite)
-         }) {
+         },
+         registerObserver: ((PHPhotoLibraryChangeObserver) -> Void)? = nil,
+         unregisterObserver: ((PHPhotoLibraryChangeObserver) -> Void)? = nil) {
         self.library = library
         self.notificationCenter = notificationCenter
         self.authorizationStatus = authorizationStatus
         self.access = LibraryAccess(authorizationStatus())
+        // The library *parameter* is captured rather than `self.library`, so neither closure can
+        // hold the monitor alive.
+        self.registerObserver = registerObserver ?? { observer in
+            (library ?? PHPhotoLibrary.shared()).register(observer)
+        }
+        self.unregisterObserver = unregisterObserver ?? { observer in
+            (library ?? PHPhotoLibrary.shared()).unregisterChangeObserver(observer)
+        }
     }
 
     /// True while the app may list at least part of the library.
@@ -63,7 +87,7 @@ import Combine
     func start() {
         guard !isWatching else { return }
         isWatching = true
-        (library ?? PHPhotoLibrary.shared()).register(changes)
+        observeChangesIfReadable()
         foregroundToken = notificationCenter.addObserver(
             forName: UIApplication.didBecomeActiveNotification,
             object: nil,
@@ -75,6 +99,27 @@ import Combine
             }
     }
 
+    /// Registers the Photos change observer, but only once this app may read the library.
+    ///
+    /// Reaching for `PHPhotoLibrary.shared()` while the authorization status is `.notDetermined`
+    /// is what puts iOS's permission alert on screen, and this monitor is built and started inside
+    /// `BatchViewModel`'s initialiser - at launch, before the user has asked for anything and
+    /// before the introduction has been read. The introduction's own footnote promises that
+    /// Photos access "is requested when you scan", so a launch that opens the alert breaks a
+    /// promise the app makes on its first screen. This was seen rather than reasoned about: the
+    /// alert is in the log of the app-launch-smoke job's first run, up before the test had touched
+    /// anything, and it was that run's only failure.
+    ///
+    /// Waiting loses nothing. A change observer has nothing to report to an app that has never
+    /// listed the library, and the way back in does not depend on it: `enteredForeground` re-reads
+    /// the status on every activation and registers here the moment access exists, so the first
+    /// listing after a grant is watched like any other.
+    private func observeChangesIfReadable() {
+        guard isWatching, !isObservingChanges, access.canRead else { return }
+        isObservingChanges = true
+        registerObserver(changes)
+    }
+
     /// Stops watching and releases both registrations.
     ///
     /// Nothing in the app calls this today, and that is deliberate rather than an oversight: the
@@ -84,7 +129,13 @@ import Combine
     func stop() {
         guard isWatching else { return }
         isWatching = false
-        (library ?? PHPhotoLibrary.shared()).unregisterChangeObserver(changes)
+        // Only when it was registered. Unregistering an observer that was never registered would
+        // have to resolve the shared library, which is the call this type now avoids until it is
+        // allowed to make it.
+        if isObservingChanges {
+            isObservingChanges = false
+            unregisterObserver(changes)
+        }
         if let foregroundToken {
             notificationCenter.removeObserver(foregroundToken)
             self.foregroundToken = nil
@@ -98,9 +149,13 @@ import Combine
         let updated = LibraryAccess(authorizationStatus())
         guard updated == access else {
             access = updated
+            // The one moment a grant made in Settings is noticed, so it is also the moment the
+            // change observer can finally be registered.
+            observeChangesIfReadable()
             report(.accessChanged)
             return
         }
+        observeChangesIfReadable()
         report(.enteredForeground)
     }
 

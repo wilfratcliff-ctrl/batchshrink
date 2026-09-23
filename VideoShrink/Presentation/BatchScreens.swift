@@ -289,9 +289,21 @@ struct BatchSummaryScreen: View {
 
     private var headline: String {
         guard let result = batch.scanResult else { return "Your library" }
-        if result.assets.isEmpty { return "Nothing to shrink yet." }
-        return result.assets.count == 1 ? "One video can get lighter."
-                                        : "\(result.assets.count) videos can get lighter."
+        return Self.summaryHeadline(eligibleCount: result.assets.count, estimate: batch.scanEstimate)
+    }
+
+    /// What the summary claims about the scan, read off the same estimate the card below it shows.
+    ///
+    /// The headline used to count every eligible video: it promised "\(count) videos can get
+    /// lighter" including the videos the estimate beside it says will not shrink, and it promised
+    /// it even when nothing had been measured at all, while the card below read "No sizes yet".
+    /// Static and internal so a case can state the sentence rather than re-derive it.
+    static func summaryHeadline(eligibleCount: Int, estimate: SavingsEstimate?) -> String {
+        guard eligibleCount > 0 else { return "Nothing to shrink yet." }
+        guard let estimate, estimate.hasNumbers else { return "No sizes to estimate from yet." }
+        let lighter = estimate.likelyShrinkCount
+        if lighter == 0 { return "Nothing here is likely to get lighter." }
+        return lighter == 1 ? "One video can get lighter." : "\(lighter) videos can get lighter."
     }
 
     private var subhead: String {
@@ -302,7 +314,29 @@ struct BatchSummaryScreen: View {
 
     private func statsCard(result: LibraryScanResult, estimate: SavingsEstimate) -> some View {
         VStack(alignment: .leading, spacing: 22) {
-            if estimate.hasNumbers {
+            if !estimate.hasNumbers {
+                ShrinkStat(value: "No sizes yet", label: "savings can’t be estimated",
+                           detail: "Photos reported no original size for these videos.")
+            } else if estimate.predictsNoSaving {
+                // The band's zero used to be drawn as the bold figure "Zero KB" under the heading
+                // "ROOM TO RECLAIM". Zero is true and it is not what the card is for, so the card
+                // says what it found instead.
+                Label("NOTHING TO RECLAIM", systemImage: "equal.circle")
+                    .font(.caption.weight(.semibold)).tracking(1.5)
+                    .foregroundStyle(ShrinkStyle.accent)
+                ShrinkStat(value: EstimateCopy.noSavingHeadline,
+                           label: "at this quality",
+                           detail: "Estimated for \(estimate.sizedCount.formatted()) of \(result.assets.count.formatted()) videos")
+                Divider()
+                Text(EstimateCopy.noSavingNote)
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                DisclosureGroup("About this estimate") {
+                    Text(Self.basisText(estimate)).font(.footnote).foregroundStyle(.secondary)
+                        .padding(.top, 8)
+                }
+                .font(.footnote)
+            } else {
                 Label("ROOM TO RECLAIM", systemImage: "arrow.down.right.and.arrow.up.left")
                     .font(.caption.weight(.semibold)).tracking(1.5)
                     .foregroundStyle(ShrinkStyle.accent)
@@ -311,17 +345,18 @@ struct BatchSummaryScreen: View {
                            label: "potentially smaller",
                            detail: "Estimated for \(estimate.sizedCount.formatted()) of \(result.assets.count.formatted()) videos")
                 Divider()
-                ShrinkSizeComparison(original: estimate.sizedBytes, copy: estimate.estimatedCopyBytes, estimated: true)
+                // Both rows describe the same videos: the originals a copy is expected for, and the
+                // copies. A video the estimate expects to skip has no copy, and pairing its original
+                // with the copies was a before-and-after of two different sets.
+                ShrinkSizeComparison(original: estimate.copiedBytes, copy: estimate.estimatedCopyBytes,
+                                     estimated: true)
                 Text("Saving copies uses more space. Storage is reclaimed after originals are deleted and cleared from Recently Deleted.")
                     .font(.footnote).foregroundStyle(.secondary)
                 DisclosureGroup("About this estimate") {
-                    Text(basisText(estimate)).font(.footnote).foregroundStyle(.secondary)
+                    Text(Self.basisText(estimate)).font(.footnote).foregroundStyle(.secondary)
                         .padding(.top, 8)
                 }
                 .font(.footnote)
-            } else {
-                ShrinkStat(value: "No sizes yet", label: "savings can’t be estimated",
-                           detail: "Photos reported no original size for these videos.")
             }
         }
         .padding(24).shrinkCard()
@@ -343,17 +378,26 @@ struct BatchSummaryScreen: View {
         }
     }
 
-    private func basisText(_ estimate: SavingsEstimate) -> String {
+    /// The caption under the estimate, naming where the band came from.
+    ///
+    /// The frame rate is read from the basis, which is where `CopySizeModel.make` put the choice it
+    /// scaled the numbers with, and it is named only when the scaling moved them. The caption used
+    /// to name 30 fps - this band's own baseline, a scaling of 1.0 - while saying nothing about the
+    /// 0.8x a measured band at 24 fps got, so it named a scaling that did not happen and hid the
+    /// one that did. Static and internal so a case can read the sentence.
+    static func basisText(_ estimate: SavingsEstimate) -> String {
+        let scaling = estimate.basis.frameRateScaling
         switch estimate.basis {
-        case .planning(let resolution):
+        case .planning(let resolution, _):
             let band = resolution.planningBand
             let detail = String(format: "%.0f–%.0f Mbps", band.lowerBound / 1_000_000, band.upperBound / 1_000_000)
-            if estimate.frameRate == .original {
+            guard let scaling else {
                 return "Planning band \(detail), until this iPhone has measured some."
             }
-            return "Planning band \(detail), scaled for \(estimate.frameRate.shortTitle)."
-        case .measured(let samples):
-            return "From \(samples) copies measured on this iPhone."
+            return "Planning band \(detail), \(scaling)."
+        case .measured(let samples, _):
+            guard let scaling else { return "From \(samples) copies measured on this iPhone." }
+            return "From \(samples) copies measured on this iPhone, \(scaling)."
         }
     }
 }
@@ -480,9 +524,10 @@ struct BatchSelectionScreen: View {
             Group {
                 if let estimate = batch.selectionEstimate, estimate.hasNumbers {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("\(batch.selection.count) selected · \(ShrinkFormat.bytes(estimate.sizedBytes)) of originals")
+                        Text(Self.selectionSummary(selectedCount: batch.selection.count,
+                                                   estimate: estimate))
                             .font(.subheadline.weight(.semibold))
-                        Text("Estimated \(ShrinkFormat.byteRange(low: estimate.conservativeBytes, high: estimate.optimisticBytes)) smaller")
+                        Text(Self.selectionSaving(estimate))
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     .contentTransition(.numericText())
@@ -500,6 +545,26 @@ struct BatchSelectionScreen: View {
             .disabled(!batch.canStart)
             .accessibilityIdentifier("startBatch")
         }
+    }
+
+    /// The first line of the action bar.
+    ///
+    /// It read "5 selected · 2.1 GB of originals" where one of the five had no reported size. The
+    /// count was the whole selection and the figure was the subtotal of the videos Photos or the
+    /// device could measure, so the line claimed a total it did not have. The qualifier the footer
+    /// already carried is now in the line itself. Static and internal so a case can read it.
+    static func selectionSummary(selectedCount: Int, estimate: SavingsEstimate) -> String {
+        "\(selectedCount) selected · \(ShrinkFormat.bytes(estimate.sizedBytes)) of \(estimate.sizedCount) measured"
+    }
+
+    /// The action bar's second line, which is the third place a band's zero used to be set as the
+    /// claim "Zero KB": the bar read "Estimated Zero KB smaller" over a selection the estimate
+    /// expected the run to skip. It says what the estimate found instead, in the words the two
+    /// estimate cards already use. Static and internal so a case can read it.
+    static func selectionSaving(_ estimate: SavingsEstimate) -> String {
+        estimate.predictsNoSaving
+            ? EstimateCopy.noSavingHeadline
+            : "Estimated \(ShrinkFormat.byteRange(low: estimate.conservativeBytes, high: estimate.optimisticBytes)) smaller"
     }
 
     private func row(_ asset: LibraryAsset) -> some View {
@@ -844,7 +909,8 @@ struct BatchProcessingScreen: View {
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],
                                      revision: batch.thumbnailRevision,
-                                     finding: batch.midSaveFindings[item.id])
+                                     finding: batch.midSaveFindings[item.id],
+                                     storageDemand: batch.storageDemands[item.id])
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -862,6 +928,10 @@ struct BatchFinishedRow: View {
     /// the copy. `BatchViewModel.midSaveFindings` holds one of these per flagged video, and it is
     /// the only thing that can say whether the app answered the question or the user still has it.
     var finding: MidSaveFinding? = nil
+    /// The room a space check asked for when it refused this video, from
+    /// `BatchViewModel.storageDemands`. A refusal taken at a measured size is a fact about this
+    /// video, so the row names the figure the check held instead of the general sentence.
+    var storageDemand: Int64? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -875,12 +945,11 @@ struct BatchFinishedRow: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 6)
-            if let saving {
-                Text("-\(ShrinkFormat.bytes(saving.bytesSaved))")
+            if let display = savingDisplay {
+                Text(display.figure)
                     .font(.footnote.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(ShrinkStyle.accent)
-                    // Spoken, "-1.4 GB" reads as a subtraction. The label names the saving.
-                    .accessibilityLabel("\(ShrinkFormat.bytes(saving.bytesSaved)) saved")
+                    .accessibilityLabel(display.spokenLabel)
             } else {
                 // The symbol only repeats the state `detail` already spells out in words.
                 Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
@@ -889,14 +958,28 @@ struct BatchFinishedRow: View {
         .accessibilityElement(children: .combine)
     }
 
-    private var saving: Savings? {
-        if case .saved(let saving) = item.state { return saving }
-        return nil
+    /// The saving this row may show, or nil when there is none it could honestly show.
+    ///
+    /// A stored `.saved` whose copy is not smaller than its original comes only from a queue file
+    /// this app did not write: every path that writes `.saved` is gated on `isSmaller`. It used to
+    /// be rendered as a figure all the same, and a negative saving reads there as "--1.2 GB".
+    var savingDisplay: SavingDisplay? {
+        guard case .saved(let saving) = item.state, saving.isSmaller else { return nil }
+        return SavingDisplay(bytesSaved: saving.bytesSaved)
+    }
+
+    /// One saving in the two forms this row needs, built from the same number so the figure and
+    /// the phrase VoiceOver reads cannot disagree.
+    struct SavingDisplay: Equatable {
+        let bytesSaved: Int64
+        var figure: String { "-\(ShrinkFormat.bytes(bytesSaved))" }
+        /// Spoken, "-1.4 GB" reads as a subtraction. The label names the saving.
+        var spokenLabel: String { "\(ShrinkFormat.bytes(bytesSaved)) saved" }
     }
 
     private var symbol: String {
         switch item.state {
-        case .saved: return "checkmark.circle.fill"
+        case .saved: return savingDisplay == nil ? "equal.circle" : "checkmark.circle.fill"
         case .skipped: return "equal.circle"
         case .failed: return "exclamationmark.circle"
         case .needsCheck: return "questionmark.circle"
@@ -906,20 +989,28 @@ struct BatchFinishedRow: View {
 
     private var tint: Color {
         switch item.state {
-        case .saved: return ShrinkStyle.accent
+        case .saved: return savingDisplay == nil ? .secondary : ShrinkStyle.accent
         case .failed, .needsCheck: return .orange
         default: return .secondary
         }
     }
 
-    private var detail: String {
+    /// What the row says happened to this video. Internal so a case can read the sentence, which is
+    /// the product here.
+    var detail: String {
         switch item.state {
-        case .saved:
-            var text = "Saved a smaller copy"
+        case .saved(let saving):
+            var text = saving.isSmaller ? "Saved a smaller copy" : "Saved a copy"
             switch readBack {
             case .confirmed: text = "Saved · read back from Photos"
             case .unavailable: text = "Saved · Photos hasn’t handed it back yet"
             case nil: break
+            }
+            // The saved state and a copy that is not smaller can only meet in a queue file this
+            // app did not write, and the row must say so rather than leave a checkmark and no
+            // figure unexplained.
+            if !saving.isSmaller {
+                text += " · its recorded size is not smaller than the original"
             }
             switch deletion {
             case .deleted: text += " · original deleted"
@@ -930,7 +1021,14 @@ struct BatchFinishedRow: View {
             }
             return text
         case .skipped(let reason): return reason
-        case .failed(let error): return error.localizedDescription
+        case .failed(let error):
+            // A refusal taken at a size this run measured is a fact about this video, and the check
+            // held the figure when it refused. The sentence is `PipelineError`'s own, so it reads
+            // here exactly as the paused screen's and the one-video flow's do.
+            if let storageDemand, error == .insufficientStorage {
+                return PipelineError.insufficientStorageSentence(needed: storageDemand)
+            }
+            return error.localizedDescription
         case .needsCheck:
             // The app looks at Photos before this row is drawn, so a flagged video usually has an
             // answer by now: either the copy it made is in the library, or - with the whole
@@ -1282,7 +1380,8 @@ struct BatchFinishedScreen: View {
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],
                                      revision: batch.thumbnailRevision,
-                                     finding: batch.midSaveFindings[item.id])
+                                     finding: batch.midSaveFindings[item.id],
+                                     storageDemand: batch.storageDemands[item.id])
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

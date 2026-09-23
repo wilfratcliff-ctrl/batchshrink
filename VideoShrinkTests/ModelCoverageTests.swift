@@ -57,7 +57,7 @@ import Photos
     func testTheMeasuredBandIsHeldInsideItsDocumentedBounds() {
         let tiny = (0..<3).map { _ in CopyMeasurement(bitsPerSecond: 260_000, longEdge: 1_920) }
         let low = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: tiny)
-        XCTAssertEqual(low.basis, .measured(samples: 3))
+        XCTAssertEqual(low.basis, .measured(samples: 3, frameRate: .original))
         // 260 kbps less a tenth is 234 kbps, which the floor raises to 250 kbps.
         XCTAssertEqual(low.lowBitsPerSecond, 250_000, accuracy: 0.5)
         XCTAssertEqual(low.highBitsPerSecond, 286_000, accuracy: 0.5)
@@ -72,16 +72,16 @@ import Photos
     func testAMeasurementThatCannotBeTrustedNeverRetunesTheBand() {
         let unusable = (0..<5).map { _ in CopyMeasurement(bitsPerSecond: 0, longEdge: 1_920) }
         XCTAssertEqual(CopySizeModel.make(for: .hd1080, frameRate: .original, measured: unusable).basis,
-                       .planning(resolution: .hd1080))
+                       .planning(resolution: .hd1080, frameRate: .original))
 
         // Three usable copies are the threshold, and unusable entries are not counted towards it.
         let usable = (0..<3).map { _ in CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1_920) }
         XCTAssertEqual(CopySizeModel.make(for: .hd1080, frameRate: .original,
                                           measured: unusable + usable).basis,
-                       .measured(samples: 3))
+                       .measured(samples: 3, frameRate: .original))
         let two = Array(usable.prefix(2))
         XCTAssertEqual(CopySizeModel.make(for: .hd1080, frameRate: .original, measured: two).basis,
-                       .planning(resolution: .hd1080))
+                       .planning(resolution: .hd1080, frameRate: .original))
     }
 
     // MARK: - The numbers the savings screen shows
@@ -148,13 +148,22 @@ import Photos
         XCTAssertEqual(estimate.optimisticBytes, 140_000_000)
         XCTAssertEqual(estimate.likelyNoReductionCount, 0)
         XCTAssertTrue(estimate.hasNumbers)
-        XCTAssertEqual(estimate.basis, .planning(resolution: .hd1080))
-        XCTAssertEqual(estimate.frameRate, .original)
+        XCTAssertEqual(estimate.basis, .planning(resolution: .hd1080, frameRate: .original))
+        XCTAssertEqual(estimate.basis.frameRate, .original)
         // The midpoint of the band is what the "copies about" line shows.
         XCTAssertEqual(estimate.estimatedCopyBytes, 90_000_000)
     }
 
-    func testAVideoThatCannotShrinkIsCountedRatherThanPromised() {
+    /// The copy figure describes copies, so a video the estimate expects to skip is not counted in
+    /// it at its own full size.
+    ///
+    /// This case used to pin the opposite. The 50 MB original here is smaller than the bottom of
+    /// the 1080p band, so the run is expected to skip it and make no copy of it at all; the old
+    /// arithmetic still added its 250 MB selection to the "copies about" figure and then took the
+    /// average saving off the whole sum, which reported 140 MB of copies where the one copy the
+    /// band describes is 60-120 MB. The saving figures are unchanged: what changed is which
+    /// originals the copy figure is about.
+    func testAVideoThatCannotShrinkIsNotCountedInTheCopyFigure() {
         let big = coverageAsset("big", bytes: 200_000_000)
         let small = coverageAsset("small", bytes: 50_000_000)
         let estimate = SavingsEstimate.make(assets: [big, small], settings: TranscodeSettings(),
@@ -164,7 +173,54 @@ import Photos
         XCTAssertEqual(estimate.conservativeBytes, 80_000_000)
         XCTAssertEqual(estimate.optimisticBytes, 140_000_000)
         XCTAssertEqual(estimate.likelyNoReductionCount, 1)
-        XCTAssertEqual(estimate.estimatedCopyBytes, 140_000_000)
+        XCTAssertEqual(estimate.likelyShrinkCount, 1)
+        // Only the 200 MB original is expected to get a copy, so the copy figure is its 90 MB
+        // midpoint and not the 140 MB that counting the skipped video's original produced.
+        XCTAssertEqual(estimate.copiedBytes, 200_000_000)
+        XCTAssertEqual(estimate.estimatedCopyBytes, 90_000_000)
+        XCTAssertLessThan(estimate.estimatedCopyBytes, estimate.sizedBytes)
+        XCTAssertFalse(estimate.predictsNoSaving)
+    }
+
+    /// The copy figure is about copies, so a video whose copy may still come out smaller stays in
+    /// it even when the conservative end of its band promises nothing.
+    ///
+    /// This is the boundary the case above must not cross the other way: excluding a video that
+    /// might shrink would understate the copies the run makes, and including one whose whole band
+    /// is above its original was the defect. 70 MB sits inside the 1080p band's 60-120 MB, so only
+    /// the optimistic end has room for a saving.
+    func testAVideoThatMightStillShrinkStaysInTheCopyFigure() {
+        let borderline = coverageAsset("borderline", bytes: 70_000_000)
+        let estimate = SavingsEstimate.make(assets: [borderline], settings: TranscodeSettings(),
+                                            measured: [])
+        XCTAssertEqual(estimate.likelyNoReductionCount, 1)
+        XCTAssertEqual(estimate.likelyShrinkCount, 0)
+        XCTAssertEqual(estimate.copiedBytes, 70_000_000, "a copy may still be made for it")
+        // 70 MB less the 5 MB of average saving at the middle of its own band.
+        XCTAssertEqual(estimate.estimatedCopyBytes, 65_000_000)
+        XCTAssertLessThan(estimate.estimatedCopyBytes, 70_000_000,
+                          "the copy figure is never larger than the original it copies")
+        XCTAssertFalse(estimate.predictsNoSaving, "one end of the band still has room")
+    }
+
+    /// A selection whose whole band is at or above its originals has nothing to save, and the two
+    /// cards that draw it say so. Before this they drew the formatter's rendering of a single zero
+    /// - "Zero KB" - in the largest type on the screen, under the heading "ROOM TO RECLAIM".
+    func testAnEstimateWithNothingToSaveIsOneTheCardsCanSaySoAbout() {
+        let small = coverageAsset("small", bytes: 50_000_000)
+        let estimate = SavingsEstimate.make(assets: [small], settings: TranscodeSettings(),
+                                            measured: [])
+        XCTAssertTrue(estimate.hasNumbers, "a size was reported; there is simply nothing to save")
+        XCTAssertTrue(estimate.predictsNoSaving)
+        XCTAssertEqual(estimate.conservativeBytes, 0)
+        XCTAssertEqual(estimate.optimisticBytes, 0)
+        XCTAssertEqual(estimate.estimatedCopyBytes, 0, "no copy is expected, so no bytes are")
+        XCTAssertEqual(estimate.likelyShrinkCount, 0)
+
+        // An estimate with no videos in it at all is a different thing, and the cards say
+        // something different about it: nothing has been measured rather than nothing being saved.
+        XCTAssertFalse(SavingsEstimate.make(assets: [], settings: TranscodeSettings(),
+                                            measured: []).predictsNoSaving)
     }
 
     func testAnEmptyEstimateSaysNothingRatherThanZero() {
@@ -176,7 +232,7 @@ import Photos
         XCTAssertEqual(empty.optimisticBytes, 0)
         XCTAssertEqual(empty.likelyNoReductionCount, 0)
         XCTAssertEqual(empty.estimatedCopyBytes, 0)
-        XCTAssertEqual(empty.basis, .planning(resolution: .hd1080))
+        XCTAssertEqual(empty.basis, .planning(resolution: .hd1080, frameRate: .original))
     }
 
     /// A mixed selection uses more than one band, and only one can be named. Before this change
@@ -195,7 +251,7 @@ import Photos
                                            settings: fourK, measured: [])
         let reversed = SavingsEstimate.make(assets: [big, third, second, first],
                                             settings: fourK, measured: [])
-        XCTAssertEqual(forward.basis, .planning(resolution: .hd1080),
+        XCTAssertEqual(forward.basis, .planning(resolution: .hd1080, frameRate: .original),
                        "Most of the bytes are copied at 1080p, so that is the band to name")
         XCTAssertEqual(reversed.basis, forward.basis,
                        "Reversing the same selection cannot change what the caption claims")
@@ -214,7 +270,7 @@ import Photos
         let big = coverageAsset("4k", bytes: 100_000_000, width: 3_840, height: 2_160)
         let forward = SavingsEstimate.make(assets: [hd, big], settings: fourK, measured: [])
         let reversed = SavingsEstimate.make(assets: [big, hd], settings: fourK, measured: [])
-        XCTAssertEqual(forward.basis, .planning(resolution: .uhd4k))
+        XCTAssertEqual(forward.basis, .planning(resolution: .uhd4k, frameRate: .original))
         XCTAssertEqual(reversed.basis, forward.basis)
     }
 
@@ -307,7 +363,7 @@ import Photos
 
         let estimate = SavingsEstimate.make(assets: [unknown], settings: TranscodeSettings(), measured: [])
         XCTAssertEqual(estimate.sizedCount, 1)
-        XCTAssertEqual(estimate.basis, .planning(resolution: .hd720))
+        XCTAssertEqual(estimate.basis, .planning(resolution: .hd720, frameRate: .original))
         XCTAssertGreaterThan(estimate.conservativeBytes, 0)
     }
 
@@ -315,6 +371,34 @@ import Photos
         XCTAssertEqual(CopySizeModel.frameRateScale(.original), 1.0)
         XCTAssertEqual(CopySizeModel.frameRateScale(.fps30), 1.0)
         XCTAssertEqual(CopySizeModel.frameRateScale(.fps24), 0.8, accuracy: 0.0001)
+    }
+
+    /// Only a frame rate that moves the band is named beside it.
+    ///
+    /// The caption read "scaled for 30 fps" while the band is documented as a 30 fps band and the
+    /// scale for 30 fps is 1.0, so it claimed a scaling that never happened - and it said nothing
+    /// about the 0.8x a measured band at 24 fps gets. The choice travels inside the basis, so the
+    /// caption reads the same value the arithmetic scaled with.
+    func testAFrameRateIsNamedOnlyWhenItActuallyScalesTheBand() {
+        XCTAssertFalse(CopySizeModel.frameRateScales(.original))
+        XCTAssertFalse(CopySizeModel.frameRateScales(.fps30),
+                       "30 fps is this band's own baseline, so nothing was scaled for it")
+        XCTAssertTrue(CopySizeModel.frameRateScales(.fps24))
+
+        let planningThirty = CopySizeModel.make(for: .hd1080, frameRate: .fps30, measured: [])
+        XCTAssertEqual(planningThirty.basis, .planning(resolution: .hd1080, frameRate: .fps30))
+        XCTAssertNil(planningThirty.basis.frameRateScaling)
+
+        let planningTwentyFour = CopySizeModel.make(for: .hd1080, frameRate: .fps24, measured: [])
+        XCTAssertEqual(planningTwentyFour.basis.frameRateScaling, "scaled for 24 fps")
+        XCTAssertEqual(planningTwentyFour.highBitsPerSecond, 6_400_000, accuracy: 1)
+
+        // A measured band is scaled the same way, and its basis carries the choice too.
+        let measurements = (0..<3).map { _ in CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1_920) }
+        let measured = CopySizeModel.make(for: .hd1080, frameRate: .fps24, measured: measurements)
+        XCTAssertEqual(measured.basis, .measured(samples: 3, frameRate: .fps24))
+        XCTAssertEqual(measured.basis.frameRateScaling, "scaled for 24 fps")
+        XCTAssertEqual(measured.highBitsPerSecond, 5_500_000 * 0.8, accuracy: 1)
     }
 
     // MARK: - Stored choices

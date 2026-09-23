@@ -1,5 +1,18 @@
 import SwiftUI
 
+/// The words both estimate cards use when their band predicts no saving at all.
+///
+/// Each card drew a pair of zeroes as the byte figure "Zero KB" in its largest type when nothing
+/// in the selection was expected to shrink. Zero is true and it is not what the card is for: the
+/// video's own row already says "Little saving expected", and the card exists to say what the
+/// numbers mean. One rule in one place, so the two cards cannot say different things.
+enum EstimateCopy {
+    static let noSavingHeadline = "No saving expected"
+    /// The sentence under it. It states the rule the run applies rather than a claim about bytes
+    /// nothing has measured: a copy that does not come out smaller is not saved.
+    static let noSavingNote = "BatchShrink only keeps a copy that comes out smaller than its original, so these videos are likely to be left as they are."
+}
+
 /// One row of pills where the highlight slides between the options.
 struct QualityPillGroup<Option: Hashable & Identifiable>: View {
     let options: [Option]
@@ -109,14 +122,25 @@ struct QualitySelector: View {
     @ViewBuilder private var estimateBlock: some View {
         let projected = estimate(settings.resolution)
         if let projected, projected.hasNumbers {
+            // A selection whose band never dips below its originals has a zero at both ends. The
+            // card says what it found instead of setting that zero in its largest type.
+            let headline = projected.predictsNoSaving
+                ? EstimateCopy.noSavingHeadline
+                : ShrinkFormat.byteRange(low: projected.conservativeBytes,
+                                         high: projected.optimisticBytes)
+            let detail = projected.predictsNoSaving
+                ? EstimateCopy.noSavingNote
+                : "estimated saving · copies about \(ShrinkFormat.bytes(projected.estimatedCopyBytes))"
             VStack(alignment: .leading, spacing: 3) {
-                Text(ShrinkFormat.byteRange(low: projected.conservativeBytes, high: projected.optimisticBytes))
+                Text(headline)
                     .font(.system(.title, design: .default, weight: .bold))
                     .monospacedDigit()
                     .contentTransition(.numericText())
-                Text("estimated saving · copies about \(ShrinkFormat.bytes(projected.estimatedCopyBytes))")
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(detail)
                     .font(.footnote).foregroundStyle(.secondary)
                     .contentTransition(.numericText())
+                    .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18).shrinkCard()
