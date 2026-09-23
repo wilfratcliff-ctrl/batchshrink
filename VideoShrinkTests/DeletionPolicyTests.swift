@@ -68,10 +68,10 @@ final class DeletionPolicyTests: XCTestCase {
     func testEveryDeletingModeNeedsAConfirmedReadBack() {
         for mode in [DeletionMode.afterEachCopy, .afterRun] {
             XCTAssertEqual(decide(mode, evidence: receipt(), revalidation: .matches), .delete)
-            XCTAssertNotEqual(decide(mode, evidence: receipt(), readBack: .unavailable,
+            XCTAssertNotEqual(decide(mode, readBack: .unavailable, evidence: receipt(),
                                      revalidation: .matches),
                               .delete)
-            XCTAssertNotEqual(decide(mode, evidence: receipt(), readBack: nil,
+            XCTAssertNotEqual(decide(mode, readBack: nil, evidence: receipt(),
                                      revalidation: .matches),
                               .delete)
         }
