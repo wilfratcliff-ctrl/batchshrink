@@ -10,7 +10,7 @@ struct DeletionSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                     warning
                     VStack(spacing: 0) {
                         ForEach(DeletionMode.allCases) { mode in
@@ -61,7 +61,7 @@ struct DeletionSheet: View {
     private var warning: some View {
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: "exclamationmark.triangle.fill")
-                .foregroundStyle(.orange)
+                .foregroundStyle(ShrinkStyle.danger)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text("Deleting is permanent after 30 days")
@@ -119,7 +119,7 @@ struct DeletionRow: View {
             HStack(spacing: 14) {
                 Image(systemName: settings.deletionMode.deletesOriginals ? "trash" : "checkmark.shield")
                     .font(.title3)
-                    .foregroundStyle(settings.deletionMode.deletesOriginals ? Color.orange : ShrinkStyle.accent)
+                    .foregroundStyle(settings.deletionMode.deletesOriginals ? ShrinkStyle.danger : ShrinkStyle.accent)
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Originals").font(.subheadline.weight(.semibold))

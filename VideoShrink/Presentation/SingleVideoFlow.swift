@@ -40,7 +40,7 @@ struct SingleVideoFlow: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 stageContent
                 if model.stage == .idle {
                     QualityRow(settings: model.settings) { showQuality = true }

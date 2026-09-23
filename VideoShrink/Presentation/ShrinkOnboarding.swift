@@ -36,7 +36,7 @@ struct ShrinkOnboarding: View {
             .accessibilityLabel("Introduction, step \(page + 1) of 3")
 
             ScrollView {
-                VStack(spacing: 24) {
+                VStack(spacing: ShrinkStyle.sectionSpacing) {
                     VStack(spacing: 14) {
                         Text(titles[page])
                             .font(ShrinkStyle.headline).tracking(-1.2)

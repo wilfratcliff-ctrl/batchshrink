@@ -91,7 +91,7 @@ struct ShrinkProgress: View {
                 ShrinkProgressOrb(progress: cancelling ? nil : progress, label: title)
                 if ![.waitingForPermission, .choosing, .saving].contains(stage) {
                     Divider()
-                    VStack(alignment: .leading, spacing: 20) {
+                    VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                         step(0, title: "Get the original")
                         step(1, title: "Make a smaller copy")
                         step(2, title: "Check the result")

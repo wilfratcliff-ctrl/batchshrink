@@ -7,6 +7,14 @@ enum ShrinkStyle {
     static let accent = Color(red: 0.66, green: 0.96, blue: 0.82)
     static let lilac = Color(red: 0.73, green: 0.69, blue: 1.0)
     static let button = accent
+    /// The colour for the two things this app warns about: an original that is about to be deleted,
+    /// and a video the run could not account for.
+    ///
+    /// It was `Color.orange` written out at three separate sites, which made the app's warning
+    /// colour the one part of the palette nobody could find: every other colour here is named, so
+    /// the ones that carry a warning should be too, and a tint that means "look at this" is not a
+    /// thing to leave to whoever is editing a screen at the time.
+    static let danger = Color.orange
     static let thumbnailBackground = elevated
     static let hairline = ShrinkHairline()
     static let headline = Font.system(.largeTitle, design: .default, weight: .bold)

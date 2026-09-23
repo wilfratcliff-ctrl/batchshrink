@@ -467,7 +467,7 @@ struct BatchSelectionScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 header
                 // Both notices about this launch's own state sit here, above the grid, rather than at
                 // the bottom of the page. Their advice - look in Photos before running the same
@@ -1079,28 +1079,23 @@ struct BatchProcessingScreen: View {
                         Text("Video \(number) of \(batch.items.count)")
                             .font(.subheadline.weight(.semibold))
                         Text(batch.currentStage?.title ?? "Working").font(.headline)
-                            // The orb above says the stage and the percentage, and the bar under this
-                            // card says both again; this line is the third statement of the stage for
-                            // anyone listening, and the same treatment the percentage text under the
-                            // bar already gets. It stays on screen.
+                            // The orb above carries the stage as its accessibility label and the
+                            // progress as its value, so this line says the same stage a second time
+                            // to anyone listening. It stays on screen for the eye, which reads it as
+                            // the name of the thing being worked on, and leaves the tree for the ear.
                             .accessibilityHidden(true)
                         Text(detail(asset))
                             .font(.footnote).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                if let progress = batch.currentProgress {
-                    ProgressView(value: progress)
-                        .accessibilityLabel(batch.currentStage?.title ?? "Progress")
-                    // The bar speaks its own percentage and the orb speaks the stage and the
-                    // percentage again; this figure is the same number a third time. It stays on
-                    // screen and leaves the accessibility tree.
-                    Text(progress, format: .percent.precision(.fractionLength(0)))
-                        .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-                        .accessibilityHidden(true)
-                } else {
-                    ProgressView().frame(maxWidth: .infinity)
-                }
+                // The orb above is this card's progress, and it is the whole of it: a ring, the
+                // figure inside it, and an activity indicator when the work cannot be measured.
+                // There used to be a linear bar under it and the same percentage printed a third
+                // time under that - three statements of one number, stacked, in a card that also
+                // sits above a second card counting the videos left. The one-video flow draws its
+                // progress with the orb alone, so this is the batch flow agreeing with it rather
+                // than adding a second language for the same fact.
             } else {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 44)
                 Text("Starting the next video…").font(.footnote).foregroundStyle(.secondary)
@@ -1237,7 +1232,7 @@ struct BatchFinishedRow: View {
     private var tint: Color {
         switch item.state {
         case .saved: return savingDisplay == nil ? .secondary : ShrinkStyle.accent
-        case .failed, .needsCheck: return .orange
+        case .failed, .needsCheck: return ShrinkStyle.danger
         default: return .secondary
         }
     }

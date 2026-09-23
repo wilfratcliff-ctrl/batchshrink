@@ -89,7 +89,7 @@ struct QualitySelector: View {
     @AppStorage(ShrinkHaptics.storageKey) private var haptics = true
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             VStack(alignment: .leading, spacing: 10) {
                 sectionTitle("Picture size")
                 QualityPillGroup(options: CopyResolution.allCases,
