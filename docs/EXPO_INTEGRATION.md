@@ -17,6 +17,12 @@ The Expo development client uses the local network to connect to Metro and inclu
 
 Follow [EAS_DEVELOPMENT_BUILD.md](EAS_DEVELOPMENT_BUILD.md). EAS has produced builds for this app; build 10 is the production submission recorded in [RELEASE_10.md](RELEASE_10.md). The round 1 reliability work is not in any build.
 
+## Continuous integration
+
+`.github/workflows/ios-tests.yml` runs two independent macOS jobs on every push to `main`. The first compiles and runs the XCTest target against the standalone project generated from `project.yml`, which never touches this Expo project. The second, `build-expo-app`, builds the app that ships, the way EAS builds it: `npm ci`, the native-source mirror check, `npx expo prebuild --platform ios --no-install`, `pod install`, then a signing-disabled simulator build of the generated workspace.
+
+That second job is the only gate that compiles `modules/videoshrink-native/ios/VideoShrinkNativeView.swift` and `VideoShrinkNativeModule.swift`, and it compiles `VideoShrinkCore/` with them, so the Expo side of the project is held together without spending EAS build minutes and without an Apple account, a certificate or a registered device. A human on a Mac runs the identical sequence with `npm run verify:expo`. The workspace and the scheme are discovered from the generated project rather than hardcoded, so renaming the app in `app.json` cannot silently break the gate. See [VERIFICATION_HANDOFF.md](VERIFICATION_HANDOFF.md), section 6.
+
 ## Reuse boundary
 
 - Keep `Models` and `Services` as native code. Keep video bytes, AVAssets, decoding, cancellation, verification and Photos transactions on the native side.

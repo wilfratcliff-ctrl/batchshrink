@@ -3,7 +3,10 @@ import SwiftUI
 import UIKit
 
 // One native session survives React reloads. Creating two view models would let
-// one model's startup cleanup remove the other's active output.
+// one model's startup cleanup remove the other's active output - and the session is
+// the thing a reload has to leave standing: the settings, the shared temporary
+// workspace, the history, the batch's queue and its paused phase, a save Photos has
+// accepted, and a finished single-video copy that was waiting to be saved.
 @MainActor enum VideoShrinkNativeSession {
   static let settings = ShrinkSettings()
   static let temporary = TemporaryFileManager()
@@ -33,9 +36,30 @@ import UIKit
     settings: settings
   )
 
+  /// The host has taken the presentation away: a React reload, or the module being destroyed.
+  ///
+  /// This is not the user's choice, and it is not backgrounding, whose screen comes back. It
+  /// therefore applies the backgrounding rule and nothing stricter:
+  ///
+  /// - work in flight is cancelled, because there is no background execution entitlement and no
+  ///   screen left to wait on it;
+  /// - a save Photos has accepted is left alone, because `cancel()` refuses `.saving`: it settles
+  ///   into `.saved`, and the copy Photos made is written to the shared history;
+  /// - a *finished*, unsaved single-video export is kept. It cost the user a whole export, and a
+  ///   view being removed is not the user asking to lose it, so the model stays on `.readyToSave`
+  ///   and the copy stays in the session's temporary workspace. That workspace is the app's own
+  ///   and is cleared at the next launch (and by the batch flow's own cleanup), so the copy can
+  ///   still be lost - by the app's own cleanup, never by this call. Whether the flow offers that
+  ///   screen again is the flow's own concern; this file's rule is only that teardown must not be
+  ///   the thing that deletes the copy;
+  /// - the picker sheet is the one thing that cannot survive, because a sheet has no life without
+  ///   the view that presents it. Its stage (`.choosing`) is closed rather than reopened, which
+  ///   loses nothing: no video has been chosen yet.
   static func presentationRemoved() {
     model.pickerCancelled()
-    model.cancel()
+    // `.readyToSave` is deliberately not cancelled - see above. Every other stage this can reach
+    // is either work in flight or one that `cancel()` already refuses.
+    if model.stage != .readyToSave { model.cancel() }
     batch.enteredBackground()
   }
 }
@@ -89,7 +113,8 @@ final class VideoShrinkNativeView: ExpoView {
 
   private func detachHost() {
     guard let controller = host else { return }
-    // Cancellation preserves the existing rule: an accepted Photos save settles.
+    // Teardown keeps the backgrounding rule: work in flight is cancelled, an accepted save
+    // settles, and a finished copy is kept rather than deleted.
     VideoShrinkNativeSession.presentationRemoved()
     controller.willMove(toParent: nil)
     controller.view.removeFromSuperview()

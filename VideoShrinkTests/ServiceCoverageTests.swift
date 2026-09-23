@@ -861,6 +861,64 @@ import UIKit
         XCTAssertFalse(refusal.localizedDescription.contains("ProRes"))
     }
 
+    // MARK: - What an export refuses, in its own words
+
+    /// The export step had the same hole the retrieval step above had. `makeSession` threw
+    /// `PipelineError.unsupported` - the sentence listing Live Photos, HDR, ProRes and the rest -
+    /// when AVFoundation had just refused to build the export at all. No trait in that list has
+    /// been looked at on this path and the media may be an ordinary video, so the list is a guess
+    /// where the app holds two facts: which quality it asked for, and what came back instead of a
+    /// session. Apple's answer cannot be produced on a machine with no media to export, so the
+    /// mapping is driven here rather than through a real export - the same split, for the same
+    /// reason, as the retrieval refusal above.
+    func testAnExportAppleWillNotBuildSaysWhatItFoundInsteadOfListingFormats() {
+        let guess = PipelineError.unsupported.localizedDescription
+        for resolution in CopyResolution.allCases {
+            let noSession = ExportRefusal.noSession(resolution: resolution)
+            XCTAssertEqual(noSession.error.errorDescription, noSession.sentence,
+                           "the case carries the sentence it was given rather than restating it")
+            XCTAssertEqual(noSession.error.localizedDescription, noSession.sentence)
+            XCTAssertNotEqual(noSession.sentence, guess,
+                              "what was found is not a list of traits nothing has read")
+            XCTAssertTrue(noSession.sentence.contains(resolution.title),
+                          "the sentence names the quality the run actually asked for")
+            XCTAssertFalse(noSession.sentence.contains("ProRes"))
+            XCTAssertFalse(noSession.sentence.contains("Live Photo"))
+
+            let container = ExportRefusal.cannotWriteMovieFile(resolution: resolution)
+            XCTAssertEqual(container.error.localizedDescription, container.sentence)
+            XCTAssertNotEqual(container.sentence, guess)
+            XCTAssertTrue(container.sentence.contains(resolution.title))
+            // The container is the thing Apple would not write, so the sentence names it: that is
+            // the difference between this finding and a preset that has no session at all.
+            XCTAssertTrue(container.sentence.contains("QuickTime"))
+        }
+        // The two findings are not the same fact and must not read as the same sentence.
+        XCTAssertNotEqual(ExportRefusal.noSession(resolution: .uhd4k).sentence,
+                          ExportRefusal.cannotWriteMovieFile(resolution: .uhd4k).sentence)
+        XCTAssertNotEqual(ExportRefusal.noSession(resolution: .hd1080).error,
+                          .unsupportedOriginal(reason: "HDR videos aren't supported yet."))
+    }
+
+    /// The same finding at the end of a run: the row for that video fails in those words, and the
+    /// record left on disk keeps the coarse kind a later launch reads, because a stored queue
+    /// carries no sentences.
+    func testAVideoAppleWillNotExportFailsInTheFindingsOwnWords() async {
+        let fixture = ServiceFixture(assets: [serviceAsset("a", bytes: 20_000_000)])
+        let finding = ExportRefusal.noSession(resolution: .uhd4k).error
+        fixture.transcoder.error = finding
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.items.map(\.state), [.failed(finding)])
+        XCTAssertNotEqual(finding.localizedDescription, PipelineError.unsupported.localizedDescription)
+        XCTAssertEqual(fixture.queue.stored?.items.map(\.state) ?? [], [.failed(code: .unsupported)],
+                       "a restored queue can only say this app cannot process that video")
+    }
+
     // MARK: - A copy the one-video flow made
 
     /// The one-video flow saved a copy and dropped the identifier Photos returned, and it had no
@@ -1146,6 +1204,8 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
 }
 
 @MainActor private final class ServiceMockTranscoder: VideoTranscoding {
+    /// What AVFoundation answers when the run asks it for an export it will not build.
+    var error: Error?
     var hold = false
     /// Holds the given transcode and every call after it, so a test can read the run's state once
     /// an earlier video has finished.
@@ -1163,6 +1223,7 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
         if hold || (holdFromCall.map { calls >= $0 } ?? false) {
             await withCheckedContinuation { gate = $0 }
         }
+        if let error { throw error }
         try Task.checkCancellation()
         return written
     }

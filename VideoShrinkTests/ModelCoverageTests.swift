@@ -460,11 +460,18 @@ import Photos
         let carried = PipelineError.unsupportedOriginal(reason: carriedReason)
         XCTAssertEqual(carried.errorDescription, carriedReason,
                        "The case carries the sentence it was given rather than restating it")
+        // The other case that carries its sentence in: an export Apple would not build says which
+        // quality it asked for and what came back instead of a session, so it comes straight back
+        // out here too.
+        let carriedExport = PipelineError.exportUnavailable(
+            reason: "There's no 4K export for this video on this iPhone.")
+        XCTAssertEqual(carriedExport.errorDescription, "There's no 4K export for this video on this iPhone.",
+                       "The case carries the sentence it was given rather than restating it")
         let cases: [PipelineError] = [.permissionDenied, .assetUnavailable, .unsupported, .retrieval,
                                       .export, .verification, .durationMismatch, .audioMismatch,
                                       .orientationMismatch, .insufficientStorage, .codecMismatch,
                                       .resolutionMismatch, .frameRateMismatch, .save, .temporaryFiles,
-                                      .libraryScan, .cancelled, carried]
+                                      .libraryScan, .cancelled, carried, carriedExport]
         for error in cases {
             let text = error.errorDescription ?? ""
             XCTAssertFalse(text.isEmpty, "This error needs a sentence the user can act on")

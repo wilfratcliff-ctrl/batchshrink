@@ -20,6 +20,24 @@ enum PhotosAccessBlock: Equatable, Sendable {
     case restricted
 }
 
+/// What a run learned when it asked whether it may read Photos, at the one moment it cannot go on
+/// without knowing.
+///
+/// The three answers are kept apart because two of them are not answers about access at all. A run
+/// that was stopped while the question was being asked has to come to rest where every other stop
+/// rests, not on a screen saying Photos is unavailable; and "nobody has granted this" is not one
+/// video failing, which is what the waiting videos used to be told one at a time.
+private enum RunAccess: Equatable, Sendable {
+    /// The run may read the library and can begin.
+    case granted
+    /// The run was stopped before it read anything - the user's own tap, or the app leaving the
+    /// foreground - so it rests where every other stop rests.
+    case stopped
+    /// Nobody has granted this app Photos access. Nothing was read or written, so no video has
+    /// failed: the flow has to ask, or say that access is refused.
+    case missing
+}
+
 /// Drives the batch flow: scan the library, choose videos and quality, process them one at a
 /// time and report what actually happened.
 ///
@@ -638,9 +656,6 @@ enum PhotosAccessBlock: Equatable, Sendable {
     /// waiting video would fail with `assetUnavailable`'s sentence about a video sitting outside
     /// the allowed set, which is not what happened to it. The run's own record is not torn down
     /// here: `items` is untouched and the queue on disk still describes it.
-    ///
-    /// `reason` is kept rather than folded away, because the recovery screen reads it: a refusal
-    /// gets the route to Settings, and a restriction gets the truth that this app cannot lift it.
     private func libraryAccessLost(reason: PhotosAccessBlock) {
         if phase == .scanning {
             scanner.cancel()
@@ -650,10 +665,22 @@ enum PhotosAccessBlock: Equatable, Sendable {
                   [BatchPhase.start, .scanned, .selecting, .finished, .failed, .paused].contains(phase)
             else { return }
         }
+        restOnLostAccess(reason)
+        log.error("Photos access was withdrawn")
+    }
+
+    /// Says access is gone, in the words that match the reason, and rests the flow on the screen
+    /// whose whole job is the route back.
+    ///
+    /// `reason` is kept rather than folded away, because the recovery screen reads it: a refusal
+    /// gets the route to Settings, and a restriction gets the truth that this app cannot lift it.
+    /// Two callers reach this - a report that access changed while the flow was resting, and a run
+    /// whose own first step could not read - and both have to leave the same state, so the sentence
+    /// is written once.
+    private func restOnLostAccess(_ reason: PhotosAccessBlock) {
         phase = .failed
         accessBlock = reason
         message = PipelineError.accessSentence(restricted: reason == .restricted)
-        log.error("Photos access was withdrawn")
     }
 
     // MARK: - Choosing
@@ -961,8 +988,74 @@ enum PhotosAccessBlock: Equatable, Sendable {
         // checkpoints either, it stops and says so again.
         checkpointFailure = false
         runTask = Task { [weak self] in
-            await self?.runLoop()
+            guard let self else { return }
+            // A run reads an original before it writes anything, and it cannot read one without
+            // Photos access. This is therefore the first moment a run needs some, and the last
+            // moment at which asking can still turn it into work rather than into one failure per
+            // waiting video. See `accessForRun()`.
+            switch await self.accessForRun() {
+            case .granted, .stopped:
+                // A stop while the question was being asked is not an answer about access. It
+                // rests where every other stop rests: through the loop's own tail.
+                await self.runLoop()
+            case .missing:
+                self.restForAccessTheRunCannotRead()
+            }
         }
+    }
+
+    /// Whether this run may read Photos, asked once before the first video rather than left for
+    /// every video to find out for itself.
+    ///
+    /// `PhotoLibraryService.requestAccess()` is the app's one route to the system prompt, and it
+    /// asks only when nobody has been asked, so this is a plain read for a run that follows a scan
+    /// and a real question for one that does not. The case it exists for is a run picked up from a
+    /// stored queue on an iPhone that has never granted Photos access - a migration that carries
+    /// the queue and not the grant. Without this, Continue went straight to the waiting videos and
+    /// every one of them failed with `assetUnavailable`'s sentence about a video sitting outside
+    /// the set access allows, which is not what happened to any of them, and no screen offered a
+    /// way to change it.
+    ///
+    /// The app's own scan asks at its first read, so this is the same rule at the other entrance:
+    /// the flow asks for Photos access the first time it needs to read, whichever screen that is.
+    /// A run that already has access never sees a prompt, and one that has been refused is not
+    /// asked again - the system answers immediately, which is what makes the refusal below land
+    /// where it lands.
+    private func accessForRun() async -> RunAccess {
+        // A run that has already been stopped asks for nothing.
+        if stopRequested || Task.isCancelled {
+            stopRequested = true
+            return .stopped
+        }
+        do {
+            limitedAccess = try await photos.requestAccess()
+            return .granted
+        } catch {
+            // A stop is not an answer about access: the user asked the run to stop, or the app went
+            // to the background, and the run has to come to rest where every other stop rests.
+            if stopRequested || Task.isCancelled
+                || PipelineError.normalize(error, fallback: .permissionDenied) == .cancelled {
+                stopRequested = true
+                return .stopped
+            }
+            return .missing
+        }
+    }
+
+    /// Rests a run that never read anything on the screen, and in the words, every other
+    /// lost-access path uses.
+    ///
+    /// Nothing about the run is torn down. No video was tried, so none is failed; the waiting
+    /// videos are still waiting, and the queue on disk is the record it already was. The reason is
+    /// kept, so the recovery screen offers the route that actually exists - Settings for a
+    /// refusal, the plain truth for a restriction - and access allowed in Settings finishes the
+    /// pass the user asked for.
+    private func restForAccessTheRunCannotRead() {
+        isStopping = false
+        runTask = nil
+        screenAwake.hold(false)
+        restOnLostAccess(isRestrictedByTheSystem ? .restricted : .refused)
+        log.error("A run could not read Photos: no access was granted")
     }
 
     private func runLoop() async {

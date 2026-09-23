@@ -53,6 +53,11 @@ import Photos
         XCTAssertEqual(BatchFailureCode(.orientationMismatch), .verification)
         XCTAssertEqual(BatchFailureCode(.save), .save)
         XCTAssertEqual(BatchFailureCode(.export), .export)
+        // An export Apple would not build is a video this app cannot process, and that is what a
+        // restored queue can honestly say about it: the finding itself - no session at that
+        // quality, or a session that cannot write the container - is not storable.
+        XCTAssertEqual(BatchFailureCode(.exportUnavailable(reason: "There's no 4K export for this video on this iPhone.")),
+                       .unsupported)
         // Every restored code maps back to a real, readable error.
         for code in [BatchFailureCode.permission, .unavailable, .unsupported, .retrieval,
                      .storage, .verification, .export, .save] {
@@ -700,6 +705,100 @@ import Photos
         XCTAssertEqual(batch.summary.savedCount, 2)
     }
 
+    // MARK: - A run on an iPhone that has never been asked for Photos
+
+    /// A queue carried over by a device migration brings the run and, on an iPhone whose Photos
+    /// grant was never made, not the access. Continue used to reach the waiting videos with nobody
+    /// ever asked, and every one of them then failed with `assetUnavailable`'s sentence about a
+    /// video sitting outside the set access allows - a sentence about a refusal that never
+    /// happened, offering no way forward.
+    ///
+    /// The honest fix is to ask, at the one moment the answer can still be used and a screen can
+    /// still act on it. The app's own scan asks at its first read, and a run is a read like any
+    /// other, so this is the same rule at the other entrance: the prompt appears, and the run goes
+    /// on with whatever the user answers.
+    func testARestoredRunOnAniPhoneThatNeverAskedForPhotosAsksRatherThanFailingEveryVideo() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("a", .pending)])
+        // Nobody has answered a prompt on this iPhone: the queue is here, the grant is not.
+        let status = QueueAccessBox(.notDetermined)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let batch = fixture.makeBatch(monitor: monitor, authorizationStatus: { status.value })
+        XCTAssertTrue(batch.restoredRun)
+        XCTAssertEqual(batch.phase, .paused)
+        XCTAssertEqual(fixture.photos.accessRequests, 0)
+
+        // The user taps Continue. The run asks before it reads anything, and the answer it gets is
+        // what it goes on with.
+        batch.resume()
+        await eventually { batch.phase == .finished }
+
+        XCTAssertEqual(fixture.photos.accessRequests, 1,
+                       "a run that has never been granted access asks for it, once")
+        XCTAssertEqual(batch.summary.savedCount, 1)
+        XCTAssertNil(batch.message)
+        XCTAssertNil(batch.accessBlock)
+    }
+
+    /// The other answer to that prompt. A refusal is not a failed video and not a torn-down run:
+    /// nothing was read, written or asked of Photos, so the waiting videos stay waiting, the record
+    /// on disk still describes them, and the flow rests on the sentence that names the way back.
+    func testARefusedPromptLeavesTheRestoredRunIntactRatherThanFailingEveryVideo() async {
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("a", .pending), item("b", .pending)])
+        fixture.photos.accessError = .permissionDenied
+        let status = QueueAccessBox(.notDetermined)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let batch = fixture.makeBatch(monitor: monitor, authorizationStatus: { status.value })
+        XCTAssertEqual(batch.phase, .paused)
+
+        batch.resume()
+        await eventually { batch.phase == .failed }
+
+        XCTAssertEqual(fixture.photos.accessRequests, 1)
+        XCTAssertEqual(batch.accessBlock, .refused)
+        XCTAssertEqual(batch.message, PipelineError.refusedAccess)
+        XCTAssertNotEqual(batch.message, PipelineError.assetUnavailable.localizedDescription,
+                          "nobody refused this app access to one particular video")
+        // Nothing was tried, so nothing failed: the run is still the run it came back as, and the
+        // queue on disk still describes the videos that are waiting.
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+        XCTAssertEqual(batch.items.map(\.state), [.pending, .pending])
+        XCTAssertFalse(batch.isRunning)
+        XCTAssertTrue(batch.restoredRun)
+        XCTAssertNotNil(fixture.store.stored, "the queue on disk still describes this run")
+        XCTAssertEqual(fixture.store.stored?.items.map(\.state) ?? [], [.pending, .pending])
+    }
+
+    /// A restriction is not a refusal, and this entrance reads the same distinction the rest of
+    /// the flow does: a device held back by Screen Time or a management profile gets the truth
+    /// and no route to a Photos switch that is not on this app's Settings page.
+    func testARestoredRunOnARestrictedIPhoneSaysSoRatherThanSendingItToSettings() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("a", .pending)])
+        fixture.photos.accessError = .permissionDenied
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .restricted })
+        let batch = fixture.makeBatch(monitor: monitor, authorizationStatus: { .restricted })
+
+        batch.resume()
+        await eventually { batch.phase == .failed }
+
+        XCTAssertEqual(batch.accessBlock, .restricted)
+        XCTAssertEqual(batch.message, PipelineError.restrictedAccess)
+        XCTAssertFalse((batch.message ?? "").lowercased().contains("settings"),
+                       "a restricted device has no Photos switch to send anyone to")
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+    }
+
     private func item(_ id: String, _ state: BatchQueueRecord.State) -> BatchQueueRecord.Item {
         BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
                               pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000, state: state)
@@ -887,6 +986,12 @@ private var preflightHDRReason: String {
 @MainActor private final class QueueMockPhotos: PhotoLibraryServing {
     var retrieveCount = 0
     var saveCount = 0
+    /// How many times the flow has asked for Photos access, so a test can tell an app that asks
+    /// from one that assumes.
+    var accessRequests = 0
+    /// What the prompt answers. Nil is a grant - what the real service reports when access is
+    /// already there - and an error is what it throws when access is refused.
+    var accessError: PipelineError?
     /// One entry per Photos transaction, which is one system confirmation.
     var deleteBatches: [[String]] = []
     var deletedIdentifiers: [String] = []
@@ -894,7 +999,11 @@ private var preflightHDRReason: String {
     /// test turns this to a rejecting case to drive an original being kept.
     var revalidation: CopyRevalidation = .matches
 
-    func requestAccess() async throws -> Bool { false }
+    func requestAccess() async throws -> Bool {
+        accessRequests += 1
+        if let accessError { throw accessError }
+        return false
+    }
 
     func retrieve(identifier: String, progress: @escaping @MainActor (Double) -> Void) async throws -> RetrievedVideo {
         retrieveCount += 1
@@ -971,6 +1080,8 @@ private var preflightHDRReason: String {
 
 @MainActor private final class QueueMockTranscoder: VideoTranscoding {
     var written = URL(fileURLWithPath: "/queue-root/output.mov")
+    /// What AVFoundation answers when the run asks it for an export it will not build.
+    var error: Error?
     /// Holds a transcode, so a test can look at a run while one video is really in flight.
     var hold = false
     var gate: CheckedContinuation<Void, Never>?
@@ -978,6 +1089,7 @@ private var preflightHDRReason: String {
     func transcode(_ source: RetrievedVideo, metadata: VideoMetadata, settings: TranscodeSettings,
                    progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         progress(1)
+        if let error { throw error }
         if hold { await withCheckedContinuation { gate = $0 } }
         return written
     }

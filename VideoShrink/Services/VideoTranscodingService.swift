@@ -97,8 +97,9 @@ import CoreMedia
 
     private func makeSession(asset: AVURLAsset, settings: TranscodeSettings) throws -> AVAssetExportSession {
         guard let session = AVAssetExportSession(asset: asset, presetName: settings.resolution.presetName)
-        else { throw PipelineError.unsupported }
-        guard session.supportedFileTypes.contains(.mov) else { throw PipelineError.unsupported }
+        else { throw ExportRefusal.noSession(resolution: settings.resolution).error }
+        guard session.supportedFileTypes.contains(.mov)
+        else { throw ExportRefusal.cannotWriteMovieFile(resolution: settings.resolution).error }
         session.shouldOptimizeForNetworkUse = false
         return session
     }
@@ -159,5 +160,41 @@ import CoreMedia
         let width = (Double(metadata.width) * scale / 2).rounded() * 2
         let height = (Double(metadata.height) * scale / 2).rounded() * 2
         return CGSize(width: max(2, width), height: max(2, height))
+    }
+}
+
+/// What AVFoundation answered when this run asked it for an export it will not build.
+///
+/// Both answers are facts about this attempt rather than traits of the media, and together they
+/// are everything the app can honestly tell someone whose video will never be exported: there is
+/// no export session for the preset the quality they chose names, or the session Apple built
+/// cannot write the container this app saves. Nothing here guesses at HDR, ProRes or an edit -
+/// those are refused earlier, by `AssetRules`, in its own words.
+///
+/// The sentences live here rather than at the two `throw` sites so the mapping can be driven
+/// without media to export, which is the only way this project can test it: the finding itself
+/// comes from Apple's encoders, and no machine here has an encoder to refuse anything.
+enum ExportRefusal: Equatable, Sendable {
+    /// `AVAssetExportSession(asset:presetName:)` produced nothing: this iPhone has no export for
+    /// this video at the preset the chosen quality names.
+    case noSession(resolution: CopyResolution)
+    /// A session exists, and `.mov` is not among the file types it can write.
+    case cannotWriteMovieFile(resolution: CopyResolution)
+
+    /// The error a caller sees, carrying the sentence for what was found.
+    var error: PipelineError { .exportUnavailable(reason: sentence) }
+
+    /// The finding in the app's own words, naming the quality the run actually asked for.
+    ///
+    /// The two cases deliberately read differently. "There is no export for this video at that
+    /// quality" and "the export cannot write what this app saves" are different findings, and each
+    /// one asks the user for something different, so neither sentence may be the other's.
+    var sentence: String {
+        switch self {
+        case .noSession(let resolution):
+            return "There's no \(resolution.title) export for this video on this iPhone, so BatchShrink can't make a smaller copy of it. Nothing was saved and your original is unchanged. Try a lower quality, or choose a different video."
+        case .cannotWriteMovieFile(let resolution):
+            return "The \(resolution.title) export this iPhone built for this video can't write a QuickTime movie, which is the only kind of file BatchShrink saves. Nothing was saved and your original is unchanged. Try a different quality, or choose a different video."
+        }
     }
 }

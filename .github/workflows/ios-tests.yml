@@ -1,3 +1,11 @@
+# Two independent macOS jobs: compile and run the XCTest target, and build the shipping
+# Expo app. They are deliberately separate jobs -- they answer different questions ("do
+# the unit tests pass" and "does the app that ships compile") and the second is much
+# slower -- and neither depends on the other, so one can never hide the other's failure.
+# Nothing here signs, deploys, submits or spends EAS build minutes.
+#
+# JOB 1: verify-native-tests
+#
 # Compile and run the XCTest target on a macOS runner.
 #
 # This exists because EAS iOS builds are a rationed monthly resource on the free plan:
@@ -70,3 +78,66 @@ jobs:
 
       - name: Compile and run the XCTest cases
         run: node scripts/verify-native-tests.mjs
+
+  # JOB 2: build-expo-app
+  #
+  # Nothing else in this repository compiles the app that actually ships. `ios-tests` job
+  # 1 above reads VideoShrink/ directly, through project.yml, and never runs `expo
+  # prebuild` or `pod install`, so modules/videoshrink-native/ios/VideoShrinkNativeView.swift
+  # and VideoShrinkNativeModule.swift -- the two files that make this an Expo app -- are
+  # compiled by no gate. EAS does compile them, but EAS iOS build minutes are a rationed
+  # monthly resource on the free plan, so before this job a mistake in those files could
+  # sit unnoticed for weeks. This job makes it visible on the next push.
+  #
+  # It compiles the same Swift an EAS build compiles: the pod's source_files glob in
+  # modules/videoshrink-native/ios/VideoShrinkNative.podspec is "**/*.{h,m,mm,swift,hpp,cpp}",
+  # which covers the module's own Swift and VideoShrinkCore/, the mirror of
+  # VideoShrink/{Models,Services,Presentation} that scripts/sync-native-sources.mjs writes.
+  #
+  # It does not run the tests (job 1 does that, on its own faster path), and it does not
+  # sign, deploy or submit anything: the destination is a generic iOS Simulator and
+  # CODE_SIGNING_ALLOWED=NO, so it needs no Apple account, no certificate and no
+  # registered device, and it spends no EAS minutes. It needs nothing that this runner
+  # image does not already have: Node comes from setup-node, and Xcode, the iOS
+  # simulator SDK and CocoaPods ship with macos-15.
+  #
+  # The whole sequence lives in scripts/verify-expo-build.mjs so that CI and a human on a
+  # Mac run the same thing, and so the scheme and workspace are discovered from what
+  # `pod install` and `xcodebuild -list` report rather than hardcoded.
+  build-expo-app:
+    name: Build the Expo iOS app for the simulator
+    runs-on: macos-15
+    # A full `expo prebuild`, a `pod install` and an unoptimised simulator build of the
+    # entire React Native app is several times the cost of job 1's compile: minutes for the
+    # prebuild, several more for the pods, and the app build dominates. 90 minutes is
+    # headroom for a cold runner rather than an expectation, and it keeps a hung build
+    # well inside GitHub's six-hour default.
+    timeout-minutes: 90
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # The same line as job 1, and for the same reason: the repo's packageManager
+          # pin npm@11.19.0 needs Node 20.17+ or 22.9+, and 24.x is the line this project
+          # is developed on locally.
+          node-version: "24"
+
+      - name: Install dependencies
+        # npm ci runs the repo's postinstall, which is scripts/sync-native-sources.mjs,
+        # the same script the EAS builder runs on post-install. That is what puts the
+        # mirrored Swift under modules/videoshrink-native/ios/VideoShrinkCore/ in place
+        # before the build reads it. No dependency cache is configured on purpose: a
+        # stale cache would make both a pass and a failure harder to trust.
+        run: npm ci
+
+      - name: Build the shipping app
+        # One script, five steps: assert the native-source mirror is in sync (the check
+        # EAS makes from eas-build-post-install), assert ios/ does not already exist,
+        # `npx expo prebuild --platform ios --no-install`, `pod install`, discover the
+        # generated workspace and scheme, then build the app for the simulator with
+        # signing off. Any failure exits non-zero under a FAILED banner and prints the
+        # tool's own error immediately above it.
+        run: node scripts/verify-expo-build.mjs

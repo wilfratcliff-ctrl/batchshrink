@@ -7,8 +7,8 @@
     "platforms": [
       "ios"
     ],
-    "orientation": "default",
     "userInterfaceStyle": "dark",
+    "backgroundColor": "#060911",
     "icon": "./VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
     "ios": {
       "supportsTablet": false,
@@ -17,7 +17,12 @@
       "infoPlist": {
         "NSPhotoLibraryUsageDescription": "BatchShrink reads your video library to estimate how much space smaller copies would save and to read the videos you choose so it can create those copies. Estimating savings does not download videos from iCloud; videos stored only in iCloud are downloaded when the app works on them. Originals are kept unless you turn on deletion, and deleted originals go to Recently Deleted.",
         "NSPhotoLibraryAddUsageDescription": "BatchShrink saves smaller videos as separate copies in Photos when you save a video or start a batch.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "UISupportedInterfaceOrientations": [
+          "UIInterfaceOrientationPortrait",
+          "UIInterfaceOrientationLandscapeLeft",
+          "UIInterfaceOrientationLandscapeRight"
+        ]
       }
     },
     "plugins": [
@@ -27,6 +32,15 @@
           "ios": {
             "deploymentTarget": "18.0"
           }
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "backgroundColor": "#060911",
+          "image": "./VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+          "imageWidth": 160,
+          "resizeMode": "contain"
         }
       ]
     ],

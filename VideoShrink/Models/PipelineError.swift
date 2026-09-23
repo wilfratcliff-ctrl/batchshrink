@@ -10,6 +10,16 @@ enum PipelineError: Error, LocalizedError, Equatable, Sendable {
     /// be read rather than while the library was listed. The sentence is `AssetRules`', so an
     /// HDR or ProRes original reads here exactly as it does on the screening screen.
     case unsupportedOriginal(reason: String)
+    /// An export AVFoundation would not build for the quality this run asked for, refused with
+    /// what was found rather than with a list of what might be wrong.
+    ///
+    /// Two answers reach here and both are answers: there is no export session for the preset the
+    /// chosen quality names, or the session Apple built cannot write the container this app saves.
+    /// Neither is a trait of the media that could have been read earlier - the video may be an
+    /// ordinary one - which is why this is not `unsupportedOriginal` in other words. The sentence
+    /// belongs to `VideoTranscodingService`, the layer that asked and heard the answer, exactly as
+    /// `unsupportedOriginal` carries `AssetRules`' sentence for a refusal the rules made.
+    case exportUnavailable(reason: String)
 
     /// The sentence for Photos access the user refused.
     ///
@@ -72,6 +82,7 @@ enum PipelineError: Error, LocalizedError, Equatable, Sendable {
         case .assetUnavailable: return "This video is outside the Photos access granted to BatchShrink. Add it to your allowed videos in Settings, then try again."
         case .unsupported: return "BatchShrink cannot process this video. Live Photos, slow-motion, time-lapse, cinematic, spatial, edited, shared or restricted, HDR and ProRes videos are not supported yet. Try an ordinary, unedited video with one video track and at most one audio track."
         case .unsupportedOriginal(let reason): return reason
+        case .exportUnavailable(let reason): return reason
         case .retrieval: return "Photos could not retrieve this video. If its original is in iCloud, check your connection and local storage, then try again."
         case .export: return "HEVC export failed. Keep BatchShrink open, check free storage and try a different video."
         case .verification: return "The output failed verification. No copy was saved."

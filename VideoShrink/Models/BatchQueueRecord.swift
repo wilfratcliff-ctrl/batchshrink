@@ -229,6 +229,11 @@ enum BatchFailureCode: String, Codable, Equatable, Sendable {
         // in the run that raised them; what a restored queue can honestly say is that this video
         // is one the app does not support, which is what `.unsupported` says.
         case .unsupportedOriginal: self = .unsupported
+        // An export Apple would not build is stored the same way, and for the same reason: what a
+        // restored queue can honestly say about that video is that this app cannot process it. The
+        // finding itself - no session at that quality, or a session that cannot write the
+        // container - is not storable, so it lives only in the run that raised it.
+        case .exportUnavailable: self = .unsupported
         case .retrieval: self = .retrieval
         case .insufficientStorage, .temporaryFiles: self = .storage
         case .verification, .durationMismatch, .audioMismatch, .orientationMismatch,

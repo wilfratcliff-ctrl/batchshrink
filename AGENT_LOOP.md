@@ -224,8 +224,11 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N29 | 2 | A copy made in the one-video flow was not recorded as app-created | done, round 16 |
 | N30 | 3 | The device plan described code that no longer exists | done, round 16 |
 | N31 | 2 | A cancelled item was retried immediately, forever, and a failed export left its partial output behind | done, round 16 |
-| N32 | 2 | `.notDetermined` access with a restored queue still reaches Continue and the per-item `assetUnavailable` sentence. Left alone deliberately: the honest fix needs a decision about prompting, not just wording | open |
-| N33 | 2 | `VideoTranscodingService.makeSession` throws the generic `.unsupported` list when Apple has no export session for the preset — the same "guess instead of the finding" shape N28 fixed on the retrieval path | open |
+| N32 | 2 | `.notDetermined` access with a restored queue reached Continue and a per-video failure | **done, round 17.** The run now asks for access at its first read, which is the app's existing rule, and a refusal leaves the restored run intact |
+| N33 | 2 | `makeSession` threw the generic `.unsupported` list when Apple would not build an export | done, round 17: a new `exportUnavailable(reason:)` carries the transcoder's own sentence |
+| N34 | 2 | After a reload with a finished copy waiting at `.readyToSave`, `ContentView`'s flow resets to the batch and `switchTo(.single)` needs `canChoose`, which is false in that stage — so the kept copy is unreachable and "Just one video" is a silent no-op until restart | open |
+| N35 | 3 | `project.yml` pins `CURRENT_PROJECT_VERSION: "1"` while `app.json` ships build 11 — two surfaces disagreeing about the same fact | open |
+| N36 | 1 | The shipping target now has a CI job, but **no local gate compiles the two Expo bridge files**; the interface call-site checker scans only `VideoShrink/` and `VideoShrinkTests/` | open |
 
 ## Round log
 
@@ -248,6 +251,29 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 14 | `4d5da93` | Fix three tests that passed vacuously; correct the marketing again | CI: **green** | 289 tests |
 | 15 | see below | A first-sixty-seconds device audit and its findings | local gates PASS | 307 tests |
 | 16 | see below | A pipeline audit of one video's real journey, and its findings | local gates PASS | 331 tests |
+| 17 | see below | The shipping path: an audit of the Expo bridge, CI that builds it, and the last code items | local gates PASS | 336 tests |
+
+### Round 17 — the path that actually ships
+
+The two experience audits had both implicitly assumed the SwiftUI app was the app. It is not: the
+shipping product is a SwiftUI app inside an Expo native module, and the bridge had never been
+audited or compiled by anything that runs.
+
+- **A third read-only audit** traced the shipping path: the host controller's lifecycle, the
+  module's forwarding, the shared session, the React entry and the build config, and the mirror
+  itself. Its worst finding: `presentationRemoved()` called `model.cancel()`, and `.readyToSave`
+  is cancellable — so **a reload deleted a finished export** and told the user it had been
+  discarded. Teardown is now exactly as destructive as backgrounding, and nothing more.
+- **CI now builds the shipping app.** A second job runs `expo prebuild`, `pod install`, and
+  `xcodebuild` on the generated workspace, discovering the scheme rather than assuming it. Until
+  this existed, a mistake in the two bridge files would not have surfaced until an EAS build —
+  and EAS minutes are gone until 1 October.
+- **The launch appearance was unconfigured**: React Native's root view is white, so a dark app
+  flashed light on every launch. `expo-splash-screen` and `expo-system-ui` (both first-party, at
+  the versions SDK 57 bundles) now set the splash and the root colour, and the upside-down
+  orientation the two surfaces disagreed about is settled explicitly.
+- The last two code items: a restored run on a device that was never asked for Photos now asks
+  rather than failing every video, and an export Apple will not build says so in its own words.
 
 ### Round 16 — the pipeline audit, and the two worst things it found
 
