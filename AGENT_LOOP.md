@@ -356,6 +356,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 16 | see below | A pipeline audit of one video's real journey, and its findings | local gates PASS | 331 tests |
 | 17 | see below | The shipping path: an audit of the Expo bridge, CI that builds it, and the last code items | local gates PASS | 336 tests |
 | 18 | see below | Make the shipping target compile again, observe the first rendered screen, close the kept-copy flow and the seam it opened, move the local gates into CI, and two read-only audits | local gates PASS | 345 tests |
+| 19 | see below | The two audits' nineteen findings, an early permission prompt the launch job found, twenty-two documents corrected against the code, and an independent read of the Swift nobody could compile | local gates PASS; **CI blocked, runners not starting** | 364 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -777,5 +778,37 @@ start screen whose only button will fail. With N41 fixed, nothing reaches that p
 launch. It is recorded as N42 rather than quietly changed, because a deliberate decision deserves
 a test and a reason, not a re-litigation.
 
-**The accessibility wave (A1-A10)** is the second half of the round and touches the same two
-files.
+**The accessibility wave (A1-A10)** came second, on the same two files, and finished them. Its two
+P1s were the ones worth having: the batch working screen's running total was `.accessibilityHidden`
+inside a container that combines its children, so the number the code's own comment promised
+VoiceOver never arrived; and the finished screen's action bar could stack five controls against a
+landscape viewport, which is about 304pt of inset against about 330pt of screen. The bar is two
+rows now, with one list - `BatchFinishedScreen.Extra.available` - deciding both whether the
+overflow control is drawn and what is behind it, so a trigger over an empty menu cannot happen.
+
+**Then the round reviewed itself, because nobody else could.** The account's runners were already
+gone, so the Swift this round wrote had never been built. An independent read of `31b6245..HEAD`
+found three real things, all in this round's own work: the demanded space figure was never cleared
+after a check that *passed*, so an export that ran out of room inside the encoder would have been
+reported with a figure the phone had demonstrably met - the one-video flow drops that figure and
+says why, and the batch had copied the sentence without the clear; the summary's headline read the
+conservative end of the estimate's band while the card beneath it read the optimistic one, so a
+single borderline video produced "Nothing here is likely to get lighter" over "up to 10 MB"; and
+the summary's bulk button said "Select the N worth shrinking" while selecting everything. All
+three are fixed, with cases. It also caught one of this round's own tests claiming coverage it
+could not have, which is now stated in the test rather than implied by its name.
+
+**And the documentation, which is the only part of this round a Windows machine can verify.** A
+truth pass over `docs/` and `marketing/`, reading the code for each claim rather than any status
+column, corrected twenty-two files. It found what round 10's failure looked like from the inside:
+`marketing/market-map.md` still listed N16, N13, N15 and the expo-doctor row as open, all of them
+closed between rounds 6 and 8; and four marketing files carried a real overclaim, because the
+pre-run format read decides formats only and a video with more than one video or audio track is
+refused inside the run instead.
+
+**The round's honest summary.** Three of its five workstreams are verified: the CI unblocker, the
+first rendered screen (both on `31b6245` and `780f14f`), and every documentation change, which the
+local gate checks. The Swift in rounds 19's two waves is not, and cannot be until 1 October. It
+has been read twice - once by its author and once by a reviewer who was told to assume nothing -
+and the second read found three defects, which is the argument for doing it again if the block
+lasts.
