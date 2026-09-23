@@ -386,7 +386,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 21 | see below | The highest-value open finding from round 20's audits: a video that may already have a copy was bulk-selectable again | local gates PASS; `prove:guardrails` 67/67; **CI blocked** | 375 tests, none executed |
 | 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
 | 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
-| 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 400 tests, none executed |
+| 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 402 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -1253,14 +1253,14 @@ durability rests on `UserDefaults` having reached disk before the process dies i
 `performChanges`, which is not something this machine can show - the batch uses a real file with a
 protection class for the same job, and this is the one place the one-video flow's journal is weaker.
 
-Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 400
-XCTest cases present), the call-site checker PASS over 52 files, 1,226 declarations and 7,944 call
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 402
+XCTest cases present), the call-site checker PASS over 52 files, 1,228 declarations and 7,966 call
 sites with 0 findings, `npm run typecheck` clean, the pod mirror verified, and `prove:guardrails` 70
-of 70 caught across four gates. Ten new cases pin the round: the store's round trip and its
+of 70 caught across four gates. Twelve new cases pin the round: the store's round trip and its
 two-entries-in-one-session behaviour; the one-video flow writing the note before the call (read from
 inside the save fake, which is the only way to tell that write from one made afterwards) and clearing
 it on the answer; a save that throws leaving it; a save Photos finishes without naming the copy
 recording the original instead of raising a question; the batch excluding and naming the video; the
 tick by hand, the "I checked Photos" tap and a settling look each dropping the entry; the queue's
-more specific question winning over the adopted one; and the working screen's count naming what is
-still a question. **None of it has been compiled.**
+more specific question winning over the adopted one, and a scan not writing over it; and the working
+screen's count naming what is still a question. **None of it has been compiled.**

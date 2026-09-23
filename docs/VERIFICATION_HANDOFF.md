@@ -37,7 +37,7 @@ current answer.
 Three rounds of Swift sit on `main` that **no compiler has ever seen** — every change after
 `31b6245`, because the account's Actions minutes ran out on 2026-09-23 and reset on 1 October. It is
 about 2,200 lines across eighteen files. The local gates pass, and since round 22 the call-site
-checker resolves **7,944 call sites** with no findings — up from 6,190, because it now sees two
+checker resolves **7,966 call sites** with no findings — up from 6,190, because it now sees two
 shapes it could not before: enum cases with associated values, and calls written with a leading dot
 like `.planning(resolution:frameRate:)`, of which the scan scope holds 1,371. Everything the checker
 judges is still only *names and argument labels*: it checks no types, no members' types, no

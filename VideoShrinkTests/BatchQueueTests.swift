@@ -1106,6 +1106,49 @@ import Photos
                        MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
     }
 
+    /// A launch is not the only way the two flows hand work to each other.
+    ///
+    /// The batch flow can be at rest and the one-video flow used and come back to it without the app
+    /// ever restarting, so the store is read again wherever the batch refreshes what it knows from it -
+    /// which is the scan. Without that, a save the other flow made while this model was alive never
+    /// reaches the selection screen that has to leave the video out of Select all.
+    func testASaveTheOtherFlowMakesWhileTheBatchIsOpenReachesTheNextScan() async {
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        let batch = fixture.makeBatch()
+        XCTAssertTrue(batch.midSaveFindings.isEmpty, "nothing has been saved yet")
+
+        // The other flow, in the same session: it asks Photos for a copy and never learns the answer.
+        fixture.history.unconfirmedSaves = ["a"]
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.selectAll()
+
+        XCTAssertEqual(batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        XCTAssertEqual(batch.selection, ["b"])
+        XCTAssertEqual(batch.unaccountedAssets.map(\.id), ["a"])
+    }
+
+    /// And a re-read must not downgrade a question the queue can name more precisely than the store.
+    func testAScanDoesNotWriteOverAQuestionTheQueueNamesMorePrecisely() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: .init(resolution: "hd1080", frameRate: "original"),
+            items: [],
+            questions: [.init(identifier: "a", kind: .limitedAccess)])
+        let batch = fixture.makeBatch()
+        XCTAssertEqual(batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
+
+        // The store has an entry for the same video, which says only "some question" - the generic
+        // sentence. The scan reads it and must leave the queue's sentence standing.
+        fixture.history.unconfirmedSaves = ["a"]
+        await scan(fixture, batch)
+
+        XCTAssertEqual(batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
+    }
+
     // MARK: - Why a restored run stopped
 
     func testARestoredRunRemembersWhyItStopped() async {
