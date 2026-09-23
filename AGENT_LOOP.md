@@ -1469,6 +1469,14 @@ The lesson is one this file already carries and had to be taught again: a fix ai
 looked wrong, without asking what the mechanism does, is not a fix. Two agents and two rounds moved one
 `removeFromSuperview()`.
 
+**And the mechanism this round rests on is itself a claim only a render can settle**, which the
+independent read said plainly: one main-queue hop is a turn boundary only if the queued block is drained
+*after* UIKit commits the turn's drawing. If React Native's mount drives the first layout from inside a
+main-queue block, libdispatch drains the queue until it is empty before the commit - so the label would
+be added, covered and removed inside one commit, exactly as before, and the change would be a no-op
+rather than a regression. Both outcomes are acceptable; which one happens is the first thing to look at
+on a simulator, and it is worth more than any test this round could have added.
+
 The other half of the round closes `DEL7`, the last *reachable* advisory with no way to act on it. An
 original whose delete Photos never answered for comes back as uncertain, and the app then never offers
 it for deletion again while this run's record is the one in hand - so there was nothing for the user to do and
