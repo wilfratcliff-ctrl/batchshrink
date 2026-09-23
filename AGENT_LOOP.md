@@ -180,6 +180,40 @@ actually do, which is the same class of error as overclaiming, and just as damag
 So: when a task depends on what the app currently does, **read the code, not the status column
 here.** And when you close an item, update its row in the same commit that closes it.
 
+## How a round should be structured
+
+Seventeen rounds is enough evidence to say what works. This is the shape to keep.
+
+**Four or five agents, not a swarm.** Throughput here is capped by *verification*, not headcount:
+every change is unverified until CI runs, and CI is serial. Ten agents produce ten times the
+unverified change, which is merge risk rather than progress. Useful parallelism is also bounded by
+the number of genuinely disjoint file sets, which for this app is about five.
+
+**Give every agent an explicit, exclusive file list**, and tell it to edit nothing outside it and
+to *report* any change it needs elsewhere. This is the single rule that makes parallel work safe,
+and the rounds that suffered were the rounds where a change needed a file its author did not own.
+
+**Expect a seam every round.** Work that is "built but not wired" has happened in almost every
+round: a mechanism nobody constructs, a rule nothing reaches, a value nobody persists. Budget one
+integration pass per round, by the parent, and look for the seam explicitly rather than hoping.
+
+**Weight rounds toward read-only audits.** Two audits traced what a *user* meets — the first sixty
+seconds, and one video's real journey — and found roughly fourteen real defects between them while
+300-plus tests were green. That is a far better yield per agent than more feature work. Static
+checks and tests tell you the code agrees with itself; only tracing a path tells you what the user
+meets. Audit a specific moment, not a file.
+
+**Any round that changes a protocol updates every conformer in the same round**, test doubles
+included. Three separate rounds stranded a conformer in a file the changing agent did not own.
+`scripts/swift-call-site-check.mjs` exists to catch that, and it is not a substitute for looking.
+
+**Nothing is done until the cloud gate is green.** The local gates are pattern scans. A clean run
+is evidence, never proof.
+
+**Write the lesson down.** Fresh agent windows are cheap and carry no institutional memory — the
+same `@MainActor` default-argument trap was solved once, documented, and then repeated. Anything a
+future round needs to know belongs in this file, in a comment beside the code, or in a test.
+
 ## Backlog
 
 Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of record.
@@ -229,6 +263,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N34 | 2 | After a reload with a finished copy waiting at `.readyToSave`, `ContentView`'s flow resets to the batch and `switchTo(.single)` needs `canChoose`, which is false in that stage — so the kept copy is unreachable and "Just one video" is a silent no-op until restart | open |
 | N35 | 3 | `project.yml` pins `CURRENT_PROJECT_VERSION: "1"` while `app.json` ships build 11 — two surfaces disagreeing about the same fact | open |
 | N36 | 1 | The shipping target now has a CI job, but **no local gate compiles the two Expo bridge files**; the interface call-site checker scans only `VideoShrink/` and `VideoShrinkTests/` | open |
+| N37 | 1 | **The new `build-expo-app` CI job fails on the runner's toolchain, not on our code.** `macos-15`'s default Xcode 16.4 ships Swift 6.1, and a Swift package in the Expo module tree declares tools version 6.2, so `xcodebuild` fails with "Could not resolve package dependencies" before compiling anything of ours. EAS builds the same project fine, so its image is new enough. The fix is a newer runner image or selecting a newer Xcode — the failed run is `35877195086`, job `build-expo-app`. The existing `verify-native-tests` job is green (336 tests) and must stay that way | open, highest priority |
 
 ## Round log
 
