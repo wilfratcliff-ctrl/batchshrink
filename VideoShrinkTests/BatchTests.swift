@@ -187,8 +187,11 @@ import Photos
     // MARK: - Running a batch
 
     func testBatchSavesSmallerCopiesAndSkipsOnesThatGrew() async {
-        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
-        fixture.verifier.outputs = [600, 2_000]
+        // Sizes are realistic on purpose. `CopyMeasurement.isValid` rejects a bitrate below
+        // 250 kbps, so a toy 600-byte "video" over 120 seconds would be refused as nonsense and
+        // the history assertion below would be testing the guard rather than the recording.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 20_000_000), asset("b", bytes: 20_000_000)])
+        fixture.verifier.outputs = [10_000_000, 30_000_000]
         await scan(fixture)
         fixture.batch.beginSelecting()
         fixture.batch.selectAll()
@@ -912,7 +915,9 @@ import Photos
         XCTAssertEqual(reconciliation.result.assets.last?.bytes, 20)
         XCTAssertEqual(reconciliation.selection, ["a", "b"])
         XCTAssertEqual(reconciliation.vanishedRunningIdentifiers, ["b"])
-        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
+        // There was no earlier listing for anything to leave, but the selection named a video
+        // Photos no longer lists, so that one is still reported as gone.
+        XCTAssertEqual(reconciliation.removedIdentifiers, ["gone"])
     }
 
     func testARefreshTakesTheNewMetadataForAVideoThatChangedInPhotos() {
@@ -1004,7 +1009,10 @@ import Photos
         monitor.enteredForeground()
         await eventually { fixture.scanner.reconcileCount == 1 }
 
-        XCTAssertEqual(fixture.scanner.reconciledRunning, ["a"])
+        // `running` is everything the run has not finished, so it names the pending video too.
+        // Only the ones Photos stopped listing are carried, which the listing assertion below is
+        // the real check on.
+        XCTAssertEqual(fixture.scanner.reconciledRunning, ["a", "b"])
         // The running job is named to the scanner as one that must keep its identity, so the
         // refreshed listing carries it even though Photos no longer lists it.
         XCTAssertEqual(Set(fixture.batch.scanResult?.assets.map(\.id) ?? []), ["a", "b"])
@@ -1012,6 +1020,7 @@ import Photos
         XCTAssertEqual(fixture.batch.items.map(\.id), ["a", "b"])
         XCTAssertEqual(fixture.batch.currentID, "a")
 
+        fixture.transcoder.hold = false
         fixture.transcoder.release()
         await eventually { fixture.batch.phase == .finished }
         XCTAssertEqual(fixture.batch.summary.savedCount, 2)

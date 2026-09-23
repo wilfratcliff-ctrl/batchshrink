@@ -915,8 +915,21 @@ enum BatchPhase: Equatable {
         // candidates the screen offered are looked at again here, at the moment of the tap, and
         // the list is built from that fresh answer, so it can only be smaller than the offer. A
         // copy with no current look is left out and its original stays.
-        refreshDeletionLook(for: deletableItemIDs)
+        let offered = deletableItemIDs
+        refreshDeletionLook(for: offered)
         let ids = items.filter { deletionDecision(for: $0) == .delete }.map(\.id)
+        // Anything the fresh look just refused has to say so. Returning quietly would leave
+        // someone who tapped Delete looking at a button that appeared to do nothing at all.
+        for id in offered where !ids.contains(id) {
+            switch revalidationOutcomes[id] {
+            case .some(.matches), .none:
+                // The look agreed, so it was something else: no confirmed read-back, a copy that
+                // is not smaller, or a mode that is off. None of those has a revalidation reason.
+                deletionOutcomes[id] = .skipped("The original can't be deleted right now, so it stays.")
+            case .some(let look):
+                deletionOutcomes[id] = .skipped(Self.deletionSkipReason(look))
+            }
+        }
         guard !ids.isEmpty else { return }
         deletionInProgress = true
         deletionTask = Task { [weak self] in
