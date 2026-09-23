@@ -17,6 +17,11 @@ import AVFoundation
     /// wait. Newest videos, which the summary lists first, are measured first.
     static let onDeviceSizeLimit = 400
 
+    /// How many videos the listing pass reads between two progress updates. The yield beside
+    /// each one is what keeps the main actor free for the interface while a large library is
+    /// being read, and the readings are what make the count the user watches move.
+    static let listingProgressStride = 32
+
     private let manager = PHImageManager.default()
     /// The stop button on the scanning screen, and the scan's alone.
     ///
@@ -102,23 +107,68 @@ import AVFoundation
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let fetch = PHAsset.fetchAssets(with: .video, options: options)
-        let total = fetch.count
-        progress(LibraryScanProgress(phase: .listing, scanned: 0, total: total))
+        let listing = try await walkListing(liveCount: { fetch.count },
+                                           assetAt: { fetch.object(at: $0) },
+                                           describe: { self.describe($0) },
+                                           scanOwned: scanOwned,
+                                           progress: progress)
+        return (assets: listing.assets, videoCount: listing.videoCount, unsupported: listing.skipped)
+    }
 
-        var eligible: [LibraryAsset] = []
-        eligible.reserveCapacity(total)
-        var unsupported = 0
-        for index in 0..<total {
+    /// The listing walk itself.
+    ///
+    /// PhotoKit is narrowed to three closures so the loop's behaviour around a library that moves
+    /// while it is being read can be driven without a Photos library, which is the only way this
+    /// project can test it at all.
+    ///
+    /// The count is read again at every step rather than once at the start, because a Photos
+    /// fetch result can follow the library instead of freezing it. When it does, a video deleted
+    /// mid-pass shortens the listing, and asking such a listing for an index it no longer has
+    /// goes past its end rather than returning nothing: reading the count first is what lets a
+    /// shortened listing end instead, and it is what lets a video added mid-pass be picked up
+    /// instead of being silently missed. Where the count cannot change, every reading returns the
+    /// same number and the pass walks exactly what it walked before.
+    ///
+    /// `videoCount` is the number of videos the pass read, counting each one once, so it always
+    /// equals the eligible videos plus the unsupported ones. That keeps the summary's totals
+    /// adding up even when the library moved under the pass.
+    func walkListing<Asset>(
+        liveCount: () -> Int,
+        assetAt: (Int) -> Asset,
+        describe: (Asset) -> LibraryAsset,
+        scanOwned: Bool,
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void
+    ) async throws -> (assets: [LibraryAsset], skipped: Int, videoCount: Int) {
+        let opened = max(liveCount(), 0)
+        progress(LibraryScanProgress(phase: .listing, scanned: 0, total: opened))
+        var assets: [LibraryAsset] = []
+        assets.reserveCapacity(opened)
+        // The identifiers the pass has already read, so a listing that shifted under it cannot
+        // name one video twice. A video added at the top of a newest-first listing pushes every
+        // video below it along, and the pass - which is walking positions, not videos - arrives
+        // at a video it has already described. Offering that video twice would offer it twice in
+        // a run, which is one more copy than the user asked for.
+        var seen = Set<String>()
+        var skipped = 0
+        var read = 0
+        while read < liveCount() {
             try checkCancellation(scanOwned: scanOwned)
-            let asset = describe(fetch.object(at: index))
-            if asset.isEligible { eligible.append(asset) } else { unsupported += 1 }
-            if index % 32 == 31 || index == total - 1 {
-                progress(LibraryScanProgress(phase: .listing, scanned: index + 1, total: total))
+            let asset = describe(assetAt(read))
+            read += 1
+            if seen.insert(asset.id).inserted {
+                if asset.isEligible { assets.append(asset) } else { skipped += 1 }
+            }
+            if read % PhotoLibraryScanService.listingProgressStride == 0 {
+                progress(LibraryScanProgress(phase: .listing, scanned: read,
+                                             total: max(liveCount(), read)))
                 await Task.yield()
             }
         }
         try checkCancellation(scanOwned: scanOwned)
-        return (eligible, total, unsupported)
+        // Reported once more whatever the stride landed on, so a pass that finished between two
+        // updates still ends on a count the user can read.
+        progress(LibraryScanProgress(phase: .listing, scanned: read, total: max(liveCount(), read)))
+        return (assets: assets, skipped: skipped, videoCount: assets.count + skipped)
     }
 
     private func describe(_ asset: PHAsset) -> LibraryAsset {

@@ -76,6 +76,13 @@ enum BatchPhase: Equatable {
     private let libraryChanges: LibraryChangeMonitor
     /// The refresh in flight, so a newer report replaces an older listing instead of racing it.
     private var libraryRefresh: Task<Void, Never>?
+    /// Set when Photos reported a change while a scan was reading the library.
+    ///
+    /// That pass began before the change, so its listing cannot be trusted to describe one
+    /// moment of the library. The report is kept rather than dropped for arriving at an
+    /// inconvenient moment, and the reconciliation it asks for runs as soon as the scan has
+    /// landed.
+    private var libraryChangeDuringScan = false
     private var runTask: Task<Void, Never>?
     private var stopRequested = false
     private var finishRequested = false
@@ -316,6 +323,9 @@ enum BatchPhase: Equatable {
         // A scan reads the library from scratch, so a listing a change already started is
         // superseded rather than left to land on top of its answer.
         libraryRefresh?.cancel()
+        // The pass below reads Photos from scratch, so it supersedes any change an earlier report
+        // was going to reconcile: what it finds is at least as new as what that report described.
+        libraryChangeDuringScan = false
         phase = .scanning
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
@@ -340,10 +350,19 @@ enum BatchPhase: Equatable {
                 self.changedThumbnailIdentifiers = []
                 self.phase = .scanned
                 self.log.info("Library scan finished")
+                // A change Photos reported while this pass was reading is not lost: the listing
+                // the pass produced began before it, so it is reconciled now.
+                self.reconcileAfterScan()
             } catch {
                 let normalized = PipelineError.normalize(error, fallback: .libraryScan)
                 if normalized == .cancelled {
-                    self.phase = self.scanResult == nil ? .start : .scanned
+                    // Only the phase this pass took over is restored. A cancel that arrived with
+                    // something else already decided - access withdrawn, say - must not overwrite
+                    // that decision when it lands.
+                    if self.phase == .scanning {
+                        self.phase = self.scanResult == nil ? .start : .scanned
+                    }
+                    self.reconcileAfterScan()
                 } else {
                     self.phase = .failed
                     self.message = normalized.localizedDescription
@@ -382,8 +401,13 @@ enum BatchPhase: Equatable {
     /// A refresh is the metadata-only half of a scan: it never measures a size on device, so
     /// noticing an edit cannot turn into a scan of its own.
     private func refreshLibrary() {
-        // A scan already in flight is producing a newer, complete listing.
-        guard phase != .scanning else { return }
+        // A scan already in flight is producing a complete listing of its own - but that pass
+        // began before this report, so the report is kept rather than dropped, and its
+        // reconciliation runs as soon as the scan has landed.
+        guard phase != .scanning else {
+            libraryChangeDuringScan = true
+            return
+        }
         // With no library in hand there is nothing to keep honest, and the next scan reads
         // Photos from scratch.
         guard scanResult != nil || !items.isEmpty else { return }
@@ -411,6 +435,21 @@ enum BatchPhase: Equatable {
         }
     }
 
+    /// Runs the reconciliation a change reported during a scan asked for, now that nothing is
+    /// reading the library.
+    ///
+    /// A change that arrived while a scan was in flight is the one thing a refresh cannot answer
+    /// immediately, so it waits here instead of being thrown away. It costs one metadata-only
+    /// listing - the same work a Photos change costs at any other moment - and only when a change
+    /// actually landed during a pass. With no library in hand the report is simply dropped: there
+    /// is nothing for a change to keep honest, and the next scan reads Photos from scratch.
+    private func reconcileAfterScan() {
+        guard libraryChangeDuringScan else { return }
+        libraryChangeDuringScan = false
+        guard scanResult != nil else { return }
+        refreshLibrary()
+    }
+
     /// Takes the answer to one refresh. Nothing here touches `items`.
     private func apply(_ reconciliation: LibraryReconciliation) {
         scanResult = reconciliation.result
@@ -433,9 +472,19 @@ enum BatchPhase: Equatable {
     /// holding a library it can no longer read, and it is taken only from the phases a scan
     /// itself may start in. A run in flight, or one paused with work left, keeps the screen and
     /// its own record of what happened to each video.
+    ///
+    /// A scan that is reading the library when access goes is stopped rather than left to run:
+    /// what it would produce is a library this app may no longer read, and the flow says so
+    /// instead. The scan's own cancel path leaves a phase it no longer owns alone, so this
+    /// decision survives the cancellation landing.
     private func libraryAccessLost() {
-        guard runTask == nil,
-              [BatchPhase.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
+        if phase == .scanning {
+            scanner.cancel()
+            runTask?.cancel()
+        } else {
+            guard runTask == nil,
+                  [BatchPhase.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
+        }
         phase = .failed
         message = PipelineError.permissionDenied.localizedDescription
         log.error("Photos access was withdrawn")
