@@ -10,7 +10,7 @@
     "validate:native": "node scripts/validate.mjs",
     "sync:native": "node scripts/sync-native-sources.mjs",
     "postinstall": "node scripts/sync-native-sources.mjs",
-    "eas-build-post-install": "node scripts/sync-native-sources.mjs --check"
+    "eas-build-post-install": "node scripts/sync-native-sources.mjs --check && node scripts/verify-native-tests.mjs"
   },
   "dependencies": {
     "expo": "~57.0.23",

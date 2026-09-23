@@ -17,6 +17,12 @@
         "simulator": true
       }
     },
+    "verify-tests": {
+      "extends": "development-simulator",
+      "env": {
+        "VIDEOSHRINK_VERIFY_TESTS": "1"
+      }
+    },
     "production": {
       "distribution": "store",
       "developmentClient": false

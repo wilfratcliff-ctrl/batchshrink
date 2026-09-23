@@ -23,8 +23,37 @@ into the Expo pod. Any Swift edit in those folders requires `npm run sync:native
 check fails and EAS builds break. The mirrored copies are git-ignored, so they never appear
 in a commit, but the check still has to pass.
 
-Everything Swift is unverified until `scripts/validate-mac.sh` runs on a Mac. Treat every
-Swift change here as plausible, not proven.
+## The real compile gate: EAS
+
+The owner does not own a Mac, so `scripts/validate-mac.sh` is not a route anyone can take. The
+route that does exist is an EAS cloud build, which runs on Apple hardware with Xcode:
+
+```
+npx eas-cli build --platform ios --profile verify-tests
+```
+
+An EAS build compiles everything under `modules/videoshrink-native/ios/`, which includes
+`VideoShrinkCore/` — the mirror of `VideoShrink/{Models,Services,Presentation}` produced by
+`npm run sync:native`. That is the Swift this loop keeps changing, so **a round is not finished
+until a cloud build has compiled it.** See `docs/VERIFICATION_HANDOFF.md`.
+
+What a cloud build still does not do:
+
+- compile or run `VideoShrinkTests/` unless the `verify-tests` profile is used, and that profile
+  compiles them without running them;
+- prove any device behaviour. Actual deletion, audio sync, HDR appearance, interruption windows
+  and iCloud retrieval need a real iPhone and `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
+
+## Build log
+
+| Date | Build | Commit | Profile | Result |
+|------|-------|--------|---------|--------|
+| 2026-09-23 | `6c39c009` | `dcd0695` | development-simulator | ERRORED, first real compile of the tree |
+| 2026-09-23 | `9f83392c` | `082537a` | development-simulator | FINISHED, artifact produced |
+
+The first build's two errors, both in `BatchViewModel`'s initialiser: the init assigned the
+stored monitor but then used the optional *parameter* for `onChange` and `start()`. Everything
+else in three rounds of Swift compiled on the first try.
 
 ## Ownership rule
 
@@ -50,12 +79,12 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N3 | 1 | `queueWarning` invisible on the screens a failed write can leave the run resting on | done, round 2 |
 | N4 | 2 | A deletion candidate could be offered before its copy changed | done, round 2 |
 | N5 | 1 | App-created copies excluded from bulk selection while staying re-processable by hand | half done, round 3: exclusion shipped, exactly-once save reconciliation still open |
-| N6 | 0 | None of the round 1 Swift has ever been compiled; the first Mac run is the real test of all of it | blocked, needs macOS |
+| N6 | 0 | None of the round 1-3 Swift had ever been compiled | done, round 4: core compiles in EAS build `9f83392c` |
 | N7 | 2 | `LibraryReconciling` workaround folded into `LibraryScanning` and the workaround deleted | done, round 3 |
 | N8 | 1 | No test covered the reconciliation wiring | done, round 3 |
 | N9 | 2 | `ThumbnailService` key index grew unbounded | done, round 3 |
 | N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
-| N11 | 1 | No test has ever run: 162 XCTest cases exist and zero have executed | blocked, needs macOS |
+| N11 | 1 | No test has ever compiled or run: 162 XCTest cases | partly done, round 4: `verify-tests` profile compiles the test target; running them is still unproven |
 | N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing can ever set either trait, so both rules are dead and an HDR original is still processed. `NEXT_PHASE.md` requires HDR exclusion. Needs codec/colour-tag detection where the media is readable, applied to both `Traits` call sites in the same round | open |
 | N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
 | N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
@@ -70,6 +99,26 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 1 | see below | P0-1, P0-2, P0-3 and the P1-2 mechanism, by four parallel agents on disjoint file lists | all three PASS | 13 files, ~1890 insertions, 102 -> 145 XCTest cases |
 | 2 | see below | N1, N2, N3, N4 and P1-4, by four parallel agents on disjoint file lists | all three PASS | 17 files, ~390 insertions |
 | 3 | see below | N5, N7-N10, eligibility rules, a compile-risk audit and the Mac handoff | all three PASS | 13 files, 145 -> 162 XCTest cases |
+| 4 | `082537a` | First cloud compile; fix the errors it found; move verification to EAS | EAS build FINISHED | core compiles; test gate added |
+
+### Round 4 detail
+
+The owner has no Mac and uses Expo only, which made the loop's whole verification story wrong:
+every agent report for three rounds had ended "unverified, needs a Mac". The correction is worth
+more than any single code change in this round, because the feedback loop is what makes the
+other rounds trustworthy.
+
+- Two EAS builds were run against the real project. The first compiled the tree for the first
+  time and found two genuine errors; the second finished and produced an artifact.
+- The errors were both in `BatchViewModel`'s initialiser: the code assigned the stored
+  `libraryChanges` property and then called `onChange` and `start()` on the optional *parameter*
+  of the same name. A local non-optional name, plus a statement-form closure body so it cannot
+  infer `Void?` where `Void` is required, fixed both.
+- `docs/MAC_VALIDATION_HANDOFF.md` was replaced by `docs/VERIFICATION_HANDOFF.md`, which is
+  EAS-first.
+- A `verify-tests` EAS profile and `scripts/verify-native-tests.mjs` were added so the 162-case
+  test target can be compiled on the builder. It is opt-in through `VIDEOSHRINK_VERIFY_TESTS=1`
+  so no existing profile changes behaviour.
 
 ### Round 1 detail
 
@@ -143,9 +192,11 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
   (N10). Its best find was a real drift: `PhotoLibraryService.retrieve` never passed the new
   cinematic or shared traits, so the single-video flow - where retrieval is the only eligibility
   gate - would have processed a cinematic or shared-album video. Fixed.
-- `mac_handoff` wrote `docs/MAC_VALIDATION_HANDOFF.md`: the ordered commands, the ranked list of
-  likely first failures derived from the round reports, and a symptom -> file -> commit triage
-  table with the narrowest revert for each.
+- `mac_handoff` wrote the first version of the verification handoff: the ordered commands, the
+  ranked list of likely first failures derived from the round reports, and a symptom -> file ->
+  commit triage table with the narrowest revert for each. Round 4 renamed it to
+  `docs/VERIFICATION_HANDOFF.md` and repointed it at EAS, because the Mac it assumed does not
+  exist.
 
 ### Round 3 integration decisions
 

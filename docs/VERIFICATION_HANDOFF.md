@@ -97,10 +97,11 @@ Swift in that mirror compiled for the target it was built for.
 
 ### It does not prove any of the following
 
-- **The test target.** `VideoShrinkTests/` holds 162 XCTest cases and an EAS build never
-  compiles or runs them. The pod glob above does not reach `VideoShrinkTests/`, and the
+- **The test target.** `VideoShrinkTests/` holds 162 XCTest cases, and no ordinary EAS build
+  compiles or runs them: the pod glob above does not reach `VideoShrinkTests/`, and the
   standalone project is not part of the Expo build. Zero of the 162 cases have ever been
-  compiled or executed.
+  compiled or executed. The opt-in `verify-tests` profile in section 6 compiles the test
+  target, and that is all it does; it still does not run a single test.
 - **`VideoShrink/VideoShrinkApp.swift` and the standalone Xcode project.** The standalone
   XcodeGen app is not what EAS builds. `VideoShrinkApp.swift` is not inside the pod glob and is
   not compiled by an EAS build.
@@ -296,9 +297,10 @@ touched.
 
 ## 6. Running the 162 tests without a Mac
 
-An EAS build never compiles or runs `VideoShrinkTests/`, so the 162 XCTest cases cannot be
-executed through EAS. The honest route without a Mac is a macOS CI runner, for example GitHub
-Actions, which can run the same two commands a Mac would:
+No ordinary EAS build compiles or runs `VideoShrinkTests/`, so the 162 XCTest cases cannot be
+executed through EAS (the opt-in `verify-tests` profile below compiles the target and stops
+there; it does not run it). The honest route without a Mac is a macOS CI runner, for example
+GitHub Actions, which can run the same two commands a Mac would:
 
 ```
 xcodegen generate
@@ -318,6 +320,45 @@ Two things to be plain about:
 - **It is the only route that executes the tests.** A simulator build under EAS proves the core
   compiles; it does not run a single test body. Until a macOS runner exists, the count of
   executed XCTest cases is zero.
+
+### Compiling the test target on the EAS builder (opt-in)
+
+The EAS builder is a macOS machine with Xcode, so it can also run `xcodegen` and `xcodebuild`
+against the standalone project. `scripts/verify-native-tests.mjs` uses that to compile the test
+target, and the new `verify-tests` profile turns it on:
+
+```
+npx eas-cli build --platform ios --profile verify-tests
+```
+
+`verify-tests` extends `development-simulator`, so it stays simulator-targeted and needs no
+Apple signing credentials. It sets `VIDEOSHRINK_VERIFY_TESTS=1` for the build, and
+`eas-build-post-install` (in `package.json`) runs, after the existing native-source sync check:
+
+1. `xcodegen` is installed with Homebrew if the builder does not already have it
+   (`/opt/homebrew/bin` and `/usr/local/bin` are added to `PATH` for this).
+2. `xcodegen generate` builds `VideoShrink.xcodeproj` from `project.yml`.
+3. `xcodebuild -project VideoShrink.xcodeproj -scheme VideoShrink -sdk iphonesimulator \
+   -destination 'generic/platform=iOS Simulator' -derivedDataPath build/VerifyDerivedData \
+   CODE_SIGNING_ALLOWED=NO build-for-testing` compiles both targets.
+
+The step prints a `===== VIDEOSHRINK TEST TARGET COMPILE =====` banner with `START`, then
+`PASSED` or `FAILED`, so the result is easy to find in a long EAS log. A compile failure fails
+the build and prints the compiler output, exactly as it appears in the log.
+
+**What it proves:** the 162 XCTest cases compile. The test target is now known to build on an
+Apple toolchain, which no earlier build checked. `build-for-testing` is deliberately used
+instead of `test`: it produces the built test bundle and stops.
+
+**What it still does not prove:** the tests have still never been run. Not one test body is
+executed by this profile, so nothing about the app's behaviour is exercised by it; that still
+needs the macOS runner in this section, or a simulator. A pass here narrows the gap from "the
+test target has never been compiled" to "the test target compiles but has never been executed".
+
+**It is opt-in.** The variable is unset for every other profile, so `development`,
+`development-simulator`, `preview` and `production` are unchanged and do not start compiling
+tests. Locally, `node scripts/verify-native-tests.mjs` with the variable unset prints one line
+and exits 0 without touching Xcode.
 
 ## 7. What only a real iPhone can prove
 
