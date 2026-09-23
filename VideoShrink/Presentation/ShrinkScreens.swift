@@ -10,7 +10,11 @@ struct ShrinkWelcome: View {
                     .font(ShrinkStyle.headline).tracking(-1)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
-                Text("Choose a video, set the quality, and preview your smaller copy before saving.")
+                // Not "your smaller copy": nothing has been measured yet, and this flow's own next
+                // screen shows the case where the copy did not get smaller at all. The batch side
+                // hedges the same idea the same way ("potential savings"); this is the one-video
+                // equivalent of that fix.
+                Text("Choose a video, set the quality, and preview your copy before saving.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -118,6 +122,18 @@ struct ShrinkResult: View {
 
     private var savings: Savings { Savings(originalBytes: source.bytes, compressedBytes: output.bytes) }
 
+    /// The line this card shows when the copy is not smaller, in the two cases that are not one.
+    ///
+    /// `bytesSaved` is positive when the copy is smaller, so zero is "the same size" and a negative
+    /// number is genuinely bigger - and the card prints both measured sizes directly below this, so
+    /// an equals sign over "120 MB" and "180 MB" was the screen contradicting itself. Static and
+    /// internal so a case can state both.
+    static func notSmaller(_ savings: Savings) -> (text: String, symbol: String) {
+        savings.bytesSaved < 0
+            ? (text: "Bigger than the original", symbol: "arrow.up.circle")
+            : (text: "No size reduction", symbol: "equal.circle")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 24) {
             ShrinkEyebrow(title: saved ? "Saved to Photos" : "Copy checked", symbol: saved ? "checkmark.circle.fill" : "checkmark.shield")
@@ -140,7 +156,8 @@ struct ShrinkResult: View {
                     }
                     .accessibilityElement(children: .combine)
                 } else {
-                    Label("No size reduction", systemImage: "equal.circle").font(.headline)
+                    Label(Self.notSmaller(savings).text, systemImage: Self.notSmaller(savings).symbol)
+                        .font(.headline)
                 }
                 VStack(spacing: 18) {
                     comparisonRow("Original", bytes: source.bytes, accent: false)
@@ -300,7 +317,7 @@ struct VideoPreview: View {
                 .background(.black)
                 .navigationTitle("Your compressed copy").navigationBarTitleDisplayMode(.inline)
                 .safeAreaInset(edge: .bottom) {
-                    Text("Check picture, orientation and sound before saving.")
+                    Text("Check picture, orientation and sound before you decide.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .padding().frame(maxWidth: .infinity).background(ShrinkStyle.surface)
                 }

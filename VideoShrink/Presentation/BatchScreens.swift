@@ -474,7 +474,13 @@ struct BatchSelectionScreen: View {
                     VideoReasonList(assets: batch.unaccountedAssets,
                                     heading: Self.unaccountedHeading,
                                     explanation: (one: Self.unaccountedExplanation(1),
-                                                  many: Self.unaccountedExplanation(2)))
+                                                  many: Self.unaccountedExplanation(2)),
+                                    describe: { asset in
+                                        VideoReasonList.RowDescription(
+                                            detail: batch.midSaveQuestion(for: asset.id),
+                                            symbol: "questionmark.circle",
+                                            hint: "This video is left out of Select all until you have looked at it in Photos. Tick it by hand to choose it.")
+                                    })
                 }
                 VideoReasonList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
@@ -778,6 +784,26 @@ struct VideoReasonList: View {
         one: "BatchShrink read this video and cannot shrink it. It stays in Photos untouched.",
         many: "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched."
     )
+    /// What each row says about its video: the line under the date, the symbol beside it and the
+    /// hint VoiceOver reads.
+    ///
+    /// The refusal's own words are the default, because that is what this list was written for. A
+    /// screen listing videos for another reason has to supply its own, and the first attempt at
+    /// reusing this list is the reason the whole row moved here: it changed the heading and the
+    /// sentence above the rows, and every row went on reading "This video is not supported yet."
+    /// and telling VoiceOver the video *cannot be chosen*, directly beneath a card telling the user
+    /// to tick it by hand. Changing a card's headline is not changing its rows.
+    struct RowDescription {
+        let detail: String
+        let symbol: String
+        let hint: String
+    }
+
+    var describe: (LibraryAsset) -> RowDescription = { asset in
+        RowDescription(detail: asset.unsupportedReason ?? "This video is not supported yet.",
+                       symbol: "nosign",
+                       hint: "This video cannot be chosen for a batch.")
+    }
 
     var body: some View {
         if !assets.isEmpty {
@@ -809,9 +835,10 @@ struct VideoReasonList: View {
     }
 
     private func row(_ asset: LibraryAsset) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        let described = describe(asset)
+        return VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Image(systemName: "nosign")
+                Image(systemName: described.symbol)
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
@@ -820,7 +847,7 @@ struct VideoReasonList: View {
                     .monospacedDigit()
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text(asset.unsupportedReason ?? "This video is not supported yet.")
+            Text(described.detail)
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -834,7 +861,7 @@ struct VideoReasonList: View {
                 .allowsHitTesting(false)
         }
         .accessibilityElement(children: .combine)
-        .accessibilityHint("This video cannot be chosen for a batch.")
+        .accessibilityHint(described.hint)
     }
 }
 
@@ -1598,12 +1625,6 @@ struct BatchFinishedScreen: View {
         return "\(report.confirmed) confirmed · \(report.unavailable) not readable yet."
     }
 
-    /// What the run did with originals, in one honest line.
-    ///
-    /// Static, internal and taking the model, because the paused screen draws the same sentence: a
-    /// run killed at Photos' own delete prompt comes back paused with an original *possibly*
-    /// deleted, and this line was drawn only on the finished screen - one tap away from a screen
-    /// whose headline said nothing was lost.
     /// The confirmation that stands between the user and the only irreversible thing this app does.
     ///
     /// The count comes from the last look this run took at each copy, and a copy edited in Photos
@@ -1621,6 +1642,12 @@ struct BatchFinishedScreen: View {
         )
     }
 
+    /// What the run did with originals, in one honest line.
+    ///
+    /// Static, internal and taking the model, because the paused screen draws the same sentence: a
+    /// run killed at Photos' own delete prompt comes back paused with an original *possibly*
+    /// deleted, and this line was drawn only on the finished screen - one tap away from a screen
+    /// whose headline said nothing was lost.
     static func deletionNote(_ batch: BatchViewModel) -> String? {
         let report = batch.deletionReport
         let mode = batch.effectiveDeletionMode
@@ -1744,6 +1771,14 @@ struct BatchRecoveryScreen: View {
                 }
                 Button("Shrink one video instead", action: useSingleVideo)
                     .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                    // This is offered on the screen a failed run rests on, and a run whose videos
+                    // are still waiting holds the user there - the same rule the one-video flow's
+                    // own cross-flow button obeys. It was live and did nothing at all: the tap ran
+                    // the routing rule, was refused, and changed nothing on screen.
+                    .disabled(!batch.canLeaveFlow)
+                    .accessibilityHint(batch.canLeaveFlow
+                        ? "Open the one-video flow."
+                        : "This run still has videos waiting, so this screen keeps them until they are finished or the run is done with.")
             }
         }
     }

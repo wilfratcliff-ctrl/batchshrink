@@ -328,11 +328,15 @@ The list is capped at the 2,000 most recent identifiers and 80 measured bitrates
 The XCTest suite has left this list: the cases compile and run on a macOS CI runner, which
 exercises the pure logic against injected fakes. The last run observed to execute them was green
 at `31b6245`; the runners have been unable to start since, so the cases in the tree today have not
-run. That is a statement about the gate, not about the code. A simulator has no real photo
-library, no thermal or storage pressure and no iCloud offload, so everything below still needs a
-physical iPhone. One thing outside this list did get cheaper: the round 18 launch job has shown
-that a screen renders on a simulator, so the screens that need no library can be inspected there.
-Every item in the list needs a library, a network or the media pipeline, so none of them can.
+run. That is a statement about the gate, not about the code. A simulator has no thermal or storage
+pressure and no iCloud offload, and it is not a phone's encoder, so everything below still needs a
+physical iPhone to be *trusted*. Two things outside this list did get cheaper, and the wording here
+used to overstate the gap: the round 18 launch job has shown that a screen renders on a simulator,
+and a simulator's Photos library is a real one that `simctl addmedia` can be given a video - so the
+screens that need no library can be inspected there, and
+[SIMULATOR_PIPELINE_PLAN.md](SIMULATOR_PIPELINE_PLAN.md) sets out how far the pipeline itself could
+be driven the same way. Neither replaces the device list: what a simulator cannot tell anyone is
+whether Photos, the encoder and the system behave as a phone does.
 
 1. Confirm the scan reports sizes on a device running iOS 27, and that it degrades to counts
    with no sizes on an older system instead of failing.

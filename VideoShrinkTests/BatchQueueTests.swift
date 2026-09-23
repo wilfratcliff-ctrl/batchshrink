@@ -356,6 +356,15 @@ import Photos
                                                               wholeLibraryVisible: false),
                        MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
         XCTAssertFalse(MidSaveFinding.noCopyInPhotos.forbidsAnotherSave)
+        // And only the unresolved case is still the user's to answer. The other two are conclusions
+        // this app reached: one says the video may wait again, the other says it has a copy nothing
+        // may save. Only a question keeps a video out of a bulk selection, so only a question counts
+        // as one - and calling a conclusion a question would put "the app cannot tell" on screen
+        // about something the app has just established.
+        XCTAssertFalse(MidSaveFinding.copyInPhotos.isOpenQuestion)
+        XCTAssertFalse(MidSaveFinding.noCopyInPhotos.isOpenQuestion)
+        XCTAssertTrue(MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion).isOpenQuestion)
+        XCTAssertTrue(MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion).isOpenQuestion)
         // Nothing else answers anything.
         for look in [CopyRevalidation.accessDenied, .unavailable] {
             XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: look,

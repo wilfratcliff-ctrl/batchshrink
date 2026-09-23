@@ -648,6 +648,50 @@ import Photos
 
     // MARK: - The one-video flow's own failure wording
 
+    /// The export failure names no codec, because the settings decide which one it is.
+    ///
+    /// It read "HEVC export failed" in a flow whose quality can be set to 720p, which Apple's preset
+    /// builds as H.264 - so the sentence could name a codec the export was never going to use. The
+    /// project has already corrected this shape once, when a save failure was reported as an export
+    /// one.
+    func testTheExportFailureNamesNoCodecBecauseTheSettingsDecide() {
+        let sentence = PipelineError.export.localizedDescription
+        XCTAssertFalse(sentence.lowercased().contains("hevc"))
+        XCTAssertFalse(sentence.lowercased().contains("h.264"))
+        // And it still says what to do about it.
+        XCTAssertTrue(sentence.contains("free storage"))
+    }
+
+    /// The size mismatch is about the picture, not about bytes.
+    ///
+    /// Only the pixel check throws it, and a copy that is bigger in *bytes* is a different, ordinary
+    /// ending in this flow: it is not saved and it is not an error. A sentence that said "larger"
+    /// left the user to guess which of the two it meant.
+    func testTheSizeMismatchSentenceIsAboutThePictureNotTheBytes() {
+        let sentence = PipelineError.resolutionMismatch.localizedDescription
+        XCTAssertTrue(sentence.contains("picture size"))
+        XCTAssertTrue(sentence.contains("not saved"))
+    }
+
+    /// A copy that is not smaller is either the same size or bigger, and the card says which.
+    ///
+    /// Its branch covered both, with an equals sign and the words "No size reduction", while the two
+    /// measured sizes printed directly below could be "120 MB" and "180 MB".
+    func testACopyThatIsNotSmallerSaysWhetherItIsTheSameSizeOrBigger() {
+        let same = ShrinkResult.notSmaller(Savings(originalBytes: 1_000, compressedBytes: 1_000))
+        XCTAssertEqual(same.text, "No size reduction")
+        XCTAssertEqual(same.symbol, "equal.circle")
+
+        let bigger = ShrinkResult.notSmaller(Savings(originalBytes: 1_000, compressedBytes: 1_800))
+        XCTAssertEqual(bigger.text, "Bigger than the original")
+        XCTAssertEqual(bigger.symbol, "arrow.up.circle")
+
+        // One byte smaller is smaller, and this card is not drawn for it at all - but the predicate
+        // is the sign, so the boundary belongs here.
+        XCTAssertEqual(ShrinkResult.notSmaller(Savings(originalBytes: 1_000, compressedBytes: 999)).symbol,
+                       "equal.circle")
+    }
+
     /// The batch flow learned in round 15 that a restriction is not a refusal. The one-video flow
     /// did not, and sent a device held back by Screen Time or a device management profile to a
     /// Photos switch that is not on this app's Settings page.

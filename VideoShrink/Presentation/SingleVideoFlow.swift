@@ -142,12 +142,15 @@ struct SingleVideoFlow: View {
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Preview compressed video")
-                    .accessibilityHint("Check picture, orientation and sound before saving.")
+                    .accessibilityHint("Check picture, orientation and sound before you decide.")
                     .accessibilityIdentifier("previewVideo")
                     // An HDR original never reaches this state: reading its format refuses it before
                     // the export starts, so advice about previewing one would describe a video the
                     // screen cannot be showing.
-                    Text("Compression can reduce quality. Preview the copy before saving.")
+                    // "before saving" is not always available: this card is drawn whenever there is
+                    // a copy to look at, including the one that did not come out smaller, where the
+                    // sentence directly above it says saving is turned off.
+                    Text("Compression can reduce quality. Preview the copy before you decide.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }

@@ -284,16 +284,19 @@ private enum RunAccess: Equatable, Sendable {
     }
     var selectableCount: Int { selectableAssets.count }
 
-    /// Videos this app cannot vouch for: the ones a bulk selection must not pick.
+    /// Videos this app has asked a question about and not had answered: the ones a bulk selection
+    /// must not pick.
     ///
-    /// Only one of the three mid-save findings leaves a video clear, and it is deliberately the only
-    /// one that does: `noCopyInPhotos` means the app looked at the whole library and found no copy
-    /// of its own, so running the video again cannot make a second one. `copyInPhotos` means it
-    /// found that copy, and `unresolved` means it could not answer - and an unanswered question is
-    /// not an answer, so neither may be picked automatically.
+    /// Only the *open question* is here, and the two settled findings are deliberately not.
+    /// `noCopyInPhotos` means the app looked at the whole library and found no copy of its own, so
+    /// running the video again cannot make a second one and there is nothing to hold back.
+    /// `copyInPhotos` is a conclusion the app reached and acted on - it records the copy as its own
+    /// output, which puts the original beyond a bulk selection by the same rule every other
+    /// original this iPhone has shrunk is - and calling it a question would put a sentence on screen
+    /// saying the app cannot tell, which is the opposite of what it just told the user.
     var unaccountedIdentifiers: Set<String> {
         Set(midSaveFindings.compactMap { identifier, finding in
-            finding == .noCopyInPhotos ? nil : identifier
+            finding.isOpenQuestion ? identifier : nil
         })
     }
 
@@ -301,6 +304,20 @@ private enum RunAccess: Equatable, Sendable {
     var unaccountedAssets: [LibraryAsset] {
         let unaccounted = unaccountedIdentifiers
         return eligibleAssets.filter { unaccounted.contains($0.id) }
+    }
+
+    /// The question this app has about a video, in the words the interface shows.
+    ///
+    /// The finding carries its own sentence, because the two questions this app can ask - one where
+    /// the record could not be read, one where access covers only part of the library - are not the
+    /// same question and must not be given the same words. The fallback is unreachable while
+    /// `unaccountedAssets` is built from the same dictionary, and exists so that a screen can never
+    /// draw a row with nothing in it.
+    func midSaveQuestion(for identifier: String) -> String {
+        guard case .unresolved(let question) = midSaveFindings[identifier] else {
+            return MidSaveFinding.unknownQuestion
+        }
+        return question
     }
     var isRunning: Bool { runTask != nil }
     var remainingCount: Int { items.filter { !$0.state.isFinished }.count }
@@ -989,13 +1006,18 @@ private enum RunAccess: Equatable, Sendable {
         readBackOutcomes = [:]
         copyEvidence = [:]
         revalidationOutcomes = [:]
-        midSaveFindings = [:]
         storageDemands = [:]
         deletionOutcomes = [:]
         // The queue of originals waiting for one Photos transaction is per-run state too, and it
         // was the one piece this did not clear: leaving it let the next run flush a batch of
         // candidates the screen it came from had already been dismissed from.
         deletionBatch.removeAll()
+        // `midSaveFindings` is deliberately left alone here too, and it is the exception in both
+        // places that clear this run's state. The others are conclusions this run reached; a finding
+        // is a question the user has not answered, and it is what keeps that video out of a bulk
+        // selection. "Done" ends the run, not the question - and clearing it here would have been
+        // the way round the fix, because Done sits on the same screen as "Shrink more videos" and
+        // leaves the library already scanned, so Select all is one tap away.
         activeDeletionMode = settings.deletionMode
         checkpointFailure = false
         attemptedSaves = [:]
@@ -1033,7 +1055,16 @@ private enum RunAccess: Equatable, Sendable {
         // queue. That flag is what the paused and finished screens already point the user at, and
         // nothing here may quietly run it again.
         guard !uncertain.isEmpty else { return }
-        for index in uncertain { items[index].state = .pending }
+        for index in uncertain {
+            items[index].state = .pending
+            // The question is answered: the user has looked in Photos and said so, which is the
+            // tap's whole meaning. Keeping the finding would leave the video under "Left out of
+            // Select all" with a sentence about a question that has been settled - and, once it is
+            // saved again, that card would say the app cannot tell what it has just recorded. The
+            // ones not requeued keep their finding on purpose: those are the videos whose copy the
+            // app can see, and its own answer is not the user's to withdraw.
+            midSaveFindings[items[index].id] = nil
+        }
         persistQueue()
         phase = .paused
     }

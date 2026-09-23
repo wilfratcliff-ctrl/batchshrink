@@ -386,6 +386,58 @@ import SwiftUI
         XCTAssertEqual(fixture.batch.selectedAssets.map(\.id), ["a"])
     }
 
+    /// The question survives "Done", which sits next to "Shrink more videos".
+    ///
+    /// Both buttons are on the finished screen and they end the run in different ways, so the fix
+    /// held for one of them and not the other: "Shrink more videos" went through `beginSelecting`,
+    /// which clears nothing, while "Done" went through `reset`, which cleared every per-item
+    /// dictionary including the findings. That left the library already scanned (`reset` settles on
+    /// `.scanned` when there is a listing), so the flagged video was one tap of Select all away
+    /// again - in the same session, through the ordinary button.
+    func testTheQuestionSurvivesDoneAsWellAsShrinkMoreVideos() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.saveError = .save
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.batch.unaccountedIdentifiers, ["a"])
+
+        fixture.batch.reset()
+
+        XCTAssertEqual(fixture.batch.unaccountedIdentifiers, ["a"],
+                       "Done ends the run, not the question")
+        XCTAssertEqual(fixture.batch.unaccountedAssets.map(\.id), ["a"])
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+    }
+
+    /// The row under a flagged video is the question, not the refusal's own words.
+    ///
+    /// The list component was generalised at its heading and its summary and not at its rows, so
+    /// every row of the new card read "This video is not supported yet." - of a video the app can
+    /// process perfectly well and is inviting the user to tick by hand - and told VoiceOver it could
+    /// not be chosen. The question the finding carries is what a row has to say.
+    func testARowForAFlaggedVideoSaysWhatTheQuestionIs() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.saveError = .save
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.midSaveQuestion(for: "a"),
+                       PipelineError.save.localizedDescription)
+        XCTAssertNotEqual(fixture.batch.midSaveQuestion(for: "a"),
+                          "This video is not supported yet.")
+        // A video with no finding at all still gets a sentence rather than an empty row.
+        XCTAssertEqual(fixture.batch.midSaveQuestion(for: "not-here"),
+                       MidSaveFinding.unknownQuestion)
+    }
+
     /// The deletion confirmation says what happens to its own count.
     ///
     /// The count comes from the last look this run took, and a copy edited in Photos since then
@@ -403,7 +455,9 @@ import SwiftUI
         let many = BatchFinishedScreen.deletionPrompt(count: 3)
         XCTAssertEqual(many.title, "Delete 3 originals?")
         XCTAssertEqual(many.button, "Delete 3 originals")
-        XCTAssertFalse(many.message.contains("3"), "the message counts nothing; the title does")
+        // The message names no count, so it is the same sentence whatever the number is. (It used to
+        // assert `!contains("3")`, which the "30 days" in it made false - a case that could not pass.)
+        XCTAssertEqual(one.message, many.message)
     }
 
     /// The selection screen's own words for the videos it leaves out.

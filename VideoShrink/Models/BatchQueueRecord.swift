@@ -211,6 +211,18 @@ enum MidSaveFinding: Equatable, Sendable {
         case .noCopyInPhotos, .unresolved: return false
         }
     }
+
+    /// Whether this finding is still the user's to answer, rather than an answer the app reached.
+    ///
+    /// Only the unresolved case is a question. `copyInPhotos` is a conclusion - the app found the
+    /// copy, recorded it as its own output and settled the video - and `noCopyInPhotos` is the
+    /// other, where the app looked at the whole library and found nothing, so the video may wait
+    /// again. A question is a different thing from either, and it is what keeps a video out of a
+    /// bulk selection until the user answers it.
+    var isOpenQuestion: Bool {
+        if case .unresolved = self { return true }
+        return false
+    }
 }
 
 /// A stable, small set of failure kinds. The exact error is not stored, so this file's format

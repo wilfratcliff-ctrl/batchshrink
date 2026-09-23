@@ -84,13 +84,20 @@ enum PipelineError: Error, LocalizedError, Equatable, Sendable {
         case .unsupportedOriginal(let reason): return reason
         case .exportUnavailable(let reason): return reason
         case .retrieval: return "Photos could not retrieve this video. If its original is in iCloud, check your connection and local storage, then try again."
-        case .export: return "HEVC export failed. Keep BatchShrink open, check free storage and try a different video."
+        // It deliberately names no codec. The export can be set to 720p, which Apple's preset builds
+        // as H.264, so "HEVC export failed" was a claim about a video that was never going to be
+        // HEVC - the same class as the save failure that used to be reported as an export one. The
+        // settings the run actually used are below, and a sentence here cannot read them.
+        case .export: return "The export didn't finish. Keep BatchShrink open, check free storage and try a different video."
         case .verification: return "The output failed verification. No copy was saved."
         case .durationMismatch: return "The output duration differs from the source beyond the allowed tolerance. No copy was saved."
         case .audioMismatch: return "The output did not retain the source audio track count. No copy was saved."
         case .orientationMismatch: return "The output display shape differs from the source. No copy was saved."
         case .codecMismatch: return "The copy used a different video format than the chosen quality. No copy was saved."
-        case .resolutionMismatch: return "The copy came out larger than the original. No copy was saved."
+        // Only the pixel check throws this, so it is about the picture size and not about bytes -
+        // and the flow has a different, non-error ending for a copy that is bigger in bytes, which
+        // makes the distinction the whole point of the sentence.
+        case .resolutionMismatch: return "The copy came out with a larger picture size than the original, so it was not saved."
         case .frameRateMismatch: return "The copy did not reduce the frame rate as expected. No copy was saved."
         case .insufficientStorage: return "There wasn’t enough free space to make a copy. Nothing was saved and your original is unchanged. Getting a video from iCloud and saving a copy both need room, so free some space and try again."
         case .save: return "Photos did not confirm the save. Inspect Photos before retrying to avoid creating an extra copy. Your original was not changed."

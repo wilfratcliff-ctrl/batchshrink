@@ -18,10 +18,16 @@
 // A pass means: the app installed, launched, drew its introduction, and then answered a tap on
 // that screen by drawing the batch screen with its first control present. That is a real
 // observation of a rendered screen and of one working navigation, and it is worth having. It is
-// NOT a device result. The simulator has no Photos library, no iCloud, no HEVC encoder worth
-// trusting and no permission prompts that behave like the real thing, so retrieval, export,
-// verification, saving, deletion and recovery are all still unexercised. It also proves nothing
-// about the *Expo* app's own two bridge files; the build-expo-app job compiles those.
+// NOT a device result. This run has an empty library, so retrieval, export, verification, saving,
+// deletion and recovery are all still unexercised, and nothing here says whether Photos, the
+// encoder and the system behave as a phone's do. It also proves nothing about the *Expo* app's own
+// two bridge files; the build-expo-app job compiles those.
+//
+// A simulator is not, however, without a Photos library: `xcrun simctl addmedia` puts a video in
+// one and `xcrun simctl privacy grant photos` can pre-authorise the app. The sentence that used to
+// stand here said the library did not exist, which overstated the gap, and an earlier round had
+// already written it into docs/BATCH_PHASE.md as a reason the pipeline could not be checked there
+// at all. docs/SIMULATOR_PIPELINE_PLAN.md works out how far that route goes.
 // docs/PHYSICAL_DEVICE_TEST_PLAN.md remains the gate for everything else.
 //
 // HOW IT TELLS "IT RENDERED" FROM "IT CRASHED"
@@ -437,9 +443,10 @@ if (checkOnly) {
     console.log(
       '[verify-app-launch] The app installed, launched, drew its introduction and answered Skip by ' +
         'drawing the batch screen. This is the first observation of a screen in this project, and it ' +
-        'covers one navigation. It is not a device result: the simulator has no Photos library, no ' +
-        'iCloud and no real encoder, so retrieval, export, verification, saving, deletion and ' +
-        'recovery remain unexercised -- see docs/PHYSICAL_DEVICE_TEST_PLAN.md.'
+        'covers one navigation on an empty library. It is not a device result: retrieval, export, ' +
+        'verification, saving, deletion and recovery are all unexercised, and a simulator is not a ' +
+        'phone. See docs/PHYSICAL_DEVICE_TEST_PLAN.md for what that leaves, and ' +
+        'docs/SIMULATOR_PIPELINE_PLAN.md for how far a simulator could be pushed.'
     );
   } catch (error) {
     reportFailure(error);
