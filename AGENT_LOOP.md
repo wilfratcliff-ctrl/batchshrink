@@ -50,10 +50,19 @@ What a cloud build still does not do:
 |------|-------|--------|---------|--------|
 | 2026-09-23 | `6c39c009` | `dcd0695` | development-simulator | ERRORED, first real compile of the tree |
 | 2026-09-23 | `9f83392c` | `082537a` | development-simulator | FINISHED, artifact produced |
+| 2026-09-23 | `eb69125a` | `df6f128` | verify-tests | ERRORED, first compile of the 162-case test target |
+| 2026-09-23 | `f4b4bcf6` | `1e6c6ba` | verify-tests | FINISHED, `** TEST BUILD SUCCEEDED **` |
 
 The first build's two errors, both in `BatchViewModel`'s initialiser: the init assigned the
 stored monitor but then used the optional *parameter* for `onChange` and `start()`. Everything
 else in three rounds of Swift compiled on the first try.
+
+The test target's first compile found two errors, both in `DeletionPolicyTests.swift`: two calls
+passed `evidence:` before `readBack:`, which `DeletionPolicy.decision`'s memberwise order does not
+allow. Two errors across 162 cases, and only in the test target.
+
+After that fix, `xcodebuild build-for-testing` reported `** TEST BUILD SUCCEEDED **`. **The whole
+app and all 162 test cases now compile.** They have still never been run.
 
 ## Ownership rule
 
@@ -84,12 +93,15 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N8 | 1 | No test covered the reconciliation wiring | done, round 3 |
 | N9 | 2 | `ThumbnailService` key index grew unbounded | done, round 3 |
 | N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
-| N11 | 1 | No test has ever compiled or run: 162 XCTest cases | partly done, round 4: `verify-tests` profile compiles the test target; running them is still unproven |
+| N11 | 1 | 162 XCTest cases had never been compiled or run | compile done, round 4 (`f4b4bcf6`); running them is still open |
 | N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing can ever set either trait, so both rules are dead and an HDR original is still processed. `NEXT_PHASE.md` requires HDR exclusion. Needs codec/colour-tag detection where the media is readable, applied to both `Traits` call sites in the same round | open |
 | N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
 | N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
 | N15 | 3 | `withTaskCancellationHandler(operation:onCancel:)` is the pre-`isolation:` overload, deprecated in the iOS 18 SDK | open |
 | N16 | 1 | Exactly-once save reconciliation (NEXT_PHASE): a save receipt is evidence, not proof the copy completed | open |
+| N17 | 1 | The 162 cases compile but have never executed. `xcodebuild test` with a simulator destination on the EAS builder is the one remaining route to actually running them without a Mac | open |
+| N18 | 2 | `expo doctor` reports 1 failed check during every EAS setup. The build continues, so it is a warning, but a release should not ship past it unnoticed | open |
+| N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
 
 ## Round log
 
