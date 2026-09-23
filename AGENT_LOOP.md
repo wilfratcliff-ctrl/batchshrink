@@ -230,6 +230,8 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 8 | `0849dfd` | A false line in the start dialog; mid-save findings rendered; device readiness; 263 tests | CI: green | — |
 | 9 | `81ab92c` | A scan that survives the library changing underneath it | CI: green | — |
 | 10 | see below | First growth round: six marketing agents in parallel with five app agents | local gates PASS | six documents in `marketing/` |
+| 11 | `42d67f6` | HDR/ProRes refusal moved into the scan; every user-facing string audited | CI: **green** | 276 tests |
+| 12 | see below | Close round 11's seams: the new scan phase gets its own wording, refused videos are named, stale strings fixed | local gates PASS | 277 tests |
 
 ### Round 10 — the app, and the business
 

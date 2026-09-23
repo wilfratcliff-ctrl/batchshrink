@@ -8,7 +8,7 @@ A smaller copy is added to Photos as a separate item, and only after it passes t
 checks. Deleting an original is opt-in, applies to batch runs, and is described below.
 
 **Status: implemented source, compiled and tested; never run.** This document describes the batch
-as it exists in the tree at commit `5d72357`. Earlier builds compiled earlier states of it. The
+as it exists in the tree after round 11. Earlier builds compiled earlier states of it. The
 round 1 to 5 reliability work - the queue write boundaries, the deletion gate, verification, the
 library reconciliation and the copy exclusion - is all in that tree. CI
 (`.github/workflows/ios-tests.yml`, running `scripts/verify-native-tests.mjs`) compiles the
@@ -25,20 +25,29 @@ The scan is built from PhotoKit metadata. It downloads nothing.
 | Fact | Source |
 | --- | --- |
 | Count of videos, dates, durations, pixel sizes, favourite/hidden flags | `PHAsset` |
-| Slow-motion, time-lapse and spatial flags | `PHAssetMediaSubtype` |
+| Slow-motion, time-lapse, spatial and cinematic flags | `PHAssetMediaSubtype` |
 | Edited assets and Live Photo video pairs | `PHAssetResource` resource types |
+| Shared, synced or otherwise restricted items | `PHAsset.sourceType` and `canPerform(.delete)` |
 | Original byte size | `PHAssetResource.dataSize`, public API from iOS 27 |
+| Codec subtype and colour transfer function | the video track's format descriptions, read from the original during the on-device pass |
 
 `dataSize` is the only supported way to read an original's size without fetching it. Apple
 exposes no equivalent on earlier systems, and VideoShrink does not use undocumented
 key-value lookups to guess one.
 
-On a system that does not report sizes, the scan falls back to measuring the videos that
-are already on the iPhone: it asks PhotoKit for the original with network access disabled,
-and reads the size of the file it is handed. Videos that live only in iCloud cannot answer
-that request, so they are counted, listed and left out of the estimate instead of being
-downloaded during a scan. The pass is capped at the 400 newest videos so a large library
-cannot turn a scan into an unbounded wait, and it can be stopped at any time.
+The listing is always followed by one bounded on-device pass over the videos already on this
+iPhone, on every system and however the library was listed. It asks PhotoKit for the original
+with network access disabled, one request per video, and reads two things from the file it is
+handed: the original's byte size, on a system that does not report one, and the codec and colour
+tags that no PhotoKit listing carries. The size it reads is what lets a video be offered with a
+real number on an older system. The format it reads is what refuses an HDR or ProRes original
+while the library is still being listed, in the same words a run would use. A video that lives
+only in iCloud cannot answer the request, so nothing is downloaded: its size and its format both
+stay unknown, it is counted and listed, and a run refuses it later if the media turns out to be one
+this app cannot process. A video the scan read and refused is counted in the summary and named
+with its reason on the selection screen, rather than disappearing from view. The pass is capped
+at the 400 newest videos so a large library cannot turn a scan into an unbounded wait, and it
+can be stopped at any time.
 
 With limited Photos access, the allowlist *is* the library. Totals are labelled accordingly.
 
@@ -105,7 +114,7 @@ estimate is a range from the same band model as the library summary.
 The list shows a thumbnail per video. Thumbnails are the one thing this app fetches without
 the user starting a job: Photos can hand over a cached preview for a video whose original
 lives in iCloud, and only that preview is requested. Originals are never downloaded for a
-scan or a list, and the on-device size pass still asks PhotoKit with network access disabled.
+scan or a list, and the on-device scan pass still asks PhotoKit with network access disabled.
 
 Thumbnails are sized to be recognisable rather than decorative, and each carries the video's
 length. Tapping one opens a player you can scrub through before deciding, because choosing what
@@ -328,3 +337,10 @@ offload, so everything below still needs a physical iPhone.
     can be deleted, because those records carry no receipt.
 19. Make the queue file unwritable during a run and confirm the app stops before it saves a copy or
     asks Photos to delete anything, rather than mutating Photos without a record.
+20. Scan a library that already holds HDR or ProRes originals on the device and confirm the scan
+    offers none of them as candidates: they are absent from the list to choose from and from every
+    bulk shortcut, and each one is named on the selection screen under "Not supported" with its
+    reason, rather than only being counted.
+21. Time the on-device pass on a large local library, several hundred videos, and confirm that
+    reading each video's codec and colour tags every time keeps the scan within a wait a person
+    would accept, with the count still moving while it runs.

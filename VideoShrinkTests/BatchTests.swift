@@ -390,6 +390,38 @@ import Photos
         XCTAssertEqual(fixture.batch.selection, ["a", "b"])
     }
 
+    func testARefusedVideoIsNamedWithItsReasonAndCanNeverBeSelected() async {
+        // What the on-device pass does with a video it read and refused: the video leaves the list a
+        // run can pick from and comes back carrying the reason, so the screen can name it.
+        let reason = AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false) ?? ""
+        XCTAssertFalse(reason.isEmpty, "The rule this test drives must have a sentence")
+        let refused = asset("hdr", bytes: 3_000_000_000, unsupported: reason)
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)])
+        fixture.scanner.result = LibraryScanResult(assets: [asset("a", bytes: 3_000_000_000)],
+                                                   videoCount: 2,
+                                                   unsupportedCount: 1,
+                                                   unknownSizeCount: 0,
+                                                   sizeSource: .reportedByPhotos,
+                                                   measuredOnDeviceCount: 0,
+                                                   refusedAssets: [refused])
+        fixture.batch.scan()
+        await eventually { fixture.batch.phase == .scanned }
+
+        XCTAssertEqual(fixture.batch.refusedAssets.map(\.id), ["hdr"])
+        XCTAssertEqual(fixture.batch.refusedAssets.first?.unsupportedReason, reason)
+        // It is not one of the videos on offer, so no bulk shortcut can reach it.
+        XCTAssertEqual(fixture.batch.eligibleAssets.map(\.id), ["a"])
+
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+        XCTAssertEqual(fixture.batch.selectableCount, 1)
+
+        // The refused rows carry no button; this is the backstop for anything else that asks.
+        fixture.batch.toggle("hdr")
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+    }
+
     // MARK: - Copies this app made
 
     func testAnAppCreatedCopyStaysOutOfABulkSelectionAndCanStillBeChosenByHand() async {

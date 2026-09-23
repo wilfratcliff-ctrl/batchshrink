@@ -149,6 +149,12 @@ enum BatchPhase: Equatable {
     // MARK: - Derived state
 
     var eligibleAssets: [LibraryAsset] { scanResult?.assets ?? [] }
+    /// Videos the scan read and refused on its own, with the reason it read from the media.
+    ///
+    /// They are deliberately not in `eligibleAssets`, because nothing here can be chosen and run.
+    /// The selection screen draws them after the rows that can be, so a user learns which video was
+    /// refused and why, rather than only how many were.
+    var refusedAssets: [LibraryAsset] { scanResult?.refusedAssets ?? [] }
     var selectedAssets: [LibraryAsset] { eligibleAssets.filter { selection.contains($0.id) } }
     /// Videos the bulk shortcuts may pick: everything eligible that this iPhone has not already
     /// shrunk, that the app did not create itself, and whose original is still in Photos.
@@ -508,7 +514,13 @@ enum BatchPhase: Equatable {
 
     func toggle(_ id: String) {
         guard phase == .selecting else { return }
-        if selection.contains(id) { selection.remove(id) } else { selection.insert(id) }
+        // A video the scan read and refused can never enter the selection. The refused rows carry
+        // no button, and this is the backstop that keeps the rule true whatever calls it.
+        if selection.contains(id) {
+            selection.remove(id)
+        } else if !refusedAssets.contains(where: { $0.id == id }) {
+            selection.insert(id)
+        }
     }
 
     func clearSelection() { selection.removeAll() }

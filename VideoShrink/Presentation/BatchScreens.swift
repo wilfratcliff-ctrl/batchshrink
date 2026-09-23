@@ -72,27 +72,39 @@ struct BatchStartScreen: View {
 struct BatchScanningScreen: View {
     @ObservedObject var batch: BatchViewModel
 
-    private var measuring: Bool { batch.scanProgress?.phase == .measuring }
+    /// What the scan is doing, in the words this screen draws.
+    ///
+    /// The scan has three phases now. The listing wording describes neither of the on-device ones,
+    /// and "measuring" describes only the size pass, so reading a video's format gets its own
+    /// heading and body rather than borrowing the listing's.
+    private enum Wording: Equatable { case listing, measuring, inspectingFormats }
+
+    private var wording: Wording {
+        guard let phase = batch.scanProgress?.phase else { return .listing }
+        switch phase {
+        case .listing: return .listing
+        case .measuring: return .measuring
+        case .inspectingFormats: return .inspectingFormats
+        }
+    }
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
                 ShrinkEyebrow(title: "No originals download", symbol: "icloud.slash")
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(measuring ? "Measuring what’s\nalready here." : "Looking through\nyour videos.")
+                    Text(heading)
                         .font(ShrinkStyle.headline).tracking(-1)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                    Text(measuring
-                         ? "This iOS version doesn’t report original sizes, so BatchShrink is measuring the videos already on your iPhone."
-                         : "Checking sizes and lengths. No videos are downloaded.")
+                    Text(detail)
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 VStack(alignment: .leading, spacing: 16) {
                     ProgressView()
                         .progressViewStyle(.linear)
-                        .accessibilityLabel(measuring ? "Measuring on-device videos" : "Listing videos")
+                        .accessibilityLabel(progressLabel)
                     Text(countText)
                         .font(.subheadline.weight(.medium))
                         .monospacedDigit()
@@ -116,12 +128,43 @@ struct BatchScanningScreen: View {
         }
     }
 
+    private var heading: String {
+        switch wording {
+        case .listing: return "Looking through\nyour videos."
+        case .measuring: return "Measuring what’s\nalready here."
+        case .inspectingFormats: return "Reading formats."
+        }
+    }
+
+    /// What the phase is doing, and what it is not. The format pass reads videos already on this
+    /// iPhone, so a video still in iCloud stays unknown instead of being fetched to say otherwise.
+    private var detail: String {
+        switch wording {
+        case .listing:
+            return "Checking sizes and lengths. No videos are downloaded."
+        case .measuring:
+            return "This iOS version doesn’t report original sizes, so BatchShrink is measuring the videos already on your iPhone."
+        case .inspectingFormats:
+            return "Reading the codec and colour information of videos already on your iPhone. Nothing is downloaded, and a video that is still in iCloud stays unknown."
+        }
+    }
+
+    private var progressLabel: String {
+        switch wording {
+        case .listing: return "Listing videos"
+        case .measuring: return "Measuring on-device videos"
+        case .inspectingFormats: return "Reading video formats"
+        }
+    }
+
+    /// The count line the scan has always published. The same "n of m" is true in every phase, so
+    /// only the two labels around it change.
     private var countText: String {
         guard let progress = batch.scanProgress, progress.total > 0 else {
-            return measuring ? "Measuring…" : "Looking…"
+            return wording == .measuring ? "Measuring…" : "Looking…"
         }
         let noun = progress.total == 1 ? "video" : "videos"
-        return measuring
+        return wording == .measuring
             ? "\(progress.scanned.formatted()) of \(progress.total.formatted()) \(noun) measured"
             : "\(progress.scanned.formatted()) of \(progress.total.formatted()) \(noun) checked"
     }
@@ -150,6 +193,9 @@ struct BatchSummaryScreen: View {
                     if result.assets.isEmpty {
                         ShrinkNotice(symbol: "video.slash", title: "Nothing to shrink yet",
                                      detail: "Every video BatchShrink can see is unsupported or outside your Photos access.")
+                        // Nothing here can be chosen, so the selection screen is not reachable. This
+                        // is the one place the refused videos can still be named.
+                        RefusedVideoList(assets: result.refusedAssets)
                     } else {
                         statsCard(result: result, estimate: estimate)
                         QualityRow(settings: batch.settings, open: openQuality)
@@ -241,7 +287,7 @@ struct BatchSummaryScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if result.unsupportedCount > 0 {
-            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, and shared or restricted videos. HDR and ProRes can only be found when the app opens a video, so a video you pick can still turn out to be unsupported.")
+            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself, so the scan refuses the ones already on your iPhone; a video still in iCloud, or one the scan did not reach, has not been read, so a video you pick can still turn out to be unsupported.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -313,6 +359,7 @@ struct BatchSelectionScreen: View {
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(assets) { asset in row(asset) }
                 }
+                RefusedVideoList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 QueueWarningNotice(warning: batch.queueWarning)
@@ -474,10 +521,70 @@ struct BatchSelectionScreen: View {
                 .allowsHitTesting(false)
         }
     }
-    /// What VoiceOver reads for a row, shortest useful version of the three facts.
-    private func rowLabel(_ asset: LibraryAsset) -> String {
-        let size = asset.bytes.map(ShrinkFormat.bytes) ?? "size not reported"
-        return "\(ShrinkFormat.date(asset.creationDate)), \(ShrinkFormat.duration(asset.duration)), \(size)"
+}
+
+/// What VoiceOver reads for one video's row, shortest useful version of the three facts. The rows
+/// that can be chosen and the rows the scan refused both use it, so one video reads the same way
+/// wherever it is named.
+private func rowLabel(_ asset: LibraryAsset) -> String {
+    let size = asset.bytes.map(ShrinkFormat.bytes) ?? "size not reported"
+    return "\(ShrinkFormat.date(asset.creationDate)), \(ShrinkFormat.duration(asset.duration)), \(size)"
+}
+
+/// The videos a scan read and refused, named with the reason it read from the media.
+///
+/// A refused video is not one this app can run, so it is named rather than offered: nothing here is
+/// a button and nothing can be ticked. The selection screen draws this after the rows that can be
+/// chosen, and the summary draws it when there is nothing eligible at all, which is the one case
+/// where the selection screen cannot be reached. Both exist because a count never says which video
+/// was refused or why.
+struct RefusedVideoList: View {
+    let assets: [LibraryAsset]
+
+    var body: some View {
+        if !assets.isEmpty {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Not supported")
+                    .font(.headline)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(assets.count == 1
+                     ? "BatchShrink read this video and cannot shrink it. It stays in Photos untouched."
+                     : "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched.")
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(assets) { asset in row(asset) }
+            }
+            .padding(.top, 4)
+        }
+    }
+
+    private func row(_ asset: LibraryAsset) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "nosign")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                Text(rowLabel(asset))
+                    .font(.subheadline.weight(.semibold))
+                    .monospacedDigit()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text(asset.unsupportedReason ?? "This video is not supported yet.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(ShrinkStyle.surface)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 22, style: .continuous)
+                .strokeBorder(ShrinkStyle.hairline, lineWidth: 1)
+                .allowsHitTesting(false)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityHint("This video cannot be chosen for a batch.")
     }
 }
 
