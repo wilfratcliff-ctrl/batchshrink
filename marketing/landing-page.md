@@ -109,10 +109,12 @@ Two rules for whoever ships this page:
 **Looking at the library does not download the library.**
 
 The scan reads what Photos already knows: how many videos you have, how long they are, their pixel
-sizes, and the flags for the formats the app turns down. Sizes come from the documented Photos API
-where the system reports them, and otherwise from videos that are already on the phone, asking
-Photos with network access switched off. Videos that live only in iCloud are counted and listed,
-and left out of the estimate instead of being downloaded to produce one.
+sizes, and the flags for the formats the app turns down. For videos already on the phone, it also
+reads the codec and colour details in each file's header, which is how HDR and ProRes are caught,
+without downloading or decoding anything. Sizes come from the documented Photos API where the
+system reports them, and otherwise from videos that are already on the phone, asking Photos with
+network access switched off. Videos that live only in iCloud are counted and listed, and left out
+of the estimate instead of being downloaded to produce one.
 
 **It makes copies. It does not edit your videos.**
 
@@ -183,9 +185,11 @@ run through and quietly changed:
 - shared or restricted items
 - anything that is not a video, or a video with more than one audio track
 
-Most of those are turned down as soon as the library is listed. HDR and ProRes cannot be told
-apart from an ordinary video until the file is opened, so one of those can be selected and only
-refused once the run reaches it - with the reason on screen either way.
+Most of those are turned down as soon as the library is listed. HDR and ProRes are read from the
+file itself: the scan catches them among the videos already on your iPhone, and before the first
+copy is made the app reads every video you picked, so one of those is refused then. Only a video
+the app could not read - one still in iCloud, one the scan did not reach, or one whose read failed
+- can be refused once the run reaches it. The reason is on screen either way.
 
 That list is the point of the app. A smaller copy of a slow-motion clip loses the slow motion; a
 flattened cinematic export loses the moving focus point; an SDR-shaped export of an HDR video
@@ -385,7 +389,7 @@ both in plain words.
 | Claim | Evidence in the repo |
 | --- | --- |
 | Finds videos in the library and estimates the space a smaller copy might save, as a range | `docs/BATCH_PHASE.md`, "How the savings estimate works": 4-8 Mbps planning band for 1080p HEVC, replaced by a measured band after three finished compressions. |
-| The scan does not download anything | `docs/BATCH_PHASE.md`, "What the prescan can see": built from PhotoKit metadata, downloads nothing; the fallback size pass asks PhotoKit with network access disabled. `VideoShrink/Services/PhotoLibraryScanService.swift` carries the same comment. |
+| The scan does not download anything | `docs/BATCH_PHASE.md`, "What the prescan can see": built from PhotoKit metadata, downloads nothing; the fallback size pass asks PhotoKit with network access disabled, and the format read is that same request. `VideoShrink/Services/PhotoLibraryScanService.swift` carries the same comment. |
 | iCloud-only videos are counted and listed but left out of the estimate | `docs/BATCH_PHASE.md`, same section. |
 | Sizes come from a documented Photos API | `docs/BATCH_PHASE.md` names `PHAssetResource.dataSize`, "public API from iOS 27", and states that no undocumented key-value lookup is used. |
 | Copies are saved as new Photos items, originals untouched | `README.md`, "Pipeline and safety rules"; `docs/BATCH_PHASE.md`, "Deleting originals" (deleting is opt-in and off by default). |

@@ -133,8 +133,9 @@ pass physical Phase 0 acceptance; retain sanitized evidence."
   deletion path, so the deletion cases in the device plan remain the ones nothing has exercised.
   N16 and the remainder of N5 - exactly-once save reconciliation - are open. N12 is closed:
   `VideoVerificationService` reads an original's coded subtype and transfer function, so HDR and
-  ProRes originals are genuinely refused, in `AssetRules`' own words - at the moment the app opens
-  the video, and never yet on a real original of either kind.
+  ProRes originals are genuinely refused, in `AssetRules`' own words - as the app reads the videos
+  (in the scan, and over the whole selection before the first export), and never yet on a real
+  original of either kind.
 
 **[inference]** The distinction matters for pricing, not just for engineering pride. A test suite
 proves that the code does what its authors intended against fakes. It cannot prove what PhotoKit,
@@ -510,11 +511,12 @@ below it can be honestly assessed while the app has never executed.
    it is the one failure that directly contradicts "no duplicate Photos items".
 5. **HDR and ProRes are genuinely refused, and the refusal has met a real original.** **[repo]**
    N12 is closed: `VideoVerificationService` reads an original's coded subtype and transfer
-   function and refuses any Apple ProRes subtype and both HDR curves, in `AssetRules`' own words,
-   so an HDR or ProRes original selected from the list is stopped when the app opens it. Evidence
-   still owed: a device result for a real HDR clip and a real ProRes clip, because the detection
-   has never met one. **[inference]** Charging for a copy of an HDR video whose appearance was
-   never inspected is charging for an unverified promise.
+   function and refuses any Apple ProRes subtype and both HDR curves, in `AssetRules`' own words.
+   The scan reads them for videos already on the phone, and the run reads every chosen video before
+   the first export, so an HDR or ProRes original is stopped before anything is exported unless its
+   original could not be read. Evidence still owed: a device result for a real HDR clip and a real
+   ProRes clip, because the detection has never met one. **[inference]** Charging for a copy of an
+   HDR video whose appearance was never inspected is charging for an unverified promise.
 6. **The savings numbers have survived a real library.** **[repo]** The device plan requires
    recording source and output byte counts and checking that negative or zero savings display and
    disable Save. Evidence: recorded byte counts across a spread of real clips, including

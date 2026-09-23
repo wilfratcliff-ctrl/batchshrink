@@ -20,7 +20,8 @@ no original has been deleted and no queue file has been written on a device.
 
 ## What the prescan can see
 
-The scan is built from PhotoKit metadata. It downloads nothing.
+The scan is built from PhotoKit metadata, plus one network-disabled header read per on-device
+video. It downloads nothing.
 
 | Fact | Source |
 | --- | --- |

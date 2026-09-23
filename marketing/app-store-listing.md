@@ -14,12 +14,15 @@ Two things constrain the whole document:
   after it targeted a simulator. So the app cannot yet honestly be described as working, only as
   built. See `README.md` and `AGENT_LOOP.md`.
 - HDR and ProRes are refused too, but at a different moment from the rest. Neither fact appears in
-  the library metadata the listing steps read, so both are decided when the app opens the video:
-  a ProRes original is caught by its coded subtype and an HDR original by its transfer function
-  (PQ or HLG), and the run stops with the reason on screen
-  (`VideoShrink/Services/VideoVerificationService.swift`). So a video shown in the list can be
-  selected and only refused once it starts, and no line below may imply that everything in the
-  list will be processed. See "Unsubstantiated and open" below.
+  the library metadata the listing steps read, so both come from the file itself: a ProRes original
+  by its coded subtype and an HDR original by its transfer function (PQ or HLG), read from the
+  header of videos already on the iPhone, with the network off and nothing decoded
+  (`VideoShrink/Services/PhotoLibraryScanService.swift`). The scan reads the newest 400 that way,
+  and before the first export the run reads every video the user actually chose, cap or no cap,
+  takes the refused ones out and names them with the reason. Only a video whose original is still
+  in iCloud, one the scan did not reach, or one whose read failed is left to be refused when the
+  run opens it. No line below may imply that every video in the list will be processed. See
+  "Unsubstantiated and open" below.
 
 ## 1. Name and subtitle
 
@@ -129,8 +132,8 @@ rate, and let it run. Keeping the screen awake for a long run is optional.
 
 WHAT IT DOES NOT DO
 
-- It does not download your videos just to look at them. Scanning the library reads sizes and
-  lengths from what your iPhone already has.
+- It does not download your videos just to look at them. Scanning the library reads sizes, lengths
+  and format details from what your iPhone already has.
 - It does not free storage by itself. A smaller copy sitting next to the original uses more space
   until you decide what to do with the original.
 - It does not lower an iCloud bill. Photos may sync your library with iCloud under your own
@@ -148,9 +151,12 @@ VIDEOS IT WILL NOT TOUCH
 
 BatchShrink refuses a video it cannot handle properly instead of guessing. Live Photos, edited
 videos, slow-motion, time-lapse, spatial and cinematic videos, and videos from a shared or
-restricted album are refused. HDR and ProRes videos are refused as well, and those two are found
-when the app opens the video rather than when it lists your library, so a video you pick can stop
-there instead of being processed. Either way the refusal is explained on screen instead of
+restricted album are refused as soon as your library is listed. HDR and ProRes videos are refused
+as well, and those two come from the file itself, so they are caught when BatchShrink scans the
+videos already on your iPhone, and again for every video you pick before the first copy is made. A
+refused video is taken out of the run and named with its reason. Only a video BatchShrink could not
+read - one still in iCloud, one the scan did not reach, or one whose read failed - is left to be
+refused later, when the run opens it. Either way the refusal is explained on screen instead of
 failing quietly.
 
 PRIVATE BY DEFAULT
@@ -265,9 +271,10 @@ actually does, so the page and the app agree:
 
 - What is collected: nothing leaves the device. There is no account, no analytics, no advertising,
   no backend and no app-managed upload of media (`README.md`).
-- Photos access: the app reads video metadata (sizes, durations, thumbnails) to build the estimate,
-  and reads the videos the user chooses in order to make copies. State that with limited access
-  only the permitted videos are visible.
+- Photos access: the app reads video metadata (sizes, durations, thumbnails) and, for videos already
+  on the device, the codec and colour details in the file header, to build the estimate and to refuse
+  formats it cannot handle; it reads the videos the user chooses in order to make copies. State that
+  with limited access only the permitted videos are visible.
 - Photos writing: copies are saved as new Photos items; the optional delete moves originals to
   Recently Deleted, where they remain for 30 days.
 - iCloud: scans do not download originals; videos chosen for processing may be downloaded through
@@ -284,8 +291,10 @@ actually does, so the page and the app agree:
 - One paragraph on what the app does and what it does not free (storage, not an iCloud tier).
 - Which videos are refused, named plainly: Live Photos, edited, slow-motion, time-lapse, spatial,
   cinematic, and shared or restricted album items, refused straight from the list; and HDR and
-  ProRes, refused when the app opens the video. Say plainly that a video may be selected and
-  refused only at that later point, so nothing implies every video in the list will be processed.
+  ProRes, refused once the app reads the file - during the scan for videos already on the iPhone,
+  and for every video the user picked before the first copy is made. Say plainly that only a video
+  the app could not read (one still in iCloud, one the scan did not reach, or one whose read failed)
+  can be refused later in the run, so nothing implies every video in the list will be processed.
 - How saving works (a new Photos item) and how deleting works (off by default, one confirmation,
   30 days in Recently Deleted).
 - Why a run can pause on its own (the app left the foreground, or the phone got warm).
@@ -345,11 +354,12 @@ Flagged rather than hidden, in the order they matter:
    reachable: `VideoVerificationService` reads each format description of an original, refuses an
    Apple ProRes coded subtype (the six ordinary ones and the two RAW ones) and a PQ or HLG
    transfer function, and throws `PipelineError.unsupportedOriginal(reason:)` carrying
-   `AssetRules`' own sentence. The test suite exercises every branch against constructed format
-   descriptions. What has not happened is a real HDR or ProRes video on a real phone, so nothing
-   here says the detection catches every such file. The description above therefore says
-   "refused", not "detected reliably", and it says the check happens when the app opens the video,
-   because a video in the list can be selected and refused only at that point.
+   `AssetRules`' own sentence. The same read runs in the scan, over videos already on the phone,
+   and in the run over every video the user picked, before the first export; only a video whose
+   original could not be read is left to be refused when the run opens it. The test suite exercises
+   every branch against constructed format descriptions. What has not happened is a real HDR or
+   ProRes video on a real phone, so nothing here says the detection catches every such file. The
+   description above therefore says "refused", not "detected reliably".
 2. **Nothing in the listing may be described as observed behaviour.** No screen has rendered, no
    export has run, no original has been deleted and no queue file has been written on a device
    (`README.md`, `AGENT_LOOP.md` N19). Every screenshot above and every "what it does" sentence

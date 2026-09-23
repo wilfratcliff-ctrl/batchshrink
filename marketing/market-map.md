@@ -154,8 +154,9 @@ Hard assessment. The first list is the longest, and that is the point.
 - **It refuses what it cannot preserve.** Repo, and the split matters: Live Photos, time-lapse,
   spatial, slow-motion, edited videos, cinematic and shared or restricted items are refused at
   listing time (seven classes, all detectable from library metadata), and HDR and ProRes are
-  refused once the original is readable (two more, invisible to PhotoKit). Looked up: only 3 of
-  142 competitor listings even mention Live Photos.
+  refused once the file itself can be read (two more, invisible to PhotoKit): the scan reads the
+  newest 400 on-device originals, and the run reads the whole selection before the first export.
+  Looked up: only 3 of 142 competitor listings even mention Live Photos.
 
 **Genuinely worse, and this is the part a strategy built on wishful thinking would skip.**
 
@@ -459,15 +460,17 @@ the coverage problem is fatal, and whether the deletion gate survives a real lib
 **4. Decide the exact claim set, including the HDR and ProRes wording.** Repo, and this one is
 subtle enough that it needs a decision rather than copy-editing. HDR and ProRes refusal is
 implemented and reachable (`VideoShrink/Models/AssetRules.swift`,
-`VideoShrink/Services/VideoVerificationService.swift`), but only once the original is on disk and
-its format descriptions can be read. PhotoKit reports neither trait, so the library listing
-cannot see them (`VideoShrink/Services/PhotoLibraryScanService.swift`,
-`VideoShrink/Services/PhotoLibraryService.swift`). Consequence: an HDR or ProRes video can be
-selected, start, and *then* be refused, with the reason shown at that point. That is honest
-behaviour and a bad surprise. The listing and the onboarding must say "some videos will be
-refused when the app opens them" rather than implying every video in the list is processable.
-Some existing documents in this folder were written when these rules could not fire at all; the
-code is the current truth (`AGENT_LOOP.md` says so explicitly in "Keeping this file honest").
+`VideoShrink/Services/VideoVerificationService.swift`). PhotoKit reports neither trait, so the
+library listing cannot see them; instead the scan reads the codec and colour details from the
+header of videos already on the phone, newest 400 first, and `BatchViewModel.start()` reads every
+video the user actually chose before the first export, so the refused ones are taken out and named
+(`VideoShrink/Services/PhotoLibraryScanService.swift`). Consequence: only a video the app could
+not read - one still in iCloud, one the scan did not reach, or one whose read failed - can be
+selected, start, and *then* be refused, with the reason shown at that point. That is the remaining
+bad surprise. The listing and the onboarding must say that a refused video is caught as the app
+reads your videos, rather than implying every video in the list is processable. Some existing
+documents in this folder were written when these rules could not fire at all; the code is the
+current truth (`AGENT_LOOP.md` says so explicitly in "Keeping this file honest").
 
 **5. Close or formally defer the open reliability items.** Repo, `AGENT_LOOP.md` backlog:
 exactly-once save reconciliation is still open (N16); one shared cancellation flag is a known
@@ -534,17 +537,18 @@ Named plainly, hardest risk last because it is the one I would bet on.
 - **THE MOST LIKELY KILLER: the app may refuse a large share of the library it was installed to
   fix, and it does not free anything even when it succeeds.** Put the two together. Real
   libraries are dominated by Live Photos, edited clips, clips Photos tags as high-frame-rate and
-  HDR footage - and HDR cannot even be detected until the video is opened. So the modal first run
-  for the target user is: several of the videos are refused, the ones that are processed produce
-  extra copies rather than freed space, and nothing is actually reclaimed unless they turn on
+  HDR footage - and most of those refusals now surface before a copy is made, though a video the
+  app cannot read is still refused mid-run. So the modal first run for the target user is: several
+  of the videos are refused, the ones that are processed produce extra copies rather than freed
+  space, and nothing is actually reclaimed unless they turn on
   deletion, understand Recently Deleted, and wait 30 days. Repo: the README states this outcome bluntly
   ("Nothing here lowers an iCloud bill", and a second item initially consumes more storage).
   A user who experiences "it refused half of it, and my storage went up" writes a one-star review
   and tells nobody. That single experience is what ends this product, and it is a coverage and
   sequencing problem, not a marketing problem. It is also measurable before launch, in Move 1,
   by running the app against a real large library and counting what it accepts. If that count is
-  bad, the product needs the ordering fixed - refuse earlier, in the list, with a clear reason -
-  before a single user is invited.
+  bad, the product needs the ordering fixed - the videos it cannot read are still refused only
+  once a run reaches them - before a single user is invited.
 
 ## 6. A measurable definition of working for the first 90 days
 
@@ -630,7 +634,7 @@ or iPad work as a growth move, and any channel that requires a claim the app can
 
 **The risk most likely to kill it.** That the app refuses a large share of the very library it was
 installed to fix - Live Photos, edited clips, slow-motion, 60 fps and HDR dominate real libraries,
-and HDR cannot even be detected before the video is opened - while a successful run adds copies
+and most of those refusals are now caught before a copy is made - while a successful run adds copies
 instead of freeing space, so the modal first experience is "it refused half of them and my storage
 went up". That produces the one-star review, and the one-star review is what stops the next user.
 It is measurable before launch, and it should be measured, by running the app against a real large

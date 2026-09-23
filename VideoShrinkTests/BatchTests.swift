@@ -1126,6 +1126,10 @@ import Photos
         XCTAssertNil(fixture.batch.message)
 
         // What iOS does: the app becomes active while access is still `.notDetermined`.
+        // The fixture builds its view model lazily, and the view model is what wires this monitor
+        // up. Touch it first, or the report below has nowhere to go and this test passes because
+        // nothing happened rather than because nothing should happen.
+        _ = fixture.batch
         monitor.enteredForeground()
 
         XCTAssertEqual(fixture.batch.phase, .start)
@@ -1143,6 +1147,7 @@ import Photos
             let monitor = LibraryChangeMonitor(authorizationStatus: { status })
             let fixture = BatchFixture(assets: [], monitor: monitor)
 
+            _ = fixture.batch
             monitor.enteredForeground()
 
             XCTAssertEqual(fixture.batch.phase, .failed, "\(status) must fail the flow")
@@ -1158,6 +1163,7 @@ import Photos
         let monitor = LibraryChangeMonitor(authorizationStatus: { .limited })
         let fixture = BatchFixture(assets: [], monitor: monitor)
 
+        _ = fixture.batch
         monitor.enteredForeground()
 
         XCTAssertTrue(monitor.canReadLibrary)
