@@ -158,7 +158,7 @@ struct QualitySelector: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(18).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
             // The figure and the sentence under it are one answer to one question: VoiceOver read
             // "1.2 to 2.4 gigabytes" and then the explanation as two unrelated elements, where
             // `ShrinkStat` and `ShrinkResult` already combine theirs.
@@ -198,7 +198,7 @@ struct QualitySheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
+                VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("Find your balance.").font(ShrinkStyle.headline).tracking(-1)
                         Text("A little smaller, or a little sharper. You decide.")
@@ -245,7 +245,7 @@ struct QualityRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
-            .padding(18)
+            .padding(ShrinkStyle.cardPadding)
             .shrinkCard()
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }

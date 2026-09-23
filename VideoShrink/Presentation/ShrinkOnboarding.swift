@@ -24,14 +24,14 @@ struct ShrinkOnboarding: View {
                     .foregroundStyle(.secondary)
                     .frame(minWidth: 44, minHeight: 44)
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, ShrinkStyle.gutter)
             HStack(spacing: 6) {
                 ForEach(0..<3) { index in
                     Capsule().fill(index <= page ? ShrinkStyle.accent : ShrinkStyle.elevated)
                         .frame(height: 3)
                 }
             }
-            .padding(.horizontal, 24).padding(.top, 18).padding(.bottom, 12)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 18).padding(.bottom, 12)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("Introduction, step \(page + 1) of 3")
 
@@ -124,10 +124,17 @@ struct ShrinkOnboarding: View {
 /// Scales without external images, personal photos, or illustrative storage claims.
 struct ShrinkHeroArtwork: View {
     var mode = 0
+    /// How much room the artwork has.
+    ///
+    /// The circles and the frames are sized from the *smaller* of the two dimensions, so a caller that
+    /// gives it less height gets a smaller picture rather than one cropped at the bottom - which is
+    /// what the two screens that open a flow want, since they have something to say under it and the
+    /// only control that matters was landing below the fold.
+    var height: CGFloat = 300
 
     var body: some View {
         GeometryReader { geometry in
-            let width = min(geometry.size.width, 380)
+            let width = min(min(geometry.size.width, geometry.size.height), 380)
             ZStack {
                 Circle()
                     .fill(RadialGradient(colors: [ShrinkStyle.accent.opacity(0.12), .clear],
@@ -160,7 +167,7 @@ struct ShrinkHeroArtwork: View {
             }
             .frame(width: geometry.size.width, height: geometry.size.height)
         }
-        .frame(height: 300)
+        .frame(height: height)
         .accessibilityHidden(true)
     }
 

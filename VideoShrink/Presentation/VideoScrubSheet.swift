@@ -136,7 +136,7 @@ struct VideoScrubSheet: View {
             LabeledContent("File size", value: asset.bytes.map(ShrinkFormat.bytes) ?? "Not reported by Photos")
         }
         .font(.subheadline)
-        .padding(18).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
     }
 
     private func start() async {

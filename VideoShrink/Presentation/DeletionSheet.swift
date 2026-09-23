@@ -75,7 +75,7 @@ struct DeletionSheet: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
         .accessibilityElement(children: .combine)
     }
 
@@ -129,7 +129,7 @@ struct DeletionRow: View {
                 Image(systemName: "chevron.right")
                     .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
-            .padding(18).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
             .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
         }
         .buttonStyle(.plain)

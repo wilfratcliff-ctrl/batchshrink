@@ -57,7 +57,7 @@ struct SingleVideoFlow: View {
                 }
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24)
+            .padding(.horizontal, ShrinkStyle.gutter)
             .padding(.top, 20)
             .padding(.bottom, 28)
             .frame(maxWidth: .infinity)
@@ -143,7 +143,7 @@ struct SingleVideoFlow: View {
                             Spacer(minLength: 0)
                             Image(systemName: "chevron.right").font(.caption.weight(.bold))
                         }
-                        .padding(20).shrinkCard()
+                        .padding(ShrinkStyle.cardPadding).shrinkCard()
                     }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Preview compressed video")

@@ -10,6 +10,25 @@ enum ShrinkStyle {
     static let thumbnailBackground = elevated
     static let hairline = ShrinkHairline()
     static let headline = Font.system(.largeTitle, design: .default, weight: .bold)
+
+    /// The rhythm every screen shares.
+    ///
+    /// The screens had grown a mix of numbers for the same three roles - card padding written as 14,
+    /// 18, 20, 22 and 24 in different places, and the gap between blocks as 18, 20, 22 and 24. On a
+    /// phone that reads as noise: the eye notices two cards that do not line up before it notices
+    /// either card on its own. These are named rather than copied about, so the next screen added
+    /// lands on the same grid without anyone having to remember what it was.
+    static let gutter: CGFloat = 24
+    static let sectionSpacing: CGFloat = 20
+    static let cardPadding: CGFloat = 20
+
+    /// How tall the layered artwork is drawn.
+    ///
+    /// It was a fixed 300 points everywhere, which on the two screens that open a flow pushed the
+    /// only control that matters - Find my videos, Choose a video - below the fold on an ordinary
+    /// phone. The picture is a mood, not the content, so it takes a smaller share of a screen that
+    /// has something to say and less of one that does not.
+    static let heroHeight: CGFloat = 200
 }
 
 /// Every haptic the app plays, and the one switch in Settings that covers them.
@@ -206,7 +225,7 @@ struct ShrinkActionBar<Content: View>: View {
     var body: some View {
         VStack(spacing: 10) { content }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 18).padding(.bottom, 12)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 18).padding(.bottom, 12)
             .frame(maxWidth: .infinity)
             .background(ShrinkStyle.canvas.opacity(0.97))
             .overlay(alignment: .top) { Rectangle().fill(ShrinkStyle.hairline).frame(height: 1) }
@@ -350,7 +369,7 @@ struct ShrinkNotice: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
         .accessibilityElement(children: .combine)
     }
 }

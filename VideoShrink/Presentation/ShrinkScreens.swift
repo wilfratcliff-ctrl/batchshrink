@@ -4,7 +4,7 @@ import UIKit
 
 struct ShrinkWelcome: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             ShrinkEyebrow(title: "One moment at a time", symbol: "play.rectangle")
             VStack(alignment: .leading, spacing: 12) {
                 Text("Same moment.\nLighter footprint.")
@@ -15,13 +15,15 @@ struct ShrinkWelcome: View {
                 // screen shows the case where the copy did not get smaller at all. The batch side
                 // hedges the same idea the same way ("potential savings"); this is the one-video
                 // equivalent of that fix.
-                Text("Choose a video, set the quality, and preview your copy before saving.")
+                //
+                // And the promise the notice card under the artwork used to carry, said here instead:
+                // one telling on a screen whose whole job is one tap, with the picture and the control
+                // no longer pushed down by a card that repeated the two lines above it.
+                Text("Choose a video, set the quality, and preview your copy before saving. Your original stays untouched.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
             ShrinkIllustration()
-            ShrinkNotice(symbol: "play.circle", title: "See it before you save it",
-                         detail: "Check the picture and sound. Your original stays untouched.")
             Text("Keep the app open and your iPhone unlocked while it works.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
@@ -31,7 +33,9 @@ struct ShrinkWelcome: View {
 
 struct ShrinkIllustration: View {
     var body: some View {
-        ShrinkHeroArtwork()
+        // The shorter artwork on the two screens that open a flow: a picture is a mood, and on these
+        // screens the control the user came for was landing below the fold under a 300-point one.
+        ShrinkHeroArtwork(height: ShrinkStyle.heroHeight)
     }
 }
 
@@ -78,12 +82,12 @@ struct ShrinkProgress: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             ShrinkEyebrow(title: stage == .saving ? "Almost yours" : "Original protected", symbol: "checkmark.shield")
             Text(title).font(ShrinkStyle.headline).tracking(-1)
                 .fixedSize(horizontal: false, vertical: true).accessibilityAddTraits(.isHeader)
             Text(detail).font(.body).foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkProgressOrb(progress: cancelling ? nil : progress, label: title)
                 if ![.waitingForPermission, .choosing, .saving].contains(stage) {
                     Divider()
@@ -94,7 +98,7 @@ struct ShrinkProgress: View {
                     }
                 }
             }
-            .padding(24).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
             if stage != .saving {
                 ShrinkNotice(symbol: "iphone", title: "Stay here for a moment",
                              detail: "Keep this app open and your iPhone unlocked. Leaving or locking cancels processing.")
@@ -136,7 +140,7 @@ struct ShrinkResult: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             ShrinkEyebrow(title: saved ? "Saved to Photos" : "Copy checked", symbol: saved ? "checkmark.circle.fill" : "checkmark.shield")
             VStack(alignment: .leading, spacing: 10) {
                 Text(saved ? "All set.\nA lighter copy is yours." : (savings.isSmaller ? "Your video.\nA little lighter." : "This one didn’t get smaller."))
@@ -145,7 +149,7 @@ struct ShrinkResult: View {
                 Text(saved ? "Your new copy is in Photos. Your original is right where you left it." : (savings.isSmaller ? "Your copy is ready. Give it a look before saving." : "This export didn’t get smaller, so saving is turned off. Try another video."))
                     .font(.body).foregroundStyle(.secondary)
             }
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 if savings.isSmaller, let percentage = savings.percentage {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(percentage / 100, format: .percent.precision(.fractionLength(1)))
@@ -165,7 +169,7 @@ struct ShrinkResult: View {
                     comparisonRow("New copy", bytes: output.bytes, accent: true)
                 }
             }
-            .padding(24).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
             Text("Your original is still stored. Keeping both copies uses more space; no iCloud storage has been freed.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
@@ -197,7 +201,7 @@ struct ShrinkRecovery: View {
     let failed: Bool
     let message: String?
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             Image(systemName: failed ? "exclamationmark.circle" : "pause.circle")
                 .font(.system(size: 48, weight: .light)).foregroundStyle(ShrinkStyle.accent)
                 .accessibilityHidden(true)

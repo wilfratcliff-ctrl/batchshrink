@@ -391,6 +391,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 26 | see below | The Originals sheet checked against the code and found honest, and the first audit of the launch path: the advisories a user has to see are no longer buried, and the shell says something rather than nothing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 | 27 | see below | The launch label now reaches the screen before the restore that blocks the runloop, the uncertain-original advisory says what the app has decided, and the quick look speaks for itself when Photos cannot hand a video over to play | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 406 tests, none executed |
 | 28 | see below | Both previews now say what is happening, and the test suite that will be the only gate in October had four cases repaired that could not fail or pinned the wrong thing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 410 tests, none executed |
+| 29 | see below | A visual pass: one shared rhythm, a shorter hero, and one fewer card on each screen that opens a flow | local gates PASS; **CI blocked** | 410 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -1574,6 +1575,46 @@ durability boundaries, the eight-subset overflow hint - is what not to re-walk. 
 repairs above were possible without executing anything: each is a case that *had* been asserting a
 value, so replacing the assertion with the one its name promised is a source edit whose meaning can be
 read.
+
+### Round 29 — the visual pass
+
+Rounds 20 to 28 were mostly about what the app *says*, and saying more of it: missing states, named
+work, honest sentences. This round is about what it looks like, because a screen that has been told
+the truth in five separate paragraphs can still read as noise.
+
+**One rhythm, named.** The design system had no spacing tokens at all, so the same three roles were
+written as whatever number the screen's author had in mind: card padding came out as 14, 18, 20, 22 and
+24 across the app, and the gap between blocks as 18, 20, 22 and 24. On a phone that reads as noise
+before it reads as anything else - the eye notices two cards that do not line up long before it notices
+either card alone. `ShrinkStyle` now carries `gutter`, `sectionSpacing` and `cardPadding`, and every
+card and every screen-level stack in both flows uses them. The values are the ones the app already used
+most, so the change is a straightening rather than a restyle, and a screen added later lands on the
+grid without anyone having to remember it.
+
+**The two screens that open a flow stop leading with a picture.** `ShrinkHeroArtwork` was a fixed 300
+points everywhere, and on the start screen and the one-video welcome that put the only control that
+matters below the fold on an ordinary phone. It now takes a height, sizes its own circles from the
+*smaller* of the two dimensions so a shorter frame is a smaller picture rather than a cropped one, and
+the two flow-opening screens pass `ShrinkStyle.heroHeight` (200). The introduction, where the artwork
+*is* the page, keeps the full size.
+
+**And each of them lost a card that repeated the sentence above it.** The start screen said its promise
+in the body line and again in a card under the picture ("Start with your video library" / "See sizes
+and potential savings..."), under a heading that named the library the control below already names. The
+one-video welcome had a notice card whose only new fact was "Your original stays untouched", which is
+now the second half of its body line - still said, once. Two screens whose whole job is one tap are now
+eyebrow, headline, one sentence, picture, action.
+
+**What this changes in the record.** The launch audit's `LP3` arithmetic - the unreadable-record notice
+was about 850 points down the start screen - is now stale in the app's favour: the card is gone and the
+hero is a third shorter, so the notice sits higher still. The offset was always described as something
+a render settles, and it still is.
+
+Validation, on Windows and none of it a renderer: `npm run validate:native` PASS (38 app files, 410
+XCTest cases present), the call-site checker PASS over 52 files, 1,246 declarations and 8,136 call
+sites with 0 findings, and the pod mirror verified. **None of the visual result can be seen from this
+machine** - there is no simulator and no renderer here - so the rhythm, the hero height and the two
+removed cards are judgements from the source and from what the audits measured, not from a screenshot.
 
 **An independent read of the round found four things, and three of them were in the round's own new
 code.** The first was the class the round had just fixed, one state further in: while the quick look

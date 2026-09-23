@@ -10,14 +10,18 @@ struct BatchStartScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: "A little room for more", symbol: "sparkle")
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Less weight.\nMore memories.")
                         .font(ShrinkStyle.headline).tracking(-1.2)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                    Text("Find the videos taking up space. Make room for whatever comes next.")
+                    // The card that used to sit under the artwork said most of this again, in its own
+                    // box, under a heading that named the library the control below already names. On
+                    // a screen whose whole job is one tap, that was a second telling of the same
+                    // promise - so it is said once, here, and the picture and the control move up.
+                    Text("Find the videos taking up space, see what you would save, and shrink the ones you choose.")
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -45,22 +49,6 @@ struct BatchStartScreen: View {
                     }
                 }
                 ShrinkIllustration()
-                HStack(alignment: .top, spacing: 16) {
-                    // Decorative: the heading beside it already names the card.
-                    Image(systemName: "square.stack.3d.up.fill")
-                        .font(.title2).foregroundStyle(ShrinkStyle.lilac)
-                        .frame(width: 44, height: 44)
-                        .background(ShrinkStyle.lilac.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
-                        .accessibilityHidden(true)
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text("Start with your video library").font(.headline)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("See sizes and potential savings before you choose what to shrink.")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(22).frame(maxWidth: .infinity, alignment: .leading).shrinkCard()
                 DeletionRow(settings: batch.settings, open: openDeletion)
                 Text(batch.settings.deletionMode.deletesOriginals
                      ? "Deleting is on. A copy is saved and checked first, then the original goes."
@@ -68,7 +56,7 @@ struct BatchStartScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -123,7 +111,7 @@ struct BatchScanningScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: "No originals download", symbol: "icloud.slash")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(heading)
@@ -143,11 +131,11 @@ struct BatchScanningScreen: View {
                         .monospacedDigit()
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                .padding(24).shrinkCard()
+                .padding(ShrinkStyle.cardPadding).shrinkCard()
                 Text("Keep this open while it reads.").font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -258,7 +246,7 @@ struct BatchSummaryScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: "Library summary", symbol: "list.bullet.rectangle")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(headline)
@@ -288,7 +276,7 @@ struct BatchSummaryScreen: View {
                 QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -360,7 +348,7 @@ struct BatchSummaryScreen: View {
     }
 
     private func statsCard(result: LibraryScanResult, estimate: SavingsEstimate) -> some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             if !estimate.hasNumbers {
                 ShrinkStat(value: "No sizes yet", label: "savings can’t be estimated",
                            detail: "Photos reported no original size for these videos.")
@@ -406,7 +394,7 @@ struct BatchSummaryScreen: View {
                 .font(.footnote)
             }
         }
-        .padding(24).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
         // The estimate restates itself when the size changes. Reduce Motion swaps the figures
         // outright, which is the whole of what this animation carries.
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: batch.settings.resolution)
@@ -539,7 +527,7 @@ struct BatchSelectionScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 700)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 24)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 24)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -974,7 +962,7 @@ struct BatchProcessingScreen: View {
 
     private var content: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 22) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: Self.eyebrow(mode: batch.effectiveDeletionMode,
                                                   pausing: batch.isStopping),
                               symbol: "checkmark.shield")
@@ -1004,7 +992,7 @@ struct BatchProcessingScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
     }
@@ -1076,7 +1064,7 @@ struct BatchProcessingScreen: View {
         // in the quality sheet, in the card that carries the app's only time estimate.
         .accessibilityElement(children: .combine)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
     }
 
     private var currentCard: some View {
@@ -1119,7 +1107,7 @@ struct BatchProcessingScreen: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
     }
 
     private func detail(_ asset: LibraryAsset) -> String {
@@ -1150,7 +1138,7 @@ struct BatchProcessingScreen: View {
                 .font(.footnote).foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(24).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
         .accessibilityElement(children: .combine)
         // The running total counts up as copies finish. Reduce Motion shows each new figure with
         // no count, and the combined element reads the value either way.
@@ -1172,7 +1160,7 @@ struct BatchProcessingScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
         }
     }
 }
@@ -1436,7 +1424,7 @@ struct BatchPausedScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: "Paused", symbol: "pause.circle")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(Self.pauseHeadline(deletion: batch.deletionReport))
@@ -1459,7 +1447,7 @@ struct BatchPausedScreen: View {
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(24).shrinkCard()
+                .padding(ShrinkStyle.cardPadding).shrinkCard()
                 if batch.restoredRun {
                     Text("Picked up where you left off.")
                         .font(.footnote).foregroundStyle(.secondary)
@@ -1501,7 +1489,7 @@ struct BatchPausedScreen: View {
                         }
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(20).shrinkCard()
+                    .padding(ShrinkStyle.cardPadding).shrinkCard()
                 }
                 if let warning = batch.queueWarning {
                     // The same notice, under the same title, that the start, summary, selection,
@@ -1524,7 +1512,7 @@ struct BatchPausedScreen: View {
                                  context: "Taken out of this run before it started.")
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -1552,7 +1540,7 @@ struct BatchFinishedScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 ShrinkEyebrow(title: "Finished", symbol: "checkmark.seal")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(headline)
@@ -1590,7 +1578,7 @@ struct BatchFinishedScreen: View {
                 }
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -1833,7 +1821,7 @@ struct BatchFinishedScreen: View {
     }
 
     private var totalsCard: some View {
-        VStack(alignment: .leading, spacing: 22) {
+        VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
             if let savings = batch.summary.measuredSavings, savings.isSmaller {
                 Label("A LITTLE LIGHTER", systemImage: "checkmark.circle.fill")
                     .font(.caption.weight(.semibold)).tracking(1.5)
@@ -1847,7 +1835,7 @@ struct BatchFinishedScreen: View {
                            detail: "originals were left as they were")
             }
         }
-        .padding(24).shrinkCard()
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
     }
 
     @ViewBuilder private var failures: some View {
@@ -1871,7 +1859,7 @@ struct BatchFinishedScreen: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(24).shrinkCard()
+            .padding(ShrinkStyle.cardPadding).shrinkCard()
         }
     }
 }
@@ -1885,7 +1873,7 @@ struct BatchRecoveryScreen: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
+            VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 Image(systemName: "exclamationmark.circle")
                     .font(.system(size: 48, weight: .light))
                     .foregroundStyle(ShrinkStyle.accent)
@@ -1911,7 +1899,7 @@ struct BatchRecoveryScreen: View {
                 QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
+            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
