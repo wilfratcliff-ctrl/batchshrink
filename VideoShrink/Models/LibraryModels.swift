@@ -25,6 +25,19 @@ struct LibraryAsset: Identifiable, Equatable, Sendable {
                      bytes: bytes, unsupportedReason: unsupportedReason)
     }
 
+    /// The same video, refused for a reason this app read from the media itself.
+    ///
+    /// The scan can decide most reasons from library metadata, but a codec subtype and a colour
+    /// transfer function appear in no PhotoKit listing. When the on-device pass reads them from an
+    /// original that is already on this iPhone, this is how the video is refused while the library
+    /// is being listed instead of part-way through a run. The reason is always `AssetRules`' own
+    /// sentence, so the video reads the same wherever it is refused.
+    func refusing(_ reason: String) -> LibraryAsset {
+        LibraryAsset(id: id, creationDate: creationDate, duration: duration,
+                     pixelWidth: pixelWidth, pixelHeight: pixelHeight,
+                     bytes: bytes, unsupportedReason: reason)
+    }
+
     func savings(settings: TranscodeSettings, measured: [CopyMeasurement]) -> AssetSavings? {
         guard let bytes, isEligible, duration > 0 else { return nil }
         let effective = settings.effectiveResolution(sourceLongEdge: longEdge)
@@ -121,11 +134,6 @@ struct AssetSavings: Equatable, Sendable {
 
     /// Only true when the copy is smaller even at the top of the band.
     var likelyShrinks: Bool { conservativeBytes > 0 }
-
-    static func + (lhs: AssetSavings, rhs: AssetSavings) -> AssetSavings {
-        AssetSavings(conservativeBytes: lhs.conservativeBytes + rhs.conservativeBytes,
-                     optimisticBytes: lhs.optimisticBytes + rhs.optimisticBytes)
-    }
 }
 
 /// What one scan or selection could say about savings. Never a promise: it covers only the
@@ -229,8 +237,14 @@ enum LibrarySizeSource: Equatable, Sendable {
 
 struct LibraryScanProgress: Equatable, Sendable {
     enum Phase: Equatable, Sendable {
+        /// Reading library metadata. Nothing here asks for media, so nothing here can download.
         case listing
+        /// Measuring the originals already on this iPhone, on a system that reports no size.
         case measuring
+        /// Reading the codec and colour tags of the originals already on this iPhone, on a system
+        /// that does report sizes. Nothing is measured here, so calling it measuring would be a
+        /// claim this pass cannot make.
+        case inspectingFormats
     }
 
     let phase: Phase
@@ -246,6 +260,17 @@ struct LibraryScanResult: Equatable, Sendable {
     let unknownSizeCount: Int
     let sizeSource: LibrarySizeSource
     let measuredOnDeviceCount: Int
+    /// Videos this scan read and refused on its own, with the reason, newest first.
+    ///
+    /// They are deliberately not in `assets`: everything in `assets` can be chosen and run, and a
+    /// video this app has read and refused cannot be. They are carried here rather than only
+    /// counted so the library screen can name them, because a row that says why is better than a
+    /// video that quietly disappears. They are counted in `unsupportedCount`, so the summary's
+    /// totals still add up.
+    ///
+    /// Only the on-device pass fills this: a metadata-only refresh cannot read a format, so a
+    /// refresh carries the ones already read instead of claiming to know them again.
+    var refusedAssets: [LibraryAsset] = []
 
     func estimate(settings: TranscodeSettings, measured: [CopyMeasurement]) -> SavingsEstimate {
         SavingsEstimate.make(assets: assets, settings: settings, measured: measured)
@@ -344,6 +369,11 @@ extension LibraryScanResult {
         let previousAssets = previous?.assets ?? []
         let previousByID = Dictionary(previousAssets.map { ($0.id, $0) },
                                      uniquingKeysWith: { first, _ in first })
+        // A format this app read on the device is part of what it knows about a video, so a video
+        // refused for one is a video whose Photos metadata this refresh still has to compare.
+        let previouslyRefused = Dictionary((previous?.refusedAssets ?? []).map { ($0.id, $0) },
+                                           uniquingKeysWith: { first, _ in first })
+        let knownByID = previousByID.merging(previouslyRefused) { first, _ in first }
         let listedIDs = Set(fresh.assets.map(\.id))
 
         // A job already running keeps its identity even when Photos stops listing the original.
@@ -352,43 +382,67 @@ extension LibraryScanResult {
         // Change is judged on Photos metadata, never on the measured size: that size lives only
         // in this app, and a refresh never takes a new one.
         let changed = Set(fresh.assets.compactMap { asset -> String? in
-            guard let old = previousByID[asset.id] else { return nil }
+            guard let old = knownByID[asset.id] else { return nil }
             return Self.differsInPhotosMetadata(asset, old) ? asset.id : nil
         })
 
-        let assets = fresh.assets.map { asset -> LibraryAsset in
+        // A format this app read on the device is still this app's best answer for this original,
+        // and a metadata-only refresh cannot read it again. The refusal is carried for a video
+        // Photos still lists and whose Photos metadata has not changed underneath it. A video whose
+        // metadata did change is treated as a video this app has not read: it goes back in the
+        // list as an ordinary candidate rather than being refused on a reading that no longer
+        // describes it.
+        let stillRefused = fresh.assets.compactMap { asset -> LibraryAsset? in
+            guard let refusal = previouslyRefused[asset.id], !changed.contains(asset.id) else {
+                return nil
+            }
+            return refusal.withBytes(refusal.bytes ?? asset.bytes)
+        }
+        let refusedIDs = Set(stillRefused.map(\.id))
+
+        let assets = fresh.assets.filter { !refusedIDs.contains($0.id) }.map { asset -> LibraryAsset in
             guard asset.bytes == nil, !changed.contains(asset.id),
                   let measured = previousByID[asset.id]?.bytes else { return asset }
             return asset.withBytes(measured)
         } + carried
 
-        let present = Set(assets.map(\.id))
-        let removed = Set(previousAssets.map(\.id)).union(selection).subtracting(present)
+        // A refused video Photos still lists has not left the library, so it is present even though
+        // it is not one of the videos a run can pick.
+        let present = Set(assets.map(\.id)).union(refusedIDs)
+        // A video this app had refused and Photos no longer lists has still left the library, and
+        // saying so is what keeps this app's idea of the library honest about it.
+        let removed = Set(previousAssets.map(\.id)).union(previouslyRefused.keys)
+            .union(selection).subtracting(present)
         // A refresh cannot measure on device, so a size source the app already earned stands.
         let keepsMeasuredSizes = previous?.sizeSource == .measuredOnDevice
 
         return LibraryReconciliation(
             result: LibraryScanResult(assets: assets,
                                       videoCount: fresh.videoCount,
-                                      unsupportedCount: fresh.unsupportedCount,
+                                      unsupportedCount: fresh.unsupportedCount + stillRefused.count,
                                       unknownSizeCount: assets.filter { $0.bytes == nil }.count,
                                       sizeSource: keepsMeasuredSizes ? .measuredOnDevice : fresh.sizeSource,
                                       measuredOnDeviceCount: keepsMeasuredSizes
                                           ? (previous?.measuredOnDeviceCount ?? 0)
-                                          : fresh.measuredOnDeviceCount),
+                                          : fresh.measuredOnDeviceCount,
+                                      refusedAssets: stillRefused),
             selection: selection.intersection(present),
             removedIdentifiers: removed.sorted(),
             changedIdentifiers: changed.sorted(),
             vanishedRunningIdentifiers: carried.map(\.id).sorted())
     }
 
-    /// True when two entries describe different things in Photos. The measured size is not part
-    /// of this: only this app knows it, and losing it is not a change in Photos.
+    /// True when two entries describe different things in Photos.
+    ///
+    /// Only what Photos itself reports is compared. The measured size is not part of this: only
+    /// this app knows it, and losing it is not a change in Photos. Neither is the refusal reason:
+    /// HDR and ProRes are read from the media rather than reported by any listing, so the same
+    /// video listed plainly and the same video listed with a reason this app read are the same
+    /// video, and comparing the reason would make every refused video look changed to itself.
     private static func differsInPhotosMetadata(_ asset: LibraryAsset, _ other: LibraryAsset) -> Bool {
         asset.creationDate != other.creationDate
             || asset.duration != other.duration
             || asset.pixelWidth != other.pixelWidth
             || asset.pixelHeight != other.pixelHeight
-            || asset.unsupportedReason != other.unsupportedReason
     }
 }

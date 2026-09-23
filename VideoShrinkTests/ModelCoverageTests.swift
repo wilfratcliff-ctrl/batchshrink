@@ -216,10 +216,10 @@ import AVFoundation
         XCTAssertEqual(reversed.basis, forward.basis)
     }
 
-    func testSavingsAddUpForAWholeSelection() {
-        let first = AssetSavings(conservativeBytes: 10, optimisticBytes: 20)
-        let second = AssetSavings(conservativeBytes: 5, optimisticBytes: 7)
-        XCTAssertEqual(first + second, AssetSavings(conservativeBytes: 15, optimisticBytes: 27))
+    /// The addition operator this once also covered was removed as dead code: the app totals a
+    /// selection by accumulating two fields inside `SavingsEstimate.make`, not by adding
+    /// `AssetSavings` values. What is still worth pinning is the rule below, so it survives here.
+    func testASavingOnlyCountsWhenTheConservativeEndShrinks() {
         XCTAssertTrue(AssetSavings(conservativeBytes: 1, optimisticBytes: 1).likelyShrinks)
         XCTAssertFalse(AssetSavings(conservativeBytes: 0, optimisticBytes: 400).likelyShrinks)
     }

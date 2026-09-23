@@ -64,6 +64,10 @@ struct DeletionResult: Equatable, Sendable {
                 progress(fraction)
             }
         }
+        // The isolation is named rather than left to the default. Naming it is what selects the
+        // current `withTaskCancellationHandler(operation:onCancel:isolation:)` and keeps the
+        // operation on the main actor this class is isolated to, where `pending` and `requestID`
+        // live; `#isolation` is the same value the parameter would have defaulted to.
         return try await withTaskCancellationHandler(operation: {
             try await withCheckedThrowingContinuation { continuation in
                 pending = continuation
@@ -93,7 +97,7 @@ struct DeletionResult: Equatable, Sendable {
                 guard self?.token == operation else { return }
                 self?.cancelRetrieval()
             }
-        })
+        }, isolation: #isolation)
     }
 
     private func finish(_ result: Result<RetrievedVideo, Error>) {

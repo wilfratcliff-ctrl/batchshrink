@@ -471,6 +471,33 @@ import AVFoundation
         XCTAssertNotNil(batch.queueWarning)
     }
 
+    // MARK: - What a run may claim about where it came from
+
+    func testANewRunDoesNotClaimToHaveBeenPickedUpFromDisk() async {
+        // A stored queue from an earlier launch, which is the one thing the flag stands for.
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("a", .saved(originalBytes: 1_000, copyBytes: 600))])
+        let batch = fixture.makeBatch()
+        XCTAssertTrue(batch.restoredRun)
+        XCTAssertEqual(batch.phase, .finished)
+
+        // The user leaves that run behind and starts a new batch from a fresh scan of the library.
+        await scan(fixture, batch)
+        XCTAssertFalse(batch.restoredRun)
+        batch.beginSelecting()
+        batch.selectAll()
+        batch.start()
+        await eventually { batch.phase != .processing }
+
+        // None of this run was read back from disk, so nothing about it may say that it was: the
+        // paused screen draws "Picked up where you left off." from this flag alone.
+        XCTAssertEqual(batch.summary.savedCount, 1)
+        XCTAssertFalse(batch.restoredRun)
+    }
+
     private func item(_ id: String, _ state: BatchQueueRecord.State) -> BatchQueueRecord.Item {
         BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
                               pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000, state: state)

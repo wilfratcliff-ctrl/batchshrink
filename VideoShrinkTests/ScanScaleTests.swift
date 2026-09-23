@@ -166,6 +166,237 @@ import Photos
         XCTAssertEqual(read, 32)
     }
 
+    // MARK: - The bounded on-device pass
+
+    // The pass reads originals that are already on the iPhone, so none of this needs a Photos
+    // library: the loop is driven through the seam that exists for exactly that reason, as the
+    // listing walk is. What these tests cannot prove, and what still needs a device, is what
+    // PhotoKit hands back for a real library.
+
+    func testAVideoThePassReadAndRefusedComesOutOfTheListWithTheRulesOwnWords() async throws {
+        let service = PhotoLibraryScanService()
+
+        let outcome = try await service.classifyOnDevice(
+            [scanScaleAsset("hdr"), scanScaleAsset("ordinary")],
+            phase: .inspectingFormats,
+            progress: { _ in },
+            probe: { identifier in
+                identifier == "hdr"
+                    ? PhotoLibraryScanService.OnDeviceFinding(refusal: scanScaleHDRReason)
+                    : nil
+            })
+
+        // The video the pass read and refused cannot be chosen, because everything the list offers
+        // can be run and this one cannot.
+        XCTAssertEqual(outcome.assets.map(\.id), ["ordinary"])
+        // It is carried out of the pass all the same, so the library screen can say why instead of
+        // the video quietly disappearing.
+        XCTAssertEqual(outcome.refused.map(\.id), ["hdr"])
+        // The words come from the rules and not from this test, so they cannot drift from what the
+        // pipeline says about the same video (EligibilityTests pins the sentence itself).
+        XCTAssertEqual(outcome.refused.first?.unsupportedReason, scanScaleHDRReason)
+        XCTAssertFalse(outcome.refused.first?.isEligible ?? true)
+        XCTAssertEqual(outcome.measured, 0)
+    }
+
+    func testAPassThatCouldNotReadAVideoLeavesItExactlyAsTheListingDescribedIt() async throws {
+        // The honest rule. A video whose original is in iCloud, or whose header could not be
+        // opened, is never refused here: it stays a candidate and is refused later in a run on the
+        // media itself, exactly as it was before this pass existed.
+        let service = PhotoLibraryScanService()
+        let inTheCloud = scanScaleAsset("in-the-cloud")
+        let unreadable = scanScaleAsset("unreadable")
+
+        let outcome = try await service.classifyOnDevice(
+            [inTheCloud, unreadable],
+            phase: .inspectingFormats,
+            progress: { _ in },
+            probe: { identifier in
+                // Nothing came back for the first one, and nothing decidable came back for the
+                // second: a file that was read but names no refusal.
+                identifier == "unreadable" ? PhotoLibraryScanService.OnDeviceFinding() : nil
+            })
+
+        XCTAssertEqual(outcome.assets, [inTheCloud, unreadable])
+        XCTAssertTrue(outcome.refused.isEmpty)
+        XCTAssertEqual(outcome.measured, 0)
+    }
+
+    func testThePassMeasuresOnlyTheSizesPhotosDidNotReport() async throws {
+        // A size Photos reported is not this app's to replace, and a size this pass takes is
+        // reported as measured, which is what tells the summary where its numbers came from.
+        let service = PhotoLibraryScanService()
+        let reported = scanScaleAsset("reported", bytes: 999)
+        let unmeasured = scanScaleAsset("unmeasured", bytes: nil)
+
+        let outcome = try await service.classifyOnDevice(
+            [reported, unmeasured],
+            phase: .measuring,
+            progress: { _ in },
+            probe: { _ in PhotoLibraryScanService.OnDeviceFinding(bytes: 4_000) })
+
+        XCTAssertEqual(outcome.assets.first?.bytes, 999)
+        XCTAssertEqual(outcome.assets.last?.bytes, 4_000)
+        XCTAssertEqual(outcome.measured, 1)
+    }
+
+    func testThePassStopsAtItsBoundAndLeavesTheRestUnknown() async throws {
+        // A library bigger than the bound cannot turn a scan into an unbounded wait. The videos
+        // past the bound keep the listing's own answer, which is never a refusal on a reading this
+        // app did not take.
+        let service = PhotoLibraryScanService()
+        let assets = (0..<(PhotoLibraryScanService.onDeviceProbeLimit + 25))
+            .map { scanScaleAsset("video-\($0)") }
+        var read: [String] = []
+
+        let outcome = try await service.classifyOnDevice(
+            assets,
+            phase: .inspectingFormats,
+            progress: { _ in },
+            probe: { identifier in
+                read.append(identifier)
+                return nil
+            })
+
+        XCTAssertEqual(read.count, PhotoLibraryScanService.onDeviceProbeLimit)
+        XCTAssertEqual(read.first, "video-0")
+        XCTAssertEqual(read.last, "video-\(PhotoLibraryScanService.onDeviceProbeLimit - 1)")
+        XCTAssertEqual(outcome.assets, assets)
+        XCTAssertTrue(outcome.refused.isEmpty)
+    }
+
+    func testThePassStopsWithinOneVideoOfTheStopButton() async throws {
+        // The same constraint the listing walk has: one video is read at a time and the stop switch
+        // is checked before each one, so stopping never waits for the rest of a large library.
+        let service = PhotoLibraryScanService()
+        var read = 0
+
+        do {
+            _ = try await service.classifyOnDevice(
+                (0..<10_000).map { scanScaleAsset("video-\($0)") },
+                phase: .inspectingFormats,
+                progress: { update in
+                    // The user taps Stop on the scanning screen.
+                    if update.scanned == 32 { service.cancel() }
+                },
+                probe: { _ in
+                    read += 1
+                    return nil
+                })
+            XCTFail("A stopped pass must not report a library")
+        } catch {
+            XCTAssertEqual(PipelineError.normalize(error, fallback: .libraryScan), .cancelled)
+        }
+
+        XCTAssertEqual(read, 32)
+    }
+
+    func testThePassReportsThePhaseItWasGivenAndItsOwnTotal() async throws {
+        // The scanning screen reads the phase to choose its wording, so the pass says which
+        // question it is answering: measuring sizes where Photos reports none, reading formats
+        // where it does.
+        let service = PhotoLibraryScanService()
+        var updates: [LibraryScanProgress] = []
+
+        _ = try await service.classifyOnDevice(
+            [scanScaleAsset("a", bytes: nil), scanScaleAsset("b", bytes: nil)],
+            phase: .inspectingFormats,
+            progress: { updates.append($0) },
+            probe: { _ in PhotoLibraryScanService.OnDeviceFinding(bytes: 10) })
+
+        XCTAssertEqual(updates.first,
+                       LibraryScanProgress(phase: .inspectingFormats, scanned: 0, total: 2))
+        XCTAssertEqual(updates.last,
+                       LibraryScanProgress(phase: .inspectingFormats, scanned: 2, total: 2))
+        XCTAssertTrue(updates.allSatisfy { $0.scanned <= $0.total })
+    }
+
+    func testAPassWithNothingToReadReportsNothingAtAll() async throws {
+        // An empty library must not start a phase the screen would draw a progress bar for.
+        let service = PhotoLibraryScanService()
+        var updates: [LibraryScanProgress] = []
+        var read = 0
+
+        let outcome = try await service.classifyOnDevice(
+            [],
+            phase: .inspectingFormats,
+            progress: { updates.append($0) },
+            probe: { _ in
+                read += 1
+                return nil
+            })
+
+        XCTAssertTrue(updates.isEmpty)
+        XCTAssertEqual(read, 0)
+        XCTAssertTrue(outcome.assets.isEmpty)
+        XCTAssertTrue(outcome.refused.isEmpty)
+        XCTAssertEqual(outcome.measured, 0)
+    }
+
+    // MARK: - A format read on the device survives a refresh
+
+    func testARefreshKeepsAFormatThisAppReadOnTheDevice() {
+        // A refresh reads library metadata only, so it cannot read a codec again. The format this
+        // app already read stays the answer, and the video stays out of the list while still being
+        // counted, instead of looking ordinary again on the next refresh.
+        let previous = scanScaleListing([scanScaleAsset("ordinary")],
+                                        refused: [scanScaleAsset("hdr", unsupported: scanScaleHDRReason)])
+        let fresh = scanScaleListing([scanScaleAsset("ordinary"), scanScaleAsset("hdr")])
+
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: [], running: [])
+
+        XCTAssertEqual(reconciliation.result.assets.map(\.id), ["ordinary"])
+        XCTAssertEqual(reconciliation.result.refusedAssets.map(\.id), ["hdr"])
+        XCTAssertEqual(reconciliation.result.refusedAssets.first?.unsupportedReason, scanScaleHDRReason)
+        XCTAssertTrue(reconciliation.changedIdentifiers.isEmpty)
+        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
+        // The summary still adds up: the refused video is counted as unsupported.
+        XCTAssertEqual(reconciliation.result.unsupportedCount, 1)
+        XCTAssertEqual(reconciliation.result.videoCount,
+                       reconciliation.result.assets.count + reconciliation.result.unsupportedCount)
+    }
+
+    func testARefreshDropsARefusalForAVideoPhotosHasChanged() {
+        // A video edited in Photos is not the video this app read. It goes back in the list as an
+        // ordinary candidate rather than being refused on a reading that no longer describes it,
+        // and it is reported as changed so the picture drawn from the older version is dropped.
+        let previous = scanScaleListing([], refused: [scanScaleAsset("hdr", unsupported: scanScaleHDRReason)])
+        let fresh = scanScaleListing([scanScaleAsset("hdr", duration: 30)])
+
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: [], running: [])
+
+        XCTAssertEqual(reconciliation.changedIdentifiers, ["hdr"])
+        XCTAssertEqual(reconciliation.result.assets.map(\.id), ["hdr"])
+        XCTAssertTrue(reconciliation.result.refusedAssets.isEmpty)
+        XCTAssertEqual(reconciliation.result.unsupportedCount, 0)
+    }
+
+    func testARefreshDropsARefusalForAVideoPhotosNoLongerLists() {
+        let previous = scanScaleListing([scanScaleAsset("ordinary")],
+                                        refused: [scanScaleAsset("hdr", unsupported: scanScaleHDRReason)])
+        let fresh = scanScaleListing([scanScaleAsset("ordinary")])
+
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: [], running: [])
+
+        XCTAssertEqual(reconciliation.result.assets.map(\.id), ["ordinary"])
+        XCTAssertTrue(reconciliation.result.refusedAssets.isEmpty)
+        XCTAssertTrue(reconciliation.removedIdentifiers.contains("hdr"))
+        XCTAssertEqual(reconciliation.result.unsupportedCount, 0)
+    }
+
+    func testAFormatRefusalSaysTheSameThingWhereverItIsRefused() {
+        // One sentence, one owner. The scan and the pipeline both come back to `AssetRules` for
+        // their words, and this is what stops the two drifting apart.
+        let scanWords = scanScaleHDRReason
+        let pipelineRefusal = VideoVerificationService.unsupportedFormatRefusal(isHDR: true, isProRes: false)
+        XCTAssertEqual(pipelineRefusal, .unsupportedOriginal(reason: scanWords))
+        XCTAssertEqual(pipelineRefusal?.localizedDescription, scanWords)
+        XCTAssertNil(VideoVerificationService.unsupportedFormatRefusal(isHDR: false, isProRes: false))
+    }
+
     // MARK: - A library that changes while the scan is reading it
 
     func testAChangeReportedWhileScanningIsReconciledOnceTheScanLands() async {
@@ -244,19 +475,28 @@ import Photos
 
 // MARK: - Helpers
 
-private func scanScaleAsset(_ id: String, unsupported: String? = nil) -> LibraryAsset {
-    LibraryAsset(id: id, creationDate: Date(timeIntervalSince1970: 1_700_000_000), duration: 120,
-                 pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000,
+private func scanScaleAsset(_ id: String, bytes: Int64? = 3_000_000_000, duration: Double = 120,
+                            unsupported: String? = nil) -> LibraryAsset {
+    LibraryAsset(id: id, creationDate: Date(timeIntervalSince1970: 1_700_000_000), duration: duration,
+                 pixelWidth: 3840, pixelHeight: 2160, bytes: bytes,
                  unsupportedReason: unsupported)
 }
 
-private func scanScaleListing(_ assets: [LibraryAsset]) -> LibraryScanResult {
+private func scanScaleListing(_ assets: [LibraryAsset],
+                              refused: [LibraryAsset] = []) -> LibraryScanResult {
     LibraryScanResult(assets: assets,
-                      videoCount: assets.count,
-                      unsupportedCount: 0,
+                      videoCount: assets.count + refused.count,
+                      unsupportedCount: refused.count,
                       unknownSizeCount: assets.filter { $0.bytes == nil }.count,
                       sizeSource: .reportedByPhotos,
-                      measuredOnDeviceCount: 0)
+                      measuredOnDeviceCount: 0,
+                      refusedAssets: refused)
+}
+
+/// The sentence `AssetRules` writes for a format only the media can decide, so these tests assert
+/// against the rule rather than against a second copy of its words.
+private var scanScaleHDRReason: String {
+    AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false) ?? ""
 }
 
 private func scanScaleEventually(_ predicate: () -> Bool, file: StaticString = #filePath,

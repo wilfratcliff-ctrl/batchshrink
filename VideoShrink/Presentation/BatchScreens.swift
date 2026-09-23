@@ -85,7 +85,7 @@ struct BatchScanningScreen: View {
                         .accessibilityAddTraits(.isHeader)
                     Text(measuring
                          ? "This iOS version doesn’t report original sizes, so BatchShrink is measuring the videos already on your iPhone."
-                         : "Checking sizes and lengths. Nothing downloads.")
+                         : "Checking sizes and lengths. No videos are downloaded.")
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -216,7 +216,7 @@ struct BatchSummaryScreen: View {
                            detail: "Estimated for \(estimate.sizedCount.formatted()) of \(result.assets.count.formatted()) videos")
                 Divider()
                 ShrinkSizeComparison(original: estimate.sizedBytes, copy: estimate.estimatedCopyBytes, estimated: true)
-                Text("Storage is reclaimed after originals are deleted and cleared from Recently Deleted.")
+                Text("Saving copies uses more space. Storage is reclaimed after originals are deleted and cleared from Recently Deleted.")
                     .font(.footnote).foregroundStyle(.secondary)
                 DisclosureGroup("About this estimate") {
                     Text(basisText(estimate)).font(.footnote).foregroundStyle(.secondary)
@@ -241,7 +241,7 @@ struct BatchSummaryScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if result.unsupportedCount > 0 {
-            Text("\(result.unsupportedCount) aren’t supported yet: edited, slow-motion, time-lapse, spatial and Live Photos.")
+            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, and shared or restricted videos. HDR and ProRes can only be found when the app opens a video, so a video you pick can still turn out to be unsupported.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -734,7 +734,8 @@ struct BatchFinishedRow: View {
             switch deletion {
             case .deleted: text += " · original deleted"
             case .skipped: text += " · original kept"
-            case .failed, .uncertain: text += " · original is still here"
+            case .failed: text += " · original is still here"
+            case .uncertain: text += " · original may already be deleted"
             default: break
             }
             return text
@@ -1104,7 +1105,7 @@ struct BatchRecoveryScreen: View {
                 Text(batch.message ?? "BatchShrink couldn’t look through your library just now.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("Nothing was changed. Looking through your library only reads dates, durations and sizes.")
+                Text("Nothing was changed. Looking through your library reads details and sizes; your videos are left alone.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 QueueWarningNotice(warning: batch.queueWarning)

@@ -75,7 +75,7 @@ struct ShrinkOnboarding: View {
                     .font(.subheadline).foregroundStyle(.secondary)
                     .frame(minWidth: 44, minHeight: 44)
                 } else {
-                    Text("Less storage. More life.")
+                    Text("Less weight. More life.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8)
                 }
             }

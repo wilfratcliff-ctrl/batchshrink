@@ -1,21 +1,29 @@
 import Photos
 import AVFoundation
+import CoreMedia
 
 /// Builds the library summary the batch screen works from.
 ///
-/// The scan never downloads an original. Listing uses library metadata, and the optional
-/// on-device size pass asks PhotoKit with network access switched off, so a video that
-/// lives only in iCloud reports no size instead of being fetched. The refresh used to
-/// reconcile a library that changed outside the app is the listing half alone, so it can
-/// never fetch anything either.
+/// The scan never downloads an original. Listing uses library metadata, and the bounded
+/// on-device pass asks PhotoKit with network access switched off, so a video that lives only
+/// in iCloud answers nothing instead of being fetched. The refresh used to reconcile a library
+/// that changed outside the app is the listing half alone, so it can never fetch anything
+/// either.
 @MainActor final class PhotoLibraryScanService: LibraryScanning {
     /// `PHAssetResource.dataSize` is public API from iOS 27. A build toolchain may predate
     /// that SDK, so the documented property is probed at runtime instead of linked.
     private static let dataSizeSelector = NSSelectorFromString("dataSize")
 
-    /// Bounds the on-device pass so a large library cannot turn a scan into an unbounded
-    /// wait. Newest videos, which the summary lists first, are measured first.
-    static let onDeviceSizeLimit = 400
+    /// Bounds the on-device pass so a large library cannot turn a scan into an unbounded wait.
+    /// Newest videos, which the summary lists first, are read first.
+    ///
+    /// The bound matters because this pass is the one place a scan asks PhotoKit for media rather
+    /// than for metadata: one request per video. It is the same bound the size pass has always
+    /// used, and it now covers both questions that one request can answer, so a scan spends at
+    /// most 400 requests on it whatever the library holds. A video past the bound is left exactly
+    /// as the listing described it, and is refused later in a run for the same reason it would
+    /// have been refused here.
+    static let onDeviceProbeLimit = 400
 
     /// How many videos the listing pass reads between two progress updates. The yield beside
     /// each one is what keeps the main actor free for the interface while a large library is
@@ -43,29 +51,36 @@ import AVFoundation
         guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
 
         let listing = try await listEligible(progress: progress, scanOwned: true)
-        var eligible = listing.assets
-        var measured = 0
+        // One bounded pass over the originals already on this iPhone answers the two questions no
+        // PhotoKit listing carries: an original's size on a system that reports none, and an
+        // original's codec and colour tags on every system. A video whose original is in iCloud
+        // cannot answer either, so it is left exactly as the listing described it rather than being
+        // downloaded or guessed at. The phase reported is the one that says what this pass is
+        // mainly doing: measuring sizes where Photos reports none, reading formats where it does.
+        let outcome = try await classifyOnDevice(
+            listing.assets,
+            phase: supportsReportedSize ? .inspectingFormats : .measuring,
+            progress: progress,
+            probe: { await self.findings(for: $0) })
         var sizeSource: LibrarySizeSource = supportsReportedSize ? .reportedByPhotos : .unavailable
-        if !supportsReportedSize {
-            let outcome = try await measureOnDeviceSizes(eligible, progress: progress)
-            eligible = outcome.assets
-            measured = outcome.measured
-            if measured > 0 { sizeSource = .measuredOnDevice }
-        }
+        if outcome.measured > 0 { sizeSource = .measuredOnDevice }
 
-        return LibraryScanResult(assets: eligible,
+        return LibraryScanResult(assets: outcome.assets,
                                  videoCount: listing.videoCount,
-                                 unsupportedCount: listing.unsupported,
-                                 unknownSizeCount: eligible.filter { $0.bytes == nil }.count,
+                                 unsupportedCount: listing.unsupported + outcome.refused.count,
+                                 unknownSizeCount: outcome.assets.filter { $0.bytes == nil }.count,
                                  sizeSource: sizeSource,
-                                 measuredOnDeviceCount: measured)
+                                 measuredOnDeviceCount: outcome.measured,
+                                 refusedAssets: outcome.refused)
     }
 
     /// Re-reads library metadata for a library that changed outside the app.
     ///
     /// This is deliberately not a scan. It never measures a size on device, so it can never ask
-    /// PhotoKit to fetch an original, and it never reports a measurement it did not take. Sizes
-    /// Photos itself reports come along for free.
+    /// PhotoKit to fetch an original, and it never reports a measurement it did not take. It cannot
+    /// read a codec or a colour tag either, for the same reason, so it reports no format refusal of
+    /// its own: `LibraryScanResult.reconcile` carries the ones a scan already read. Sizes Photos
+    /// itself reports come along for free.
     func refreshListing() async throws -> LibraryScanResult {
         // Deliberately leaves `scanCancelled` exactly as it was found. A refresh must never
         // clear a cancel that belongs to a scan; the refresh's own cancellation is its task's,
@@ -220,29 +235,81 @@ import AVFoundation
         return size > 0 ? size : nil
     }
 
-    /// Last-resort size pass for systems that report no size at all. Every request is made
-    /// with network access disabled, so only originals already on this iPhone can answer.
-    private func measureOnDeviceSizes(
-        _ assets: [LibraryAsset],
-        progress: @escaping @MainActor (LibraryScanProgress) -> Void
-    ) async throws -> (assets: [LibraryAsset], measured: Int) {
-        let candidates = assets.filter { $0.bytes == nil }.prefix(Self.onDeviceSizeLimit)
-        guard !candidates.isEmpty else { return (assets, 0) }
-        var measured: [String: Int64] = [:]
-        progress(LibraryScanProgress(phase: .measuring, scanned: 0, total: candidates.count))
-        for (index, candidate) in candidates.enumerated() {
-            try checkCancellation(scanOwned: true)
-            if let bytes = await onDeviceBytes(identifier: candidate.id) { measured[candidate.id] = bytes }
-            progress(LibraryScanProgress(phase: .measuring, scanned: index + 1, total: candidates.count))
-            await Task.yield()
-        }
-        let updated = assets.map { asset in
-            measured[asset.id].map { asset.withBytes($0) } ?? asset
-        }
-        return (updated, measured.count)
+    /// What one on-device read found. Either fact can be absent: a video that could not be read
+    /// at all - because its original is in iCloud, which this pass never downloads, or because its
+    /// header could not be opened - reports neither, and is left exactly as the listing described
+    /// it.
+    struct OnDeviceFinding: Equatable, Sendable {
+        /// The original's size, when this read could take it. Applied only to a video Photos
+        /// reported no size for, because a size Photos reported is not this app's to replace.
+        var bytes: Int64? = nil
+        /// The refusal the media itself earned, in `AssetRules`' own words. Nil unless the codec
+        /// or colour tags were actually read and name a format this app refuses.
+        var refusal: String? = nil
     }
 
-    private func onDeviceBytes(identifier: String) async -> Int64? {
+    /// The bounded on-device pass: what a scan can learn from originals already on this iPhone,
+    /// and the only part of a scan that asks PhotoKit for media rather than for metadata.
+    ///
+    /// PhotoKit and AVFoundation are narrowed to one closure so the loop's behaviour can be driven
+    /// without a Photos library, exactly as the listing walk is. `probe` is what reads a video; the
+    /// real one asks PhotoKit for the local original with network access switched off.
+    ///
+    /// Three rules hold here, and they are the whole reason this pass may refuse anything at all:
+    ///
+    /// - it never refuses a video it could not read. A finding of nil, or a finding that names no
+    ///   refusal, leaves the video in the list to be refused later in a run exactly as before;
+    /// - it only ever adds a reason `AssetRules` wrote, so a video refused here reads like one
+    ///   refused anywhere else;
+    /// - it is capped at `onDeviceProbeLimit` videos, newest first, and checks the stop switch
+    ///   before each one, so a large library cannot make a scan unbounded and a stopped scan stops
+    ///   within one video.
+    func classifyOnDevice(
+        _ assets: [LibraryAsset],
+        phase: LibraryScanProgress.Phase,
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void,
+        probe: (String) async -> OnDeviceFinding?
+    ) async throws -> (assets: [LibraryAsset], refused: [LibraryAsset], measured: Int) {
+        let candidates = Array(assets.prefix(Self.onDeviceProbeLimit))
+        guard !candidates.isEmpty else { return (assets, [], 0) }
+        var measured: [String: Int64] = [:]
+        var refusals: [String: String] = [:]
+        progress(LibraryScanProgress(phase: phase, scanned: 0, total: candidates.count))
+        for (index, candidate) in candidates.enumerated() {
+            try checkCancellation(scanOwned: true)
+            if let finding = await probe(candidate.id) {
+                if candidate.bytes == nil, let bytes = finding.bytes { measured[candidate.id] = bytes }
+                if let refusal = finding.refusal { refusals[candidate.id] = refusal }
+            }
+            progress(LibraryScanProgress(phase: phase, scanned: index + 1, total: candidates.count))
+            await Task.yield()
+        }
+        // A refused video comes out of the list, because everything the list offers can be run and
+        // this one cannot. It is returned separately so the library screen can name it, and so the
+        // summary can count it as unsupported rather than losing it.
+        var refused: [LibraryAsset] = []
+        let updated = assets.compactMap { asset -> LibraryAsset? in
+            if let reason = refusals[asset.id] {
+                refused.append(asset.refusing(reason))
+                return nil
+            }
+            return measured[asset.id].map { asset.withBytes($0) } ?? asset
+        }
+        return (updated, refused, measured.count)
+    }
+
+    /// Reads what one original already on this iPhone can answer, without downloading or decoding
+    /// it.
+    ///
+    /// One PhotoKit request serves both questions, and it is the request this pass has always
+    /// made: the original, fetched with network access switched off, so only a file already on the
+    /// iPhone can answer. A video whose original is in iCloud hands back nothing, which is why it
+    /// stays unknown instead of being fetched or guessed at.
+    ///
+    /// The size is a `stat` on the file PhotoKit handed over. The format comes out of the video
+    /// track's format descriptions, which live in the file's header: reading them seeks and reads
+    /// a few kilobytes, and decodes nothing.
+    private func findings(for identifier: String) async -> OnDeviceFinding? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { return nil }
         let options = PHVideoRequestOptions()
@@ -250,22 +317,57 @@ import AVFoundation
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = false
         // A `.highQualityFormat` video request calls its handler exactly once.
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Int64?, Never>) in
+        let requested = await withCheckedContinuation { (continuation: CheckedContinuation<AVURLAsset?, Never>) in
             // PhotoKit is documented to call this once; the flag makes a double callback harmless
             // rather than a crash, because resuming a continuation twice traps.
             var finished = false
-            manager.requestAVAsset(forVideo: asset, options: options) { requested, _, _ in
+            manager.requestAVAsset(forVideo: asset, options: options) { handed, _, _ in
                 guard !finished else { return }
                 finished = true
-                guard let urlAsset = requested as? AVURLAsset, urlAsset.url.isFileURL else {
+                guard let urlAsset = handed as? AVURLAsset, urlAsset.url.isFileURL else {
                     continuation.resume(returning: nil)
                     return
                 }
-                let values = try? urlAsset.url.resourceValues(forKeys: [.fileSizeKey])
-                let size = values?.fileSize ?? 0
-                continuation.resume(returning: size > 0 ? Int64(size) : nil)
+                continuation.resume(returning: urlAsset)
             }
         }
+        guard let urlAsset = requested else { return nil }
+        var finding = OnDeviceFinding()
+        finding.bytes = Self.fileSize(of: urlAsset.url)
+        finding.refusal = await Self.refusalReadingFormats(of: urlAsset)
+        return finding
+    }
+
+    /// The original's byte size, read from the file PhotoKit handed over. Nil when the size could
+    /// not be read, which leaves the video with no size rather than with a made-up one.
+    private static func fileSize(of url: URL) -> Int64? {
+        guard let values = try? url.resourceValues(forKeys: [.fileSizeKey]),
+              let size = values.fileSize, size > 0 else { return nil }
+        return Int64(size)
+    }
+
+    /// The refusal this video's own codec and colour tags earn, or nil when it is ordinary or its
+    /// format could not be read at all.
+    ///
+    /// Both facts are read from the video track's format descriptions, and both go through the
+    /// same two owners the rest of the app uses: `VideoVerificationService` decides what a format
+    /// description means, and `AssetRules` writes the sentence. That is what makes a video refused
+    /// while the library was being listed read exactly like one refused later in a run, with one
+    /// place still deciding either.
+    ///
+    /// Nothing is refused on a guess. A track that cannot be loaded, a format list that is empty,
+    /// and a transfer function this app cannot name all come back nil, which leaves the video
+    /// eligible and lets the run refuse it on the media itself if that is what it deserves.
+    private static func refusalReadingFormats(of asset: AVURLAsset) async -> String? {
+        guard let tracks = try? await asset.loadTracks(withMediaType: .video),
+              let track = tracks.first,
+              let formats = try? await track.load(.formatDescriptions),
+              !formats.isEmpty else { return nil }
+        let transfer = VideoVerificationService.transferFunction(of: formats)
+        let isProRes = formats.contains {
+            VideoVerificationService.isProRes(subtype: CMFormatDescriptionGetMediaSubType($0))
+        }
+        return AssetRules.unsupportedFormatReason(isHDR: transfer.isHDR, isProRes: isProRes)
     }
 
     /// `Task.isCancelled` stops whichever operation this is. The flag belongs to the scan: a

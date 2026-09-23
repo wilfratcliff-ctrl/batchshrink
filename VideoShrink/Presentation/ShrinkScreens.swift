@@ -57,8 +57,8 @@ struct ShrinkProgress: View {
         case .choosing: return "Choose one video in the Photos picker."
         case .retrieving: return fromCloud ? "Downloading the full original before compression." : "Loading the original from your Photos library."
         case .preparing: return "Checking the video and available space."
-        case .transcoding: return "Creating a smaller HEVC copy on your iPhone."
-        case .verifying: return "Checking playback, duration, orientation and audio tracks."
+        case .transcoding: return "Creating a smaller copy on your iPhone."
+        case .verifying: return "Checking that the copy decodes, and its duration, orientation and audio tracks."
         case .saving: return "Adding a separate video to your Photos library."
         default: return "Your original stays untouched."
         }
@@ -226,7 +226,7 @@ struct ShrinkHelp: View {
                 }
                 Section("Fast answers") {
                     Label("Space comes back 30 days after a delete, when Photos clears Recently Deleted.", systemImage: "clock.arrow.circlepath")
-                    Label("Looking through your library never downloads anything.", systemImage: "icloud.slash")
+                    Label("Looking through your library never downloads your videos. Preview images may come from iCloud.", systemImage: "icloud.slash")
                     Label("Sizes here are estimates. The end of a run shows measured results.", systemImage: "ruler")
                 }
                 Section("A smaller copy, safely") {
@@ -255,7 +255,7 @@ struct ShrinkHelp: View {
                     Text("Size and time estimates are ranges, not measurements. The finished screen reports measured sizes.")
                     Text("Photos doesn’t report an original size for every video, so those are counted but left out of the estimate.")
                     Text("A smaller file isn’t freed storage. Keeping both copies uses more space.")
-                    Text("Edited, slow-motion, time-lapse and spatial videos aren’t supported yet.")
+                    Text("Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, and shared or restricted videos aren't supported yet. HDR and ProRes can only be found when the app opens a video, so a video you pick can still turn out to be unsupported.")
                 }
                 Section("Preferences") {
                     Toggle("Completion haptics", isOn: $completionHaptics)

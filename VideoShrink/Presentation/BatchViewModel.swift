@@ -326,6 +326,9 @@ enum BatchPhase: Equatable {
         // The pass below reads Photos from scratch, so it supersedes any change an earlier report
         // was going to reconcile: what it finds is at least as new as what that report described.
         libraryChangeDuringScan = false
+        // A pass that reads the library from scratch is the beginning of a run of its own, so
+        // nothing this one goes on to do was read back from a stored queue.
+        restoredRun = false
         phase = .scanning
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
@@ -533,6 +536,9 @@ enum BatchPhase: Equatable {
         guard canStart else { return }
         let chosen = selectedAssets
         guard !chosen.isEmpty else { return }
+        // These items come from the selection on screen, not from a stored queue, so the claim
+        // that this run was picked up from disk ends with the run before it.
+        restoredRun = false
         items = chosen.map { BatchItem(asset: $0, state: .pending) }
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode

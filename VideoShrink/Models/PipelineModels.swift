@@ -86,15 +86,6 @@ struct VideoMetadata: Equatable, Sendable {
     var longEdge: Int { max(width, height) }
 }
 
-/// The refusal a format this app cannot preserve gets, carrying the sentence the library steps
-/// already show. `AssetRules` owns the words and this type only carries them, so an HDR or
-/// ProRes original is described the same way wherever it is refused.
-struct UnsupportedOriginalError: Error, LocalizedError, Equatable, Sendable {
-    let reason: String
-
-    var errorDescription: String? { reason }
-}
-
 struct RetrievedVideo {
     // Retain the PhotoKit representation for the lifetime of the export.
     let asset: AVURLAsset
