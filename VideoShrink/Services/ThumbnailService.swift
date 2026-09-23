@@ -10,11 +10,19 @@ import UIKit
 @MainActor final class ThumbnailService {
     static let shared = ThumbnailService()
 
+    /// How many videos the key index below keeps. `NSCache` evicts on its own and cannot be
+    /// enumerated, so an index that only ever grew would end up the size of the library. It is
+    /// deliberately larger than `cache.countLimit` would ever describe, because the cache counts
+    /// images and a video can have one per size drawn.
+    static let trackedIdentifierLimit = 400
+
     private let manager = PHImageManager.default()
     private let cache = NSCache<NSString, UIImage>()
-    /// The cache keys held for each video, per identifier. `NSCache` cannot be enumerated, so
-    /// this is what lets a change reported by Photos drop exactly the stale previews.
+    /// The cache keys held for each video, per identifier, so a change reported by Photos drops
+    /// exactly the stale previews.
     private var keysByIdentifier: [String: Set<NSString>] = [:]
+    /// Every identifier named in `keysByIdentifier`, oldest first, so the index can be bounded.
+    private var trackedIdentifiers: [String] = []
 
     private init() {
         cache.countLimit = 240
@@ -28,13 +36,17 @@ import UIKit
     func invalidate(identifiers: [String]) {
         for identifier in identifiers {
             guard let keys = keysByIdentifier.removeValue(forKey: identifier) else { continue }
+            trackedIdentifiers.removeAll { $0 == identifier }
             for key in keys { cache.removeObject(forKey: key) }
         }
     }
 
     func image(identifier: String, size: CGSize) async -> UIImage? {
         let key = Self.key(identifier, size)
-        if let cached = cache.object(forKey: key) { return cached }
+        if let cached = cache.object(forKey: key) {
+            remember(key, for: identifier)
+            return cached
+        }
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { return nil }
         let options = PHImageRequestOptions()
@@ -55,9 +67,29 @@ import UIKit
         }
         if let image {
             cache.setObject(image, forKey: key)
-            keysByIdentifier[identifier, default: []].insert(key)
+            remember(key, for: identifier)
         }
         return image
+    }
+
+    /// Records one cached key against its video and holds the index to a fixed size.
+    ///
+    /// `NSCache` decides eviction itself and never says which key it dropped, so the index has to
+    /// be bounded here instead. When it is full the oldest video is forgotten and its previews are
+    /// taken out of the cache with it, which keeps the two in step: what the index no longer names
+    /// is not in the cache either, and `invalidate(identifiers:)` stays exact for everything the
+    /// app could still be showing.
+    private func remember(_ key: NSString, for identifier: String) {
+        if keysByIdentifier[identifier] == nil {
+            trackedIdentifiers.append(identifier)
+            if trackedIdentifiers.count > Self.trackedIdentifierLimit {
+                let oldest = trackedIdentifiers.removeFirst()
+                if let keys = keysByIdentifier.removeValue(forKey: oldest) {
+                    for key in keys { cache.removeObject(forKey: key) }
+                }
+            }
+        }
+        keysByIdentifier[identifier, default: []].insert(key)
     }
 
     private static func key(_ identifier: String, _ size: CGSize) -> NSString {

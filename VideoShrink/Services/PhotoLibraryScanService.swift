@@ -109,6 +109,11 @@ import AVFoundation
 
     private func describe(_ asset: PHAsset) -> LibraryAsset {
         let resources = PHAssetResource.assetResources(for: asset)
+        // Cinematic videos carry a documented Photos subtype. HDR and ProRes have no PhotoKit
+        // counterpart at all: `PHAssetMediaSubtype` has no ProRes member, and the current
+        // `PHAsset` has no media characteristic property, so a metadata-only listing cannot
+        // decide either one. They stay false here rather than being guessed, and have to be
+        // decided from the media itself, where the codec and the colour tags are readable.
         let traits = AssetRules.Traits(
             isVideo: asset.mediaType == .video,
             isHighFrameRate: asset.mediaSubtypes.contains(.videoHighFrameRate),
@@ -116,7 +121,9 @@ import AVFoundation
             isSpatial: asset.mediaSubtypes.contains(.spatialMedia),
             hasAdjustmentData: resources.contains { $0.type == .adjustmentData },
             hasFullSizeVideo: resources.contains { $0.type == .fullSizeVideo },
-            hasPairedVideo: resources.contains { $0.type == .pairedVideo })
+            hasPairedVideo: resources.contains { $0.type == .pairedVideo },
+            isCinematic: asset.mediaSubtypes.contains(.videoCinematic),
+            isSharedOrRestricted: isSharedOrRestricted(asset))
         let videoResource = resources.first { $0.type == .video }
         let size = videoResource.flatMap { self.reportedSize($0) }
         return LibraryAsset(id: asset.localIdentifier,
@@ -126,6 +133,16 @@ import AVFoundation
                             pixelHeight: asset.pixelHeight,
                             bytes: size,
                             unsupportedReason: AssetRules.unsupportedReason(traits))
+    }
+
+    /// True for an item Photos says did not come from the user's own library, or will not let
+    /// this app delete. A shared album, a synced file or a restricted asset is one a copy
+    /// cannot replace, so it is refused while the library is being listed instead of failing
+    /// part-way through a run. Both checks read library metadata only.
+    private func isSharedOrRestricted(_ asset: PHAsset) -> Bool {
+        let source = asset.sourceType
+        if source.contains(.typeCloudShared) || source.contains(.typeiTunesSynced) { return true }
+        return !asset.canPerform(.delete)
     }
 
     /// Reads the documented `dataSize` property when the running OS has it. Returns nil on

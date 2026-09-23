@@ -4,6 +4,34 @@ Every entry below is one of three things, and says which: **historical** (a past
 decision), **implemented source** (in the tree, never compiled), or **observed** (it ran, with the
 evidence named). See the status legend in [README.md](../README.md).
 
+## September 23: round 2 and the Mac handoff (implemented source at 65d6a09, never compiled)
+
+This entry records round 2 as it landed at commit `65d6a09`, and the handoff document written for
+the first Mac session. Neither has been compiled or executed.
+
+- Round 2 is in the tree at `65d6a09`: `BatchViewModel` constructs and starts the `LibraryChangeMonitor`
+  and applies a metadata-only reconciliation on each report (N1), `ThumbnailService.invalidate(identifiers:)`
+  plus a `revision` key on `AssetThumbnail` drops stale previews (N2), one `QueueWarningNotice` is drawn
+  on the screens a failed write can leave a run on (N3), the deletion look is refreshed at tap time so
+  the offered list can only shrink (N4), and 13 documents were corrected (P1-4). Round 2 integration
+  wired the thumbnail work, which was built but unreachable, and left `LibraryReconciling` in place as
+  a deliberate workaround (N7, N8).
+- `LibraryReconciling` is still a cast: `BatchViewModel` holds `any LibraryScanning` and does
+  `scanner as? LibraryReconciling`. The real service conforms; the scanner test mocks do not, so the
+  cast yields nil in tests and the reconciliation path is covered by no case.
+- No Swift has been compiled. XCTest cases remain at 145 and zero have executed. Portable checks after
+  round 2: `npm run validate:native` passes (37 app Swift files, 145 XCTest cases present, icon/JSON
+  valid), `npm run typecheck` passes, and `node scripts/sync-native-sources.mjs --check` passes
+  (36 Swift source files and the privacy manifest). Those are pattern scans and a TypeScript check,
+  not a compiler.
+- `docs/MAC_VALIDATION_HANDOFF.md` was written for the first Mac session. It carries the commands to
+  run (`scripts/validate-mac.sh` with `SIMULATOR_UDID` set), a ranked list of the eight things a round
+  said it could not compile-check, a symptom-to-file-to-commit triage table for `10ab65f`, `559f693`
+  and `65d6a09`, what a simulator run cannot prove, and the milestone's definition of done. It claims
+  no result.
+- **NOT RUN**: compilation, XCTest execution, simulator, any build, any device run, deletion against a
+  real library, the queue-failure paths on a device, and the new revalidation lookups.
+
 ## September 23: round 1 reliability work (implemented source at 559f693, never compiled)
 
 This entry records round 1 as it landed at commit `559f693`. Later round 2 work is recorded by the

@@ -54,13 +54,33 @@ protocol VideoVerifying {
 
 @MainActor protocol LibraryScanning {
     func scan(progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> LibraryScanResult
+    /// A fresh listing for a library that changed outside the app. Deliberately not a scan: it
+    /// never measures a size on device, so it can never ask Photos for an original.
+    func refreshListing() async throws -> LibraryScanResult
+    /// A fresh listing folded into the library the app already has in hand, which is the whole
+    /// of what a Photos change means to this app. It is a requirement of the scanner rather
+    /// than a capability declared beside its caller, because a default implementation in an
+    /// extension could only be a full scan, and a change must never start one.
+    func reconcile(previous: LibraryScanResult?,
+                   selection: Set<String>,
+                   running: Set<String>) async throws -> LibraryReconciliation
     func cancel()
 }
 
 /// On-device memory of what this iPhone has already shrunk, plus the copy bitrates those
 /// runs measured. Nothing here leaves the device and no media, name or location is stored.
 @MainActor protocol ShrinkHistoryStoring {
+    /// Originals this iPhone already shrank, which is what the "Previously shrunk" marking
+    /// reads.
     func completedIdentifiers() -> Set<String>
+    /// Local identifiers of the copies this app created in Photos. A copy is a new asset with
+    /// an identifier of its own, so it is kept apart from `completedIdentifiers()`: it is not an
+    /// original that was shrunk, and marking it as one would say something untrue. This set only
+    /// keeps those copies out of a bulk selection; it never hides them from the library, so one
+    /// can still be chosen by hand.
+    func createdCopyIdentifiers() -> Set<String>
     func copyMeasurements() -> [CopyMeasurement]
     func record(identifier: String, measurement: CopyMeasurement?)
+    /// Remembers one copy Photos handed back to this app, bounded like the shrunk originals.
+    func recordCreatedCopy(identifier: String)
 }

@@ -174,7 +174,7 @@ struct BatchSummaryScreen: View {
                         batch.beginSelecting()
                     }
                     .accessibilityIdentifier("chooseBatchVideos")
-                    Button("Select the \(batch.selectableCount) not yet shrunk") {
+                    Button("Select the \(batch.selectableCount) worth shrinking") {
                         batch.beginSelecting()
                         batch.selectAll()
                     }
@@ -386,6 +386,11 @@ struct BatchSelectionScreen: View {
     private func row(_ asset: LibraryAsset) -> some View {
         let isSelected = batch.selection.contains(asset.id)
         let alreadyShrunk = batch.completedIdentifiers.contains(asset.id)
+        // A copy this app made is left out of an automatic selection, so the row has to say why
+        // it is the one thing "Select all" did not tick. It wins over the shrunk label: a copy
+        // that was deliberately run through again is in both sets, and "made by" is the fact
+        // that explains the row.
+        let madeByApp = batch.createdCopyIdentifiers.contains(asset.id)
         let estimate = batch.savings(for: asset)
         return VStack(alignment: .leading, spacing: 0) {
             Button { previewing = asset } label: {
@@ -416,7 +421,9 @@ struct BatchSelectionScreen: View {
                     }
                     Text(asset.creationDate?.formatted(date: .abbreviated, time: .omitted) ?? "Undated video")
                         .font(.caption).foregroundStyle(.secondary)
-                    if alreadyShrunk {
+                    if madeByApp {
+                        Text("Made by BatchShrink").font(.caption).foregroundStyle(ShrinkStyle.lilac)
+                    } else if alreadyShrunk {
                         Text("Previously shrunk").font(.caption).foregroundStyle(ShrinkStyle.lilac)
                     } else if let estimate {
                         Text(estimate.likelyShrinks

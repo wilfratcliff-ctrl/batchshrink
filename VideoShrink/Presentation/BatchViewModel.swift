@@ -38,7 +38,13 @@ enum BatchPhase: Equatable {
     @Published private(set) var limitedAccess = false
     @Published private(set) var estimator = ProcessingEstimator()
     @Published private(set) var measurements: [CopyMeasurement] = []
+    /// Originals this iPhone already shrank, which is what the "previously shrunk" marking reads.
     @Published private(set) var completedIdentifiers: Set<String> = []
+    /// Copies this app created in Photos. They are new assets with identifiers of their own, so
+    /// without this a bulk selection would pick one up and shrink it again. Deliberately not part
+    /// of `completedIdentifiers`: that set marks originals that were already shrunk, and a copy is
+    /// not one. This is only ever a filter over automatic selection, never over the library list.
+    @Published private(set) var createdCopyIdentifiers: Set<String> = []
     @Published private(set) var isStopping = false
     @Published var selection: Set<String> = []
     /// Videos whose Photos metadata changed in the last reconciliation, so a picture drawn from
@@ -62,10 +68,7 @@ enum BatchPhase: Equatable {
     /// Watches Photos for edits made outside the app and for the app coming back to the front,
     /// where access can have changed while it was suspended. Photos reports on its own queue and
     /// the monitor comes back to the main actor before it says anything.
-    private let libraryChanges = LibraryChangeMonitor()
-    /// The scanner's metadata-only half, when the scanner has one, so that noticing a change
-    /// re-lists the library without the on-device size pass.
-    private let libraryReconciler: (any LibraryReconciling)?
+    private let libraryChanges: LibraryChangeMonitor
     /// The refresh in flight, so a newer report replaces an older listing instead of racing it.
     private var libraryRefresh: Task<Void, Never>?
     private var runTask: Task<Void, Never>?
@@ -95,6 +98,9 @@ enum BatchPhase: Equatable {
          history: any ShrinkHistoryStoring,
          queueStore: any BatchQueueStoring,
          screenAwake: any ScreenAwakeControlling,
+         // Only passed to watch something other than the real Photos library, which is how a test
+         // drives a library change without one. Omitted everywhere in the app.
+         libraryChanges: LibraryChangeMonitor? = nil,
          settings: ShrinkSettings) {
         self.photos = photos
         self.scanner = scanner
@@ -104,9 +110,10 @@ enum BatchPhase: Equatable {
         self.history = history
         self.queueStore = queueStore
         self.screenAwake = screenAwake
+        self.libraryChanges = libraryChanges ?? LibraryChangeMonitor()
         self.settings = settings
-        self.libraryReconciler = scanner as? LibraryReconciling
         completedIdentifiers = history.completedIdentifiers()
+        createdCopyIdentifiers = history.createdCopyIdentifiers()
         measurements = history.copyMeasurements()
         cleanWorkspace()
         restoreQueue()
@@ -122,13 +129,20 @@ enum BatchPhase: Equatable {
 
     var eligibleAssets: [LibraryAsset] { scanResult?.assets ?? [] }
     var selectedAssets: [LibraryAsset] { eligibleAssets.filter { selection.contains($0.id) } }
-    /// Videos the bulk shortcuts may pick: everything eligible that this iPhone has not
-    /// already shrunk. Individual rows stay available for a deliberate second run.
-    /// Everything eligible that this iPhone has not already shrunk and whose original is still in
-    /// Photos. Deleting an original takes it out of later selections.
+    /// Videos the bulk shortcuts may pick: everything eligible that this iPhone has not already
+    /// shrunk, that the app did not create itself, and whose original is still in Photos.
+    ///
+    /// This is the seam for automatic selection only. A copy the app made is a new Photos asset
+    /// with an identifier of its own, so to the library it looks like any other video; leaving it
+    /// out here is what stops Select all from shrinking it again to no purpose. It is never taken
+    /// out of `eligibleAssets`, so it stays on screen and can still be ticked by hand, which is
+    /// how a copy is deliberately run through again. Deleting an original takes it out of later
+    /// selections too, by the same rule.
     var selectableAssets: [LibraryAsset] {
         eligibleAssets.filter { asset in
-            !completedIdentifiers.contains(asset.id) && deletionOutcomes[asset.id] != DeletionOutcome.deleted
+            !completedIdentifiers.contains(asset.id)
+                && !createdCopyIdentifiers.contains(asset.id)
+                && deletionOutcomes[asset.id] != DeletionOutcome.deleted
         }
     }
     var selectableCount: Int { selectableAssets.count }
@@ -292,6 +306,7 @@ enum BatchPhase: Equatable {
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
         completedIdentifiers = history.completedIdentifiers()
+        createdCopyIdentifiers = history.createdCopyIdentifiers()
         measurements = history.copyMeasurements()
         runTask = Task { [weak self] in
             guard let self else { return }
@@ -361,15 +376,15 @@ enum BatchPhase: Equatable {
         // A newer report replaces an older listing rather than racing it.
         libraryRefresh?.cancel()
         libraryRefresh = Task { [weak self] in
-            guard let self, let reconciler = self.libraryReconciler else { return }
+            guard let self else { return }
             // Read as late as they can be, because the listing is the part that takes time.
             let previous = self.scanResult
             let selection = self.selection
             let running = LibraryScanResult.runningIdentifiers(in: self.items)
             do {
-                let reconciled = try await reconciler.reconcile(previous: previous,
-                                                                selection: selection,
-                                                                running: running)
+                let reconciled = try await self.scanner.reconcile(previous: previous,
+                                                                  selection: selection,
+                                                                  running: running)
                 guard !Task.isCancelled else { return }
                 self.apply(reconciled)
             } catch {
@@ -672,6 +687,10 @@ enum BatchPhase: Equatable {
                 try requireJournaledCheckpoint(setState(.saving, for: id), step: "saving a copy")
                 currentStage = .saving
                 let created = try await photos.save(videoAt: written, identity: workingIdentity)
+                // Photos already holds this copy, so its identifier is remembered straight away:
+                // the copy is in the library whatever happens to the rest of this step, and the
+                // next bulk selection must leave it alone rather than shrink it a second time.
+                rememberCreatedCopy(created)
                 record(output: output, for: id)
                 // Photos now holds a copy, so the run must not go back on that. When the record of
                 // it cannot be written, the `.saving` entry already on disk is what stops a later
@@ -1004,6 +1023,17 @@ enum BatchPhase: Equatable {
         measurements = history.copyMeasurements()
     }
 
+    /// Writes down the copy Photos just handed back, so a later bulk selection leaves it alone.
+    /// The copy goes into its own set, never into `completedIdentifiers`: that set means "this
+    /// original was shrunk" and drives the marking in the library, while a copy is this app's own
+    /// output. Merging them would mislabel the copy, and keeping them apart is what lets a copy
+    /// stay visible and still be chosen by hand.
+    private func rememberCreatedCopy(_ identifier: String?) {
+        guard let identifier else { return }
+        history.recordCreatedCopy(identifier: identifier)
+        createdCopyIdentifiers.insert(identifier)
+    }
+
     private func removeTemporary(_ url: URL) {
         do { try temporary.remove(url) }
         catch {
@@ -1020,18 +1050,3 @@ enum BatchPhase: Equatable {
         }
     }
 }
-
-/// The scanner's metadata-only half: a fresh listing folded into the library the app already has
-/// in hand, without the on-device size pass.
-///
-/// `LibraryScanning` in `Services/ServiceProtocols.swift` states only the two requirements a
-/// scan needs, and this flow is the only caller of the rest, so the capability is declared here
-/// beside its caller rather than widening that protocol. A scanner that cannot do this simply
-/// leaves a library change unreconciled, which is what happened before this was wired at all.
-@MainActor protocol LibraryReconciling {
-    func reconcile(previous: LibraryScanResult?,
-                   selection: Set<String>,
-                   running: Set<String>) async throws -> LibraryReconciliation
-}
-
-extension PhotoLibraryScanService: LibraryReconciling {}

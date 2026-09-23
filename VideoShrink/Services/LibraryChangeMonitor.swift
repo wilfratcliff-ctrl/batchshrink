@@ -10,6 +10,16 @@ import Combine
 /// to the main actor and reports there. This class only says that something changed. Deciding
 /// what to do about it stays with the caller, and `LibraryScanResult.reconcile` keeps a running
 /// job's identity through the change.
+///
+/// Lifecycle, stated rather than implied (N10): the only owner in the app is `BatchViewModel`,
+/// which constructs exactly one of these, starts it in its initialiser and never calls `stop()`.
+/// Leaving the registrations up is safe because that view model is the app's single long-lived
+/// object (a `@StateObject` in `VideoShrinkApp`), so the monitor's life is the process's life:
+/// it cannot be deallocated early, `start()` is idempotent, and a second monitor is never built
+/// to duplicate the registrations. That reasoning only holds while those facts do. If a second
+/// owner appears, or an owner whose life is shorter than the app's holds one, it must call
+/// `stop()` before it goes away, because a monitor that outlives its owner keeps reporting to a
+/// caller that is no longer there.
 @MainActor final class LibraryChangeMonitor: ObservableObject {
     /// One more than the number of changes reported so far, so a view can refresh on any of them.
     @Published private(set) var revision = 0
@@ -47,8 +57,9 @@ import Combine
     /// True while access covers only the videos the user chose.
     var isLimited: Bool { access.isLimited }
 
-    /// Starts watching Photos and the app returning to the front. Safe to call more than once.
-    /// The owner calls `stop()` when it is done watching.
+    /// Starts watching Photos and the app returning to the front. Safe to call more than once:
+    /// a second call changes nothing. The owner calls `stop()` only if it stops watching before
+    /// the app does, which the app's own owner does not (see the lifecycle note on the type).
     func start() {
         guard !isWatching else { return }
         isWatching = true
@@ -65,6 +76,11 @@ import Combine
     }
 
     /// Stops watching and releases both registrations.
+    ///
+    /// Nothing in the app calls this today, and that is deliberate rather than an oversight: the
+    /// one owner lives as long as the process, so the registrations are meant to last that long.
+    /// It is here for an owner whose life is shorter than the app's, and it is the first thing to
+    /// reach for if a second monitor is ever built.
     func stop() {
         guard isWatching else { return }
         isWatching = false

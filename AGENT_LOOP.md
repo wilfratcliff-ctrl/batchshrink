@@ -49,13 +49,18 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N2 | 1 | Thumbnail cache never invalidated, so an edit in Photos shows the old picture | done, round 2 |
 | N3 | 1 | `queueWarning` invisible on the screens a failed write can leave the run resting on | done, round 2 |
 | N4 | 2 | A deletion candidate could be offered before its copy changed | done, round 2 |
-| N5 | 1 | Exactly-once save reconciliation and app-created copies excluded from bulk selection (NEXT_PHASE) | open, now unblocked by P0-2 |
+| N5 | 1 | App-created copies excluded from bulk selection while staying re-processable by hand | half done, round 3: exclusion shipped, exactly-once save reconciliation still open |
 | N6 | 0 | None of the round 1 Swift has ever been compiled; the first Mac run is the real test of all of it | blocked, needs macOS |
-| N7 | 2 | `LibraryReconciling` is a workaround declared beside its caller; fold `refreshListing()`/`reconcile` into `LibraryScanning` and update `BatchMockScanner` | open |
-| N8 | 1 | No test covers the reconciliation wiring: a scanner mock cannot satisfy `LibraryReconciling` as written | open |
-| N9 | 2 | `ThumbnailService.keysByIdentifier` is never pruned when `NSCache` evicts on its own | open |
-| N10 | 2 | `LibraryChangeMonitor.stop()` is never called; safe only while the view model lives as long as the app | open |
-| N11 | 1 | No test has ever run: 145 XCTest cases exist and zero have executed | blocked, needs macOS |
+| N7 | 2 | `LibraryReconciling` workaround folded into `LibraryScanning` and the workaround deleted | done, round 3 |
+| N8 | 1 | No test covered the reconciliation wiring | done, round 3 |
+| N9 | 2 | `ThumbnailService` key index grew unbounded | done, round 3 |
+| N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
+| N11 | 1 | No test has ever run: 162 XCTest cases exist and zero have executed | blocked, needs macOS |
+| N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing can ever set either trait, so both rules are dead and an HDR original is still processed. `NEXT_PHASE.md` requires HDR exclusion. Needs codec/colour-tag detection where the media is readable, applied to both `Traits` call sites in the same round | open |
+| N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
+| N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
+| N15 | 3 | `withTaskCancellationHandler(operation:onCancel:)` is the pre-`isolation:` overload, deprecated in the iOS 18 SDK | open |
+| N16 | 1 | Exactly-once save reconciliation (NEXT_PHASE): a save receipt is evidence, not proof the copy completed | open |
 
 ## Round log
 
@@ -64,6 +69,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 0 | `10ab65f` | Baseline checkpoint before any agent work | all three PASS | 81 files, clean tree |
 | 1 | see below | P0-1, P0-2, P0-3 and the P1-2 mechanism, by four parallel agents on disjoint file lists | all three PASS | 13 files, ~1890 insertions, 102 -> 145 XCTest cases |
 | 2 | see below | N1, N2, N3, N4 and P1-4, by four parallel agents on disjoint file lists | all three PASS | 17 files, ~390 insertions |
+| 3 | see below | N5, N7-N10, eligibility rules, a compile-risk audit and the Mac handoff | all three PASS | 13 files, 145 -> 162 XCTest cases |
 
 ### Round 1 detail
 
@@ -118,3 +124,35 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 - `LibraryReconciling` is a deliberate workaround, not an oversight. `BatchViewModel` holds
   `any LibraryScanning`, so a protocol-extension default would have statically dispatched a full
   scan instead of the metadata-only listing. See N7 for the clean version.
+
+### Round 3 detail
+
+- `copy_exclusion` closed N5 and N7 and N8. Created copy identifiers are now recorded in the
+  history store, excluded from automatic selection, and never merged into the shrink history
+  because they are not originals that were shrunk. The `LibraryReconciling` workaround is gone;
+  the two methods are now real requirements on `LibraryScanning`. Five tests cover the exclusion,
+  the deliberate re-run path and the reconciliation wiring, and the monitor became injectable so
+  the change path could be driven from a test at all.
+- `eligibility_rules` added cinematic and shared/restricted detection and reasons, plus ProRes and
+  HDR reasons that nothing can reach yet (N12). It was explicit about that rather than shipping a
+  rule that quietly never fires. It corrected the brief on API names: `PHAssetMediaSubtype` has
+  `videoCinematic`, and `PHAsset.mediaCharacteristics` no longer exists.
+- `compile_risk_audit` found no compile-blocking defect in the eight files it read, having swept
+  every conformer against its protocol and every memberwise call site for argument order. It
+  bounded the thumbnail key index (N9) and documented the monitor's lifecycle as deliberate
+  (N10). Its best find was a real drift: `PhotoLibraryService.retrieve` never passed the new
+  cinematic or shared traits, so the single-video flow - where retrieval is the only eligibility
+  gate - would have processed a cinematic or shared-album video. Fixed.
+- `mac_handoff` wrote `docs/MAC_VALIDATION_HANDOFF.md`: the ordered commands, the ranked list of
+  likely first failures derived from the round reports, and a symptom -> file -> commit triage
+  table with the narrowest revert for each.
+
+### Round 3 integration decisions
+
+- The parent fixed a hard compile failure in the test target: `QueueMockScanner` and
+  `QueueMockHistory` in `BatchQueueTests.swift` were missing the new protocol requirements, which
+  `copy_exclusion` correctly reported and could not fix. This is the third round running where a
+  protocol change broke a mock outside the changing agent's file list; any further requirement
+  added to `LibraryScanning` or `ShrinkHistoryStoring` must update the mocks in the same edit.
+- The parent added the "Made by BatchShrink" row caption and corrected the "Select the N not yet
+  shrunk" button, which had become inaccurate once copies were excluded from the count.

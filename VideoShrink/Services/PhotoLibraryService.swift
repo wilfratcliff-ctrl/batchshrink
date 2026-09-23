@@ -35,6 +35,10 @@ struct DeletionResult: Equatable, Sendable {
         else { throw PipelineError.assetUnavailable }
         let resources = PHAssetResource.assetResources(for: photo)
         // The same rules the library scan uses, so anything the scan offers can be processed.
+        // Cinematic and shared-or-restricted items are the two extra traits the scan can decide
+        // from library metadata alone; HDR and ProRes cannot be decided here and keep their
+        // defaults, exactly as they do in the scan.
+        let source = photo.sourceType
         let traits = AssetRules.Traits(
             isVideo: photo.mediaType == .video,
             isHighFrameRate: photo.mediaSubtypes.contains(.videoHighFrameRate),
@@ -42,7 +46,11 @@ struct DeletionResult: Equatable, Sendable {
             isSpatial: photo.mediaSubtypes.contains(.spatialMedia),
             hasAdjustmentData: resources.contains { $0.type == .adjustmentData },
             hasFullSizeVideo: resources.contains { $0.type == .fullSizeVideo },
-            hasPairedVideo: resources.contains { $0.type == .pairedVideo })
+            hasPairedVideo: resources.contains { $0.type == .pairedVideo },
+            isCinematic: photo.mediaSubtypes.contains(.videoCinematic),
+            isSharedOrRestricted: source.contains(.typeCloudShared)
+                || source.contains(.typeiTunesSynced)
+                || !photo.canPerform(.delete))
         guard AssetRules.unsupportedReason(traits) == nil else { throw PipelineError.unsupported }
         let options = PHVideoRequestOptions()
         options.version = .original

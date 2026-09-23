@@ -409,6 +409,15 @@ private func deletionCandidateRecord(_ id: String) -> BatchQueueRecord {
     }
 
     func cancel() {}
+
+    func refreshListing() async throws -> LibraryScanResult { result }
+
+    func reconcile(previous: LibraryScanResult?,
+                   selection: Set<String>,
+                   running: Set<String>) async throws -> LibraryReconciliation {
+        LibraryScanResult.reconcile(previous: previous, fresh: result,
+                                    selection: selection, running: running)
+    }
 }
 
 @MainActor private final class QueueMockTranscoder: VideoTranscoding {
@@ -454,10 +463,13 @@ private final class QueueMockVerifier: VideoVerifying {
 
 @MainActor private final class QueueMockHistory: ShrinkHistoryStoring {
     var identifiers: Set<String> = []
+    var createdCopies: Set<String> = []
 
     func completedIdentifiers() -> Set<String> { identifiers }
     func copyMeasurements() -> [CopyMeasurement] { [] }
     func record(identifier: String, measurement: CopyMeasurement?) { identifiers.insert(identifier) }
+    func createdCopyIdentifiers() -> Set<String> { createdCopies }
+    func recordCreatedCopy(identifier: String) { createdCopies.insert(identifier) }
 }
 
 @MainActor private final class QueueMockScreenAwake: ScreenAwakeControlling {

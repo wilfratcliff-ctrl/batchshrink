@@ -384,6 +384,80 @@ import Photos
         XCTAssertEqual(fixture.batch.selection, ["a", "b"])
     }
 
+    // MARK: - Copies this app made
+
+    func testAnAppCreatedCopyStaysOutOfABulkSelectionAndCanStillBeChosenByHand() async {
+        // "copy" is what this app made on an earlier run: a new Photos asset with an identifier of
+        // its own, so the library lists it like any other video.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000),
+                                            asset("copy", bytes: 3_000_000_000)])
+        fixture.history.copies = ["copy"]
+        await scan(fixture)
+
+        // It is never taken out of the library the screen lists.
+        XCTAssertEqual(fixture.batch.eligibleAssets.map(\.id), ["a", "copy"])
+
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+        XCTAssertEqual(fixture.batch.selectableCount, 1)
+        fixture.batch.clearSelection()
+        fixture.batch.selectLikelyToShrink()
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+
+        // Ticking it by hand is how a copy is deliberately run through again.
+        fixture.batch.toggle("copy")
+        XCTAssertEqual(fixture.batch.selection, ["a", "copy"])
+        XCTAssertTrue(fixture.batch.canStart)
+    }
+
+    func testACopyCanBeRunThroughAgainWhenItIsTickedByHand() async {
+        let fixture = BatchFixture(assets: [asset("copy", bytes: 3_000_000_000)])
+        fixture.history.copies = ["copy"]
+        await scan(fixture)
+
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+
+        fixture.batch.toggle("copy")
+        XCTAssertEqual(fixture.batch.selection, ["copy"])
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+    }
+
+    func testTheCopyARunCreatesIsRememberedAndLeftOutOfTheNextBulkSelect() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // Photos handed back "created-1", and that is what the app writes down as its own copy.
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        XCTAssertEqual(fixture.history.copies, ["created-1"])
+        XCTAssertEqual(fixture.batch.createdCopyIdentifiers, ["created-1"])
+        // It is not an original that was shrunk, so it never joins the other list.
+        XCTAssertFalse(fixture.history.identifiers.contains("created-1"))
+
+        // A relaunch over the library, which now lists the original, its copy and a fresh video.
+        let relaunched = BatchFixture(assets: [asset("a", bytes: 3_000_000_000),
+                                               asset("created-1", bytes: 3_000_000_000),
+                                               asset("b", bytes: 3_000_000_000)])
+        relaunched.history.identifiers = fixture.history.identifiers
+        relaunched.history.copies = fixture.history.copies
+        await scan(relaunched)
+        relaunched.batch.beginSelecting()
+        relaunched.batch.selectAll()
+
+        // The copy is left out. The fresh video is still selected.
+        XCTAssertEqual(relaunched.batch.selection, ["b"])
+    }
+
     func testTheChooserEstimatesEachResolutionForTheSelection() async {
         let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)])
         await scan(fixture)
@@ -789,6 +863,26 @@ import Photos
         }
         XCTAssertEqual(store.copyMeasurements().count, UserDefaultsShrinkHistoryStore.measurementLimit)
         XCTAssertEqual(store.completedIdentifiers().count, 123)
+
+        // The copies this app made are their own list, so a copy is never marked as an original
+        // that was shrunk. They are bounded by the same limit as the shrunk originals.
+        XCTAssertTrue(store.createdCopyIdentifiers().isEmpty)
+        store.recordCreatedCopy(identifier: "copy-one")
+        store.recordCreatedCopy(identifier: "copy-two")
+        XCTAssertEqual(store.createdCopyIdentifiers(), ["copy-one", "copy-two"])
+        XCTAssertFalse(store.completedIdentifiers().contains("copy-one"))
+        store.recordCreatedCopy(identifier: "copy-one")
+        XCTAssertEqual(store.createdCopyIdentifiers(), ["copy-one", "copy-two"])
+
+        for index in 0..<(UserDefaultsShrinkHistoryStore.identifierLimit + 3) {
+            store.recordCreatedCopy(identifier: "bulk-\(index)")
+        }
+        let capped = store.createdCopyIdentifiers()
+        XCTAssertEqual(capped.count, UserDefaultsShrinkHistoryStore.identifierLimit)
+        XCTAssertFalse(capped.contains("bulk-0"))
+        XCTAssertTrue(capped.contains("bulk-\(UserDefaultsShrinkHistoryStore.identifierLimit + 2)"))
+        // Writing copies never disturbs the originals this iPhone already shrank.
+        XCTAssertEqual(store.completedIdentifiers().count, 123)
     }
 
     // MARK: - Library freshness
@@ -866,6 +960,61 @@ import Photos
                      BatchItem(asset: asset("d", bytes: 10), state: .failed(.save)),
                      BatchItem(asset: asset("e", bytes: 10), state: .needsCheck)]
         XCTAssertEqual(LibraryScanResult.runningIdentifiers(in: items), ["a", "b"])
+    }
+
+    // MARK: - Library change wiring
+
+    func testAChangePhotosReportsReachesTheScannerThroughItsOwnProtocol() async {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .authorized })
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000),
+                                            asset("b", bytes: 3_000_000_000)], monitor: monitor)
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selection, ["a", "b"])
+
+        // Photos stops listing "b". The monitor reports that, the model asks the scanner for a
+        // refresh through `LibraryScanning`, and the listing and the selection both lose what is
+        // gone.
+        fixture.scanner.refreshResult = listing([asset("a", bytes: 3_000_000_000)])
+        monitor.enteredForeground()
+        await eventually { fixture.scanner.reconcileCount == 1 }
+        await eventually { fixture.batch.scanResult?.assets.map(\.id) == ["a"] }
+
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+        XCTAssertEqual(fixture.scanner.reconciledSelection, ["a", "b"])
+        XCTAssertTrue(fixture.scanner.reconciledRunning.isEmpty)
+        // A refresh re-lists; it never scans, so the library keeps the size source it had.
+        XCTAssertEqual(fixture.batch.scanResult?.sizeSource, .reportedByPhotos)
+    }
+
+    func testARefreshDuringARunKeepsTheJobAndTheIdentityItStartedWith() async {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .authorized })
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000),
+                                            asset("b", bytes: 3_000_000_000)], monitor: monitor)
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.transcoder.hold = true
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+
+        // Photos stops listing the video the run is working on.
+        fixture.scanner.refreshResult = listing([asset("b", bytes: 3_000_000_000)])
+        monitor.enteredForeground()
+        await eventually { fixture.scanner.reconcileCount == 1 }
+
+        XCTAssertEqual(fixture.scanner.reconciledRunning, ["a"])
+        // The running job is named to the scanner as one that must keep its identity, so the
+        // refreshed listing carries it even though Photos no longer lists it.
+        XCTAssertEqual(Set(fixture.batch.scanResult?.assets.map(\.id) ?? []), ["a", "b"])
+        // ...and the job itself is untouched, still working on the video it started with.
+        XCTAssertEqual(fixture.batch.items.map(\.id), ["a", "b"])
+        XCTAssertEqual(fixture.batch.currentID, "a")
+
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.batch.summary.savedCount, 2)
     }
 
     func testPhotosAccessIsClassifiedInThisAppsOwnTerms() {
@@ -983,13 +1132,20 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     let history = BatchMockHistory()
     let queue = BatchMockQueue()
     let screenAwake = BatchMockScreenAwake()
+    /// The model watches the real Photos library unless a test hands it a monitor that reports a
+    /// change without one.
+    let monitor: LibraryChangeMonitor
     let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
                                   ?? .standard)
     lazy var batch = BatchViewModel(photos: photos, scanner: scanner, transcoder: transcoder,
                                     verifier: verifier, temporary: files, history: history,
-                                    queueStore: queue, screenAwake: screenAwake, settings: settings)
+                                    queueStore: queue, screenAwake: screenAwake,
+                                    libraryChanges: monitor, settings: settings)
 
-    init(assets: [LibraryAsset]) { self.assets = assets }
+    init(assets: [LibraryAsset], monitor: LibraryChangeMonitor? = nil) {
+        self.assets = assets
+        self.monitor = monitor ?? LibraryChangeMonitor(authorizationStatus: { .authorized })
+    }
 }
 
 @MainActor private final class BatchMockScreenAwake: ScreenAwakeControlling {
@@ -1105,6 +1261,14 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     var error: PipelineError?
     var hold = false
     var gate: CheckedContinuation<Void, Error>?
+    /// The listing a refresh reports: the library as Photos now has it. A test sets this to drive
+    /// a change, and leaving it nil makes the refresh repeat the last scan.
+    var refreshResult: LibraryScanResult?
+    var refreshError: PipelineError?
+    /// How the view model asked for a refresh, and how often.
+    var reconcileCount = 0
+    var reconciledSelection: Set<String> = []
+    var reconciledRunning: Set<String> = []
     private var cancelled = false
 
     func scan(progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> LibraryScanResult {
@@ -1114,6 +1278,24 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
         if cancelled { throw PipelineError.cancelled }
         if let error { throw error }
         return result
+    }
+
+    /// The half a scan does not need: the same listing with no on-device size pass. Folding it in
+    /// goes through the production rule, so a test drives the path a real Photos change takes.
+    func refreshListing() async throws -> LibraryScanResult {
+        if let refreshError { throw refreshError }
+        return refreshResult ?? result
+    }
+
+    func reconcile(previous: LibraryScanResult?,
+                   selection: Set<String>,
+                   running: Set<String>) async throws -> LibraryReconciliation {
+        reconcileCount += 1
+        reconciledSelection = selection
+        reconciledRunning = running
+        let fresh = try await refreshListing()
+        return LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                           selection: selection, running: running)
     }
 
     func cancel() {
@@ -1193,14 +1375,18 @@ private final class BatchMockVerifier: VideoVerifying {
 
 @MainActor private final class BatchMockHistory: ShrinkHistoryStoring {
     var identifiers: Set<String> = []
+    /// The copies this app created, as the on-device store would remember them.
+    var copies: Set<String> = []
     var measurements: [CopyMeasurement] = []
     var records: [String] = []
 
     func completedIdentifiers() -> Set<String> { identifiers }
+    func createdCopyIdentifiers() -> Set<String> { copies }
     func copyMeasurements() -> [CopyMeasurement] { measurements }
     func record(identifier: String, measurement: CopyMeasurement?) {
         records.append(identifier)
         identifiers.insert(identifier)
         if let measurement, measurement.isValid { measurements.append(measurement) }
     }
+    func recordCreatedCopy(identifier: String) { copies.insert(identifier) }
 }
