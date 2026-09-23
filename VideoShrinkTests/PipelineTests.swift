@@ -185,6 +185,86 @@ import Combine
         XCTAssertNotNil(fixture.model.cleanupWarning)
     }
 
+    // MARK: - Copy verification policy (P0-3)
+
+    func testVerificationRequiresEverySampleWindowNotJustOne() {
+        XCTAssertTrue(VideoVerificationService.allWindowsDecoded([true, true, true]))
+        XCTAssertFalse(VideoVerificationService.allWindowsDecoded([true, true, false]),
+                       "A tail that will not decode must not pass")
+        XCTAssertFalse(VideoVerificationService.allWindowsDecoded([true, false, false]),
+                       "A middle and an end that will not decode must not pass")
+        XCTAssertFalse(VideoVerificationService.allWindowsDecoded([false, true, true]))
+        XCTAssertFalse(VideoVerificationService.allWindowsDecoded([]),
+                       "Decoding nothing is not a pass")
+    }
+
+    func testSampleWindowsCoverStartMiddleAndEndOfANormalClip() {
+        let windows = VideoVerificationService.sampleWindows(start: 0, length: 60)
+        XCTAssertEqual(windows.count, 3, "A 60 s clip can host all three windows")
+        XCTAssertEqual(windows.first?.offset ?? -1, 6, accuracy: 0.0001)
+        XCTAssertEqual(windows.dropFirst().first?.offset ?? -1, 30, accuracy: 0.0001)
+        XCTAssertEqual(windows.last?.offset ?? -1, 54, accuracy: 0.0001)
+        for window in windows { XCTAssertEqual(window.window, 0.5, accuracy: 0.0001) }
+    }
+
+    func testSampleWindowsFollowATrackThatDoesNotStartAtZero() {
+        let windows = VideoVerificationService.sampleWindows(start: 4, length: 60)
+        XCTAssertEqual(windows.count, 3)
+        XCTAssertEqual(windows.first?.offset ?? -1, 10, accuracy: 0.0001)
+        XCTAssertEqual(windows.last?.offset ?? -1, 58, accuracy: 0.0001)
+    }
+
+    func testShortValidClipIsSampledWholeInsteadOfSkipped() {
+        // 0.04 s cannot host even the earliest window, so the clip is sampled as one window
+        // covering all of it. It passes only because that window decoded.
+        XCTAssertEqual(VideoVerificationService.minimumSampleWindow, 0.05, accuracy: 0.0001)
+        let windows = VideoVerificationService.sampleWindows(start: 0, length: 0.04)
+        XCTAssertEqual(windows.count, 1)
+        XCTAssertEqual(windows.first?.offset ?? -1, 0, accuracy: 0.0001)
+        XCTAssertEqual(windows.first?.window ?? -1, 0.04, accuracy: 0.0001)
+        XCTAssertTrue(VideoVerificationService.allWindowsDecoded([true]))
+        XCTAssertFalse(VideoVerificationService.allWindowsDecoded([false]))
+    }
+
+    func testTailWindowIsDroppedOnlyWhenItCannotHoldAFrame() {
+        // 0.2 s leaves 0.02 s after the 0.9 position, less than the documented floor, so only
+        // the two windows that fit are required.
+        XCTAssertEqual(VideoVerificationService.sampleWindows(start: 0, length: 0.2).count, 2)
+        XCTAssertEqual(VideoVerificationService.sampleWindows(start: 0, length: 1).count, 3)
+        // An unusable range yields no window at all, which the check above turns into a failure.
+        XCTAssertEqual(VideoVerificationService.sampleWindows(start: 0, length: 0).count, 0)
+    }
+
+    func testImportedCopyIsComparedWithTheExpectedOutput() throws {
+        let expected = metadata(duration: 30, width: 1920, height: 1080, audio: 1)
+        XCTAssertNoThrow(try VideoVerificationService.validate(expected: expected, observed: expected,
+                                                               expecting: expected.codec))
+        XCTAssertThrowsError(try VideoVerificationService.validate(
+            expected: expected, observed: metadata(duration: 29, width: 1920, height: 1080, audio: 1),
+            expecting: expected.codec)) { XCTAssertEqual($0 as? PipelineError, .durationMismatch) }
+        XCTAssertThrowsError(try VideoVerificationService.validate(
+            expected: expected, observed: metadata(duration: 30, width: 1920, height: 1080, audio: 0),
+            expecting: expected.codec)) { XCTAssertEqual($0 as? PipelineError, .audioMismatch) }
+        XCTAssertThrowsError(try VideoVerificationService.validate(
+            expected: expected, observed: metadata(duration: 30, width: 1080, height: 1920, audio: 1),
+            expecting: expected.codec)) { XCTAssertEqual($0 as? PipelineError, .orientationMismatch) }
+        XCTAssertThrowsError(try VideoVerificationService.validate(
+            expected: expected, observed: metadata(duration: 30, width: 3840, height: 2160, audio: 1),
+            expecting: expected.codec)) { XCTAssertEqual($0 as? PipelineError, .resolutionMismatch) }
+        XCTAssertThrowsError(try VideoVerificationService.validate(
+            expected: expected, observed: metadata(duration: 30, width: 1920, height: 1080, bytes: 0),
+            expecting: expected.codec)) { XCTAssertEqual($0 as? PipelineError, .verification) }
+    }
+
+    func testImportedCopyReadBackRejectsAFileItCannotRead() async {
+        do {
+            _ = try await VideoVerificationService().verifyImportedCopy(
+                FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString),
+                matching: metadata())
+            XCTFail("A copy that cannot be read must never pass read-back verification")
+        } catch { XCTAssertEqual(error as? PipelineError, .verification) }
+    }
+
     private func choose(_ fixture: Fixture) async {
         fixture.model.chooseVideo()
         await eventually { fixture.model.showingPicker }
@@ -251,6 +331,13 @@ import Combine
     func localFileURL(identifier: String) async -> URL? { nil }
     func playerItem(identifier: String) async throws -> AVPlayerItem { throw PipelineError.assetUnavailable }
     func deleteOriginals(identifiers: [String]) async throws -> [String] { [] }
+    // The single-video flow has no deletion path at all, so this fake never writes a receipt and
+    // never approves a delete.
+    func deletionEvidence(originalIdentifier: String, copyIdentifier: String) -> DeletionEvidence? { nil }
+    func revalidateForDeletion(_ evidence: DeletionEvidence) -> CopyRevalidation { .unavailable }
+    func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult {
+        DeletionResult(deleted: [], rejected: evidence.mapValues { _ in CopyRevalidation.unavailable })
+    }
     func releaseSave() { saveGate?.resume(); saveGate = nil }
 }
 
@@ -286,6 +373,9 @@ private final class MockVerifier: VideoVerifying {
         verifications += 1
         if let error { throw error }
         return output
+    }
+    func verifyImportedCopy(_ url: URL, matching expected: VideoMetadata) async throws -> VideoMetadata {
+        output
     }
 }
 

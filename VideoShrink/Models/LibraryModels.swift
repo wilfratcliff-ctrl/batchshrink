@@ -1,4 +1,5 @@
 import Foundation
+import Photos
 
 /// One video as Photos describes it during a scan. Building this downloads nothing: it is
 /// library metadata plus, when the platform reports one, an original byte size.
@@ -187,5 +188,146 @@ struct LibraryScanResult: Equatable, Sendable {
 
     func estimate(settings: TranscodeSettings, measured: [CopyMeasurement]) -> SavingsEstimate {
         SavingsEstimate.make(assets: assets, settings: settings, measured: measured)
+    }
+}
+
+/// Photos access in the app's own terms, so the rest of the app does not have to read a
+/// PhotoKit status to know whether it may look at the library.
+enum LibraryAccess: Equatable, Sendable {
+    /// The app may read the whole library.
+    case full
+    /// The app may read only the videos the user picked. The user can narrow or widen this in
+    /// Settings while the app is in the background, which is why it is re-read on the way in.
+    case limited
+    /// Photos access was refused or is restricted.
+    case denied
+    /// The user has not been asked yet.
+    case notDetermined
+
+    init(_ status: PHAuthorizationStatus) {
+        switch status {
+        case .authorized: self = .full
+        case .limited: self = .limited
+        case .notDetermined: self = .notDetermined
+        case .denied, .restricted: self = .denied
+        @unknown default: self = .denied
+        }
+    }
+
+    /// True when the app may list the library at all.
+    var canRead: Bool { self == .full || self == .limited }
+    /// True when the app can see only part of the library.
+    var isLimited: Bool { self == .limited }
+}
+
+/// Why the app is looking at the library again.
+enum LibraryChangeReason: Equatable, Sendable {
+    /// Photos reported a change made outside the app, such as an edit or a new video.
+    case libraryChanged
+    /// The app came back to the front, so the library is worth re-listing even without a
+    /// notification, because Photos does not report an access change while it is suspended.
+    case enteredForeground
+    /// Photos access itself changed since the last look: limited, revoked or restored.
+    case accessChanged
+}
+
+/// What a fresh look at Photos means for the library the app already has in hand.
+///
+/// Photos changes underneath the app: a video is edited or deleted, access narrows, or an
+/// app-created copy appears. Reconciling drops what is gone and reports what moved, but it
+/// never re-points a job that is already running. The identity such a job is working on stays
+/// exactly as it was, even if Photos has stopped listing that original.
+struct LibraryReconciliation: Equatable, Sendable {
+    /// The refreshed library, newest first, with a running job's entry kept in place.
+    let result: LibraryScanResult
+    /// The selection to keep. A selected video Photos no longer lists drops out, unless a job
+    /// is already running on it.
+    let selection: Set<String>
+    /// Videos that left the library since the previous look.
+    let removedIdentifiers: [String]
+    /// Videos whose Photos metadata changed, so a preview or thumbnail drawn from the older
+    /// version is out of date.
+    let changedIdentifiers: [String]
+    /// Running jobs whose original Photos no longer lists. Their identity is kept on purpose.
+    let vanishedRunningIdentifiers: [String]
+
+    /// True when the library the app was holding no longer describes what Photos has.
+    var changedSomething: Bool {
+        !removedIdentifiers.isEmpty
+            || !changedIdentifiers.isEmpty
+            || !vanishedRunningIdentifiers.isEmpty
+    }
+}
+
+extension LibraryScanResult {
+    /// The identifiers a run is still working on, whose identity must not change underneath it.
+    static func runningIdentifiers(in items: [BatchItem]) -> Set<String> {
+        Set(items.filter { !$0.state.isFinished }.map(\.id))
+    }
+
+    /// Lines a fresh listing up with the library the app already has in hand.
+    ///
+    /// `previous` is the library the app was looking at, when it had one. `running` comes from
+    /// `runningIdentifiers(in:)` and names the jobs that must keep their identity.
+    ///
+    /// A video Photos no longer lists is dropped, along with any selection that pointed at it.
+    /// Two things are deliberately kept. A running job keeps its entry even when its original
+    /// has gone, because a run is never re-pointed at a different video. And a size the device
+    /// already measured is kept for a video whose Photos metadata is otherwise unchanged,
+    /// because a metadata-only refresh cannot measure anything and that measurement is still
+    /// the best answer for this original.
+    static func reconcile(previous: LibraryScanResult?,
+                          fresh: LibraryScanResult,
+                          selection: Set<String>,
+                          running: Set<String>) -> LibraryReconciliation {
+        let previousAssets = previous?.assets ?? []
+        let previousByID = Dictionary(previousAssets.map { ($0.id, $0) },
+                                     uniquingKeysWith: { first, _ in first })
+        let listedIDs = Set(fresh.assets.map(\.id))
+
+        // A job already running keeps its identity even when Photos stops listing the original.
+        let carried = previousAssets.filter { running.contains($0.id) && !listedIDs.contains($0.id) }
+
+        // Change is judged on Photos metadata, never on the measured size: that size lives only
+        // in this app, and a refresh never takes a new one.
+        let changed = Set(fresh.assets.compactMap { asset -> String? in
+            guard let old = previousByID[asset.id] else { return nil }
+            return Self.differsInPhotosMetadata(asset, old) ? asset.id : nil
+        })
+
+        let assets = fresh.assets.map { asset -> LibraryAsset in
+            guard asset.bytes == nil, !changed.contains(asset.id),
+                  let measured = previousByID[asset.id]?.bytes else { return asset }
+            return asset.withBytes(measured)
+        } + carried
+
+        let present = Set(assets.map(\.id))
+        let removed = Set(previousAssets.map(\.id)).union(selection).subtracting(present)
+        // A refresh cannot measure on device, so a size source the app already earned stands.
+        let keepsMeasuredSizes = previous?.sizeSource == .measuredOnDevice
+
+        return LibraryReconciliation(
+            result: LibraryScanResult(assets: assets,
+                                      videoCount: fresh.videoCount,
+                                      unsupportedCount: fresh.unsupportedCount,
+                                      unknownSizeCount: assets.filter { $0.bytes == nil }.count,
+                                      sizeSource: keepsMeasuredSizes ? .measuredOnDevice : fresh.sizeSource,
+                                      measuredOnDeviceCount: keepsMeasuredSizes
+                                          ? (previous?.measuredOnDeviceCount ?? 0)
+                                          : fresh.measuredOnDeviceCount),
+            selection: selection.intersection(present),
+            removedIdentifiers: removed.sorted(),
+            changedIdentifiers: changed.sorted(),
+            vanishedRunningIdentifiers: carried.map(\.id).sorted())
+    }
+
+    /// True when two entries describe different things in Photos. The measured size is not part
+    /// of this: only this app knows it, and losing it is not a change in Photos.
+    private static func differsInPhotosMetadata(_ asset: LibraryAsset, _ other: LibraryAsset) -> Bool {
+        asset.creationDate != other.creationDate
+            || asset.duration != other.duration
+            || asset.pixelWidth != other.pixelWidth
+            || asset.pixelHeight != other.pixelHeight
+            || asset.unsupportedReason != other.unsupportedReason
     }
 }

@@ -3,8 +3,12 @@ import Foundation
 /// The queue as it is written to disk, so a run can survive the app being closed.
 ///
 /// It holds identifiers, the sizes Photos reported, the settings the run used and what
-/// happened to each item. No media, filename, location or thumbnail is stored.
+/// happened to each item, including the copy each item produced and what both assets looked
+/// like when that copy was checked. No media, filename, location or thumbnail is stored.
 struct BatchQueueRecord: Codable, Equatable, Sendable {
+    /// Deliberately still 1. A stored queue is dropped when its version is not this one, and
+    /// discarding a user's in-progress queue is worse than any bug this file fixes. Every field
+    /// added since then is optional, so a queue written before it existed still decodes.
     static let currentVersion = 1
 
     var version: Int = BatchQueueRecord.currentVersion
@@ -29,6 +33,11 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
         var readBack: CopyReadBack? = nil
         /// Recorded for every original the run touched, including ones it decided to keep.
         var deletion: DeletionOutcome? = nil
+        /// Which asset Photos created for this original, and what both looked like when that copy
+        /// was checked. Written only from a real read-back, and looked up again in full before any
+        /// delete is submitted. A queue written before this existed carries none, which is exactly
+        /// why its originals are never deleted.
+        var copyEvidence: DeletionEvidence? = nil
 
         var asset: LibraryAsset {
             LibraryAsset(id: identifier, creationDate: creationDate, duration: duration,
@@ -99,6 +108,9 @@ enum BatchQueueReconciliation {
             case .pending, .running:
                 reconciled.items[index].state = .pending
             case .saving:
+                // A copy that may have been written while the app died stays a question for the
+                // user. A receipt is a record of an earlier check, not proof that this save
+                // completed, so this state never authorises a delete on its own.
                 reconciled.items[index].state = .needsCheck
             case .saved, .skipped, .failed, .needsCheck:
                 break

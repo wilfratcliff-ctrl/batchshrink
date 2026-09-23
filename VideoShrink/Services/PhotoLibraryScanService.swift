@@ -5,7 +5,9 @@ import AVFoundation
 ///
 /// The scan never downloads an original. Listing uses library metadata, and the optional
 /// on-device size pass asks PhotoKit with network access switched off, so a video that
-/// lives only in iCloud reports no size instead of being fetched.
+/// lives only in iCloud reports no size instead of being fetched. The refresh used to
+/// reconcile a library that changed outside the app is the listing half alone, so it can
+/// never fetch anything either.
 @MainActor final class PhotoLibraryScanService: LibraryScanning {
     /// `PHAssetResource.dataSize` is public API from iOS 27. A build toolchain may predate
     /// that SDK, so the documented property is probed at runtime instead of linked.
@@ -27,6 +29,62 @@ import AVFoundation
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
 
+        let listing = try await listEligible(progress: progress)
+        var eligible = listing.assets
+        var measured = 0
+        var sizeSource: LibrarySizeSource = supportsReportedSize ? .reportedByPhotos : .unavailable
+        if !supportsReportedSize {
+            let outcome = try await measureOnDeviceSizes(eligible, progress: progress)
+            eligible = outcome.assets
+            measured = outcome.measured
+            if measured > 0 { sizeSource = .measuredOnDevice }
+        }
+
+        return LibraryScanResult(assets: eligible,
+                                 videoCount: listing.videoCount,
+                                 unsupportedCount: listing.unsupported,
+                                 unknownSizeCount: eligible.filter { $0.bytes == nil }.count,
+                                 sizeSource: sizeSource,
+                                 measuredOnDeviceCount: measured)
+    }
+
+    /// Re-reads library metadata for a library that changed outside the app.
+    ///
+    /// This is deliberately not a scan. It never measures a size on device, so it can never ask
+    /// PhotoKit to fetch an original, and it never reports a measurement it did not take. Sizes
+    /// Photos itself reports come along for free.
+    func refreshListing() async throws -> LibraryScanResult {
+        cancelled = false
+        supportsReportedSize = false
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
+        let listing = try await listEligible(progress: { _ in })
+        return LibraryScanResult(assets: listing.assets,
+                                 videoCount: listing.videoCount,
+                                 unsupportedCount: listing.unsupported,
+                                 unknownSizeCount: listing.assets.filter { $0.bytes == nil }.count,
+                                 sizeSource: supportsReportedSize ? .reportedByPhotos : .unavailable,
+                                 measuredOnDeviceCount: 0)
+    }
+
+    /// A refreshed listing folded into the library the app already has in hand.
+    ///
+    /// `running` comes from `LibraryScanResult.runningIdentifiers(in:)`; the videos it names
+    /// keep their identity even if Photos no longer lists them.
+    func reconcile(previous: LibraryScanResult?,
+                   selection: Set<String>,
+                   running: Set<String>) async throws -> LibraryReconciliation {
+        let fresh = try await refreshListing()
+        return LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                           selection: selection, running: running)
+    }
+
+    /// The metadata half of a scan: what Photos has, what each video looks like, and which ones
+    /// the pipeline cannot process. Nothing here measures a size or requests media, so nothing
+    /// here can download an original.
+    private func listEligible(
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void
+    ) async throws -> (assets: [LibraryAsset], videoCount: Int, unsupported: Int) {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
         let fetch = PHAsset.fetchAssets(with: .video, options: options)
@@ -46,22 +104,7 @@ import AVFoundation
             }
         }
         try checkCancellation()
-
-        var measured = 0
-        var sizeSource: LibrarySizeSource = supportsReportedSize ? .reportedByPhotos : .unavailable
-        if !supportsReportedSize {
-            let outcome = try await measureOnDeviceSizes(eligible, progress: progress)
-            eligible = outcome.assets
-            measured = outcome.measured
-            if measured > 0 { sizeSource = .measuredOnDevice }
-        }
-
-        return LibraryScanResult(assets: eligible,
-                                 videoCount: total,
-                                 unsupportedCount: unsupported,
-                                 unknownSizeCount: eligible.filter { $0.bytes == nil }.count,
-                                 sizeSource: sizeSource,
-                                 measuredOnDeviceCount: measured)
+        return (eligible, total, unsupported)
     }
 
     private func describe(_ asset: PHAsset) -> LibraryAsset {

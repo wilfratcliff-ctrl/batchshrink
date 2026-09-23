@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import Photos
 @testable import VideoShrink
 
 @MainActor final class BatchTests: XCTestCase {
@@ -713,9 +714,48 @@ import AVFoundation
         fixture.batch.beginSelecting()
         fixture.batch.selectAll()
         fixture.batch.start()
+        await eventually { fixture.batch.phase != .processing }
+
+        // The run stops at the first checkpoint it cannot write, before Photos is asked for
+        // anything at all, and says so instead of carrying on without a record.
         XCTAssertNotNil(fixture.batch.queueWarning)
+        XCTAssertEqual(fixture.batch.phase, .paused)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 1)
+        // Nothing on disk describes a save, because no copy was ever asked for.
+        let storedStates = fixture.queue.stored?.items.map(\.state) ?? []
+        XCTAssertFalse(storedStates.contains { state in
+            if case .saving = state { return true }
+            if case .saved = state { return true }
+            return false
+        })
+    }
+
+    func testACopyEditedInPhotosAfterTheRunKeepsItsOriginal() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterRun
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
         await eventually { fixture.batch.phase == .finished }
-        XCTAssertNotNil(fixture.batch.queueWarning)
+
+        // The run checked the copy as it saved it, so the original is offered.
+        XCTAssertEqual(fixture.batch.deletableItemIDs, ["a"])
+
+        // Someone edits the copy in Photos before the user confirms. The look taken when the copy
+        // was saved is stale, so Photos is asked again as the delete is submitted and the original
+        // stays, which is the whole point of holding a receipt rather than a confirmation.
+        fixture.photos.revalidation = .copyChanged
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        XCTAssertTrue(fixture.photos.deleteBatches.isEmpty)
+        XCTAssertEqual(fixture.batch.deletionOutcomes["a"],
+                       .skipped("The copy changed after it was checked, so the original stays."))
+        XCTAssertEqual(fixture.batch.deletionReport.skipped, 1)
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 0)
     }
 
     // MARK: - On-device history
@@ -751,6 +791,131 @@ import AVFoundation
         XCTAssertEqual(store.completedIdentifiers().count, 123)
     }
 
+    // MARK: - Library freshness
+
+    func testARefreshDropsVideosPhotosNoLongerListsAndTheSelectionThatPointedAtThem() {
+        let previous = listing([asset("a", bytes: 10), asset("b", bytes: 20)])
+        let fresh = listing([asset("a", bytes: 10)])
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: ["a", "b"], running: [])
+
+        XCTAssertEqual(reconciliation.result.assets.map(\.id), ["a"])
+        XCTAssertEqual(reconciliation.selection, ["a"])
+        XCTAssertEqual(reconciliation.removedIdentifiers, ["b"])
+        XCTAssertTrue(reconciliation.changedIdentifiers.isEmpty)
+        XCTAssertTrue(reconciliation.vanishedRunningIdentifiers.isEmpty)
+        XCTAssertTrue(reconciliation.changedSomething)
+    }
+
+    func testARefreshKeepsTheIdentityOfAVideoTheRunIsStillWorkingOn() {
+        let previous = listing([asset("a", bytes: 10), asset("b", bytes: 20)])
+        let fresh = listing([asset("a", bytes: 10)])
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: ["a", "b"], running: ["b"])
+
+        // The running original is gone from Photos, but the entry the run started with stays.
+        XCTAssertEqual(reconciliation.result.assets.map(\.id), ["a", "b"])
+        XCTAssertEqual(reconciliation.result.assets.last?.bytes, 20)
+        XCTAssertEqual(reconciliation.selection, ["a", "b"])
+        XCTAssertEqual(reconciliation.vanishedRunningIdentifiers, ["b"])
+        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
+    }
+
+    func testARefreshTakesTheNewMetadataForAVideoThatChangedInPhotos() {
+        let previous = listing([asset("a", bytes: 10, duration: 120)])
+        let fresh = listing([asset("a", bytes: 10, duration: 90)])
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: ["a"], running: [])
+
+        XCTAssertEqual(reconciliation.changedIdentifiers, ["a"])
+        XCTAssertEqual(reconciliation.result.assets.first?.duration, 90)
+        XCTAssertTrue(reconciliation.changedSomething)
+    }
+
+    func testARefreshKeepsASizeTheDeviceAlreadyMeasured() {
+        // A refresh cannot measure, so the size this device already took is still the answer.
+        let previous = listing([asset("a", bytes: 10), asset("b", bytes: 20)],
+                               sizeSource: .measuredOnDevice, measured: 2)
+        let fresh = listing([asset("a", bytes: nil), asset("b", bytes: nil)], sizeSource: .unavailable)
+        let reconciliation = LibraryScanResult.reconcile(previous: previous, fresh: fresh,
+                                                         selection: ["a"], running: [])
+
+        XCTAssertEqual(reconciliation.result.assets.first?.bytes, 10)
+        XCTAssertEqual(reconciliation.result.assets.last?.bytes, 20)
+        XCTAssertEqual(reconciliation.result.sizeSource, .measuredOnDevice)
+        XCTAssertEqual(reconciliation.result.measuredOnDeviceCount, 2)
+        XCTAssertTrue(reconciliation.changedIdentifiers.isEmpty)
+    }
+
+    func testARefreshWithoutAnEarlierLibraryJustTakesTheNewListing() {
+        let fresh = listing([asset("a", bytes: 10), asset("b", bytes: 20)])
+        let reconciliation = LibraryScanResult.reconcile(previous: nil, fresh: fresh,
+                                                         selection: ["a", "gone"], running: [])
+
+        XCTAssertEqual(reconciliation.result.assets, fresh.assets)
+        XCTAssertEqual(reconciliation.selection, ["a"])
+        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
+        XCTAssertTrue(reconciliation.vanishedRunningIdentifiers.isEmpty)
+    }
+
+    func testRunningIdentifiersAreTheOnesTheRunHasNotFinished() {
+        let items = [BatchItem(asset: asset("a", bytes: 10), state: .pending),
+                     BatchItem(asset: asset("b", bytes: 10), state: .saving),
+                     BatchItem(asset: asset("c", bytes: 10),
+                               state: .saved(Savings(originalBytes: 10, compressedBytes: 5))),
+                     BatchItem(asset: asset("d", bytes: 10), state: .failed(.save)),
+                     BatchItem(asset: asset("e", bytes: 10), state: .needsCheck)]
+        XCTAssertEqual(LibraryScanResult.runningIdentifiers(in: items), ["a", "b"])
+    }
+
+    func testPhotosAccessIsClassifiedInThisAppsOwnTerms() {
+        XCTAssertEqual(LibraryAccess(.authorized), .full)
+        XCTAssertTrue(LibraryAccess(.authorized).canRead)
+        XCTAssertFalse(LibraryAccess(.authorized).isLimited)
+        XCTAssertEqual(LibraryAccess(.limited), .limited)
+        XCTAssertTrue(LibraryAccess(.limited).canRead)
+        XCTAssertTrue(LibraryAccess(.limited).isLimited)
+        XCTAssertEqual(LibraryAccess(.denied), .denied)
+        XCTAssertFalse(LibraryAccess(.denied).canRead)
+        XCTAssertEqual(LibraryAccess(.restricted), .denied)
+        XCTAssertFalse(LibraryAccess(.restricted).canRead)
+        XCTAssertEqual(LibraryAccess(.notDetermined), .notDetermined)
+        XCTAssertFalse(LibraryAccess(.notDetermined).canRead)
+    }
+
+    func testComingBackToTheFrontOffersAFreshLook() {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .authorized })
+        var reasons: [LibraryChangeReason] = []
+        monitor.onChange = { reasons.append($0) }
+        XCTAssertEqual(monitor.revision, 0)
+        XCTAssertEqual(monitor.access, .full)
+
+        monitor.enteredForeground()
+
+        XCTAssertEqual(monitor.revision, 1)
+        XCTAssertEqual(reasons, [.enteredForeground])
+    }
+
+    func testComingBackToTheFrontPicksUpNarrowedOrRevokedAccess() {
+        let status = AccessBox(.authorized)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        var reasons: [LibraryChangeReason] = []
+        monitor.onChange = { reasons.append($0) }
+
+        status.value = .limited
+        monitor.enteredForeground()
+        XCTAssertEqual(monitor.access, .limited)
+        XCTAssertTrue(monitor.isLimited)
+        XCTAssertTrue(monitor.canReadLibrary)
+
+        status.value = .denied
+        monitor.enteredForeground()
+        XCTAssertEqual(monitor.access, .denied)
+        XCTAssertFalse(monitor.canReadLibrary)
+        XCTAssertEqual(reasons, [.accessChanged, .accessChanged])
+        XCTAssertEqual(monitor.revision, 2)
+    }
+
     // MARK: - Helpers
 
     private func scan(_ fixture: BatchFixture) async {
@@ -777,6 +942,24 @@ private func asset(_ id: String, bytes: Int64?, duration: Double = 120,
                    unsupported: String? = nil) -> LibraryAsset {
     LibraryAsset(id: id, creationDate: Date(timeIntervalSince1970: 1_700_000_000), duration: duration,
                  pixelWidth: 3840, pixelHeight: 2160, bytes: bytes, unsupportedReason: unsupported)
+}
+
+private func listing(_ assets: [LibraryAsset],
+                     videoCount: Int? = nil,
+                     sizeSource: LibrarySizeSource = .reportedByPhotos,
+                     measured: Int = 0) -> LibraryScanResult {
+    LibraryScanResult(assets: assets,
+                      videoCount: videoCount ?? assets.count,
+                      unsupportedCount: 0,
+                      unknownSizeCount: assets.filter { $0.bytes == nil }.count,
+                      sizeSource: sizeSource,
+                      measuredOnDeviceCount: measured)
+}
+
+/// A Photos authorization status a test can change between reads.
+private final class AccessBox {
+    var value: PHAuthorizationStatus
+    init(_ value: PHAuthorizationStatus) { self.value = value }
 }
 
 private func queuedItem(_ id: String, _ state: BatchQueueRecord.State) -> BatchQueueRecord.Item {
@@ -885,6 +1068,35 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
         deletedIdentifiers.append(contentsOf: identifiers)
         return identifiers.filter { !missingFromLibrary.contains($0) }
     }
+
+    // MARK: - Deletion revalidation
+
+    /// What Photos says when the app looks the copy and its original up again before a delete.
+    /// A test turns this to a rejecting case to drive an original being kept.
+    var revalidation: CopyRevalidation = .matches
+
+    /// The receipt Photos hands back for a copy it just created, built the way the service builds
+    /// it: the copy that was made, and the original as it looked at that moment.
+    func deletionEvidence(originalIdentifier: String, copyIdentifier: String) -> DeletionEvidence? {
+        DeletionEvidence(copy: AssetSnapshot(identifier: copyIdentifier, duration: 120,
+                                             pixelWidth: 1920, pixelHeight: 1080,
+                                             creationDate: nil, modificationDate: nil),
+                         source: AssetSnapshot(identifier: originalIdentifier, duration: 120,
+                                               pixelWidth: 3840, pixelHeight: 2160,
+                                               creationDate: nil, modificationDate: nil))
+    }
+
+    func revalidateForDeletion(_ evidence: DeletionEvidence) -> CopyRevalidation { revalidation }
+
+    func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult {
+        let outcomes = evidence.mapValues { revalidateForDeletion($0) }
+        let checked = DeletionPolicy.split(evidence, outcomes: outcomes)
+        guard !checked.approved.isEmpty else {
+            return DeletionResult(deleted: [], rejected: checked.rejected)
+        }
+        let deleted = try await deleteOriginals(identifiers: checked.approved)
+        return DeletionResult(deleted: deleted, rejected: checked.rejected)
+    }
 }
 
 @MainActor private final class BatchMockScanner: LibraryScanning {
@@ -954,6 +1166,12 @@ private final class BatchMockVerifier: VideoVerifying {
         return VideoMetadata(duration: source.duration, width: 1920, height: 1080, bytes: bytes,
                              fileType: "MOV", audioTrackCount: 1, isPlayable: true,
                              codec: codec ?? .hevc, nominalFrameRate: 30)
+    }
+
+    /// Read-back compares the copy Photos handed back with what the run measured, so this fake
+    /// hands back exactly the properties the run expected.
+    func verifyImportedCopy(_ url: URL, matching expected: VideoMetadata) async throws -> VideoMetadata {
+        expected
     }
 }
 

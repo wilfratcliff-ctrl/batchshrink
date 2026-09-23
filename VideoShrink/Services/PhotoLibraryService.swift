@@ -2,6 +2,17 @@ import Photos
 import AVFoundation
 import CoreLocation
 
+/// What a revalidated deletion transaction did. The three methods that produce it are declared on
+/// `PhotoLibraryServing`, because the check has to live on the producing side: a caller cannot be
+/// trusted to remember to re-check, and the returned values are plain so the decision itself stays
+/// in `DeletionPolicy`.
+struct DeletionResult: Equatable, Sendable {
+    /// The originals Photos found and removed. Anything else was already gone.
+    var deleted: [String] = []
+    /// Originals that were left alone, with the reason the fresh look gave.
+    var rejected: [String: CopyRevalidation] = [:]
+}
+
 @MainActor final class PhotoLibraryService: PhotoLibraryServing {
     private let manager = PHImageManager.default()
     private var pending: CheckedContinuation<RetrievedVideo, Error>?
@@ -135,6 +146,86 @@ import CoreLocation
         }
         return assets.map(\.localIdentifier)
     }
+
+    /// The receipt to store next to a saved copy: which asset Photos created, and what both assets
+    /// looked like at the moment it was checked.
+    ///
+    /// Returns nil unless both can be looked up now, so a receipt is never written from an
+    /// assumption. The caller stores it with the queue; it is the only thing that can later
+    /// justify a delete, and only when a fresh look agrees with it.
+    func deletionEvidence(originalIdentifier: String, copyIdentifier: String) -> DeletionEvidence? {
+        guard let copy = snapshot(identifier: copyIdentifier),
+              let source = snapshot(identifier: originalIdentifier) else { return nil }
+        return DeletionEvidence(copy: copy, source: source)
+    }
+
+    /// Looks the copy and the original up again, right before a delete would be submitted, and
+    /// says whether the stored receipt still holds.
+    ///
+    /// Nothing here trusts the receipt on its own. Access is re-checked first, so revoked or
+    /// narrowed access keeps every original. Under limited access, an asset outside the allowed
+    /// set is simply not fetched, which reads as missing here and keeps the original too.
+    func revalidateForDeletion(_ evidence: DeletionEvidence) -> CopyRevalidation {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { return .accessDenied }
+        guard evidence.verifiedCopyIdentifier != nil else { return .copyMissing }
+        guard let copy = snapshot(identifier: evidence.copy.identifier) else { return .copyMissing }
+        guard copy.stillMatches(evidence.copy) else { return .copyChanged }
+        guard let source = snapshot(identifier: evidence.source.identifier) else { return .sourceMissing }
+        guard source.stillMatches(evidence.source) else { return .sourceChanged }
+        return .matches
+    }
+
+    /// Deletes only the originals whose copy and original both still look exactly as recorded.
+    ///
+    /// This is the path that makes "checked when it entered the group" insufficient: a copy that
+    /// was edited or removed while the group waited is caught here, moments before Photos is
+    /// asked. A candidate with no receipt is rejected without looking at Photos at all.
+    func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult {
+        let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
+        guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
+        var outcomes: [String: CopyRevalidation] = [:]
+        for (identifier, receipt) in evidence {
+            outcomes[identifier] = revalidateForDeletion(receipt)
+        }
+        let checked = DeletionPolicy.split(evidence, outcomes: outcomes)
+        guard !checked.approved.isEmpty else {
+            return DeletionResult(deleted: [], rejected: checked.rejected)
+        }
+        let deleted = try await deleteOriginals(identifiers: checked.approved)
+        return DeletionResult(deleted: deleted, rejected: checked.rejected)
+    }
+
+    /// What Photos reports for one asset right now, using only documented `PHAsset` properties.
+    /// Nil means the asset is not in the library as far as this app can see.
+    func snapshot(identifier: String) -> AssetSnapshot? {
+        guard !identifier.isEmpty,
+              let photo = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
+        else { return nil }
+        return AssetSnapshot(identifier: photo.localIdentifier,
+                             duration: photo.duration,
+                             pixelWidth: photo.pixelWidth,
+                             pixelHeight: photo.pixelHeight,
+                             creationDate: photo.creationDate,
+                             modificationDate: photo.modificationDate,
+                             bytes: onDeviceBytes(of: photo))
+    }
+
+    /// `PHAssetResource.dataSize` is public API from iOS 27, exactly as the library scan probes it.
+    /// Nil means the running system has no such property or Photos reported nothing, and a size
+    /// that cannot be read is not treated as evidence that the asset changed.
+    private func onDeviceBytes(of photo: PHAsset) -> Int64? {
+        for resource in PHAssetResource.assetResources(for: photo) where resource.type == .video {
+            guard resource.responds(to: Self.dataSizeSelector) else { return nil }
+            guard let value = resource.perform(Self.dataSizeSelector)?.takeUnretainedValue() as? NSNumber
+            else { continue }
+            let size = value.int64Value
+            if size > 0 { return size }
+        }
+        return nil
+    }
+
+    private static let dataSizeSelector = NSSelectorFromString("dataSize")
 
     /// The parts of an original that should travel with its copy.
     private static func identity(for photo: PHAsset, resources: [PHAssetResource]) -> AssetIdentity {

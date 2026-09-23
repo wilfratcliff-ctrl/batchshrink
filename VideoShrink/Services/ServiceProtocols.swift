@@ -16,6 +16,16 @@ import AVFoundation
     /// once. Returns the identifiers it found and included; anything else was already gone.
     /// Only ever called behind `DeletionPolicy`.
     func deleteOriginals(identifiers: [String]) async throws -> [String]
+    /// The receipt to store next to a copy Photos just handed back, or nil unless both the copy
+    /// and the original can be looked up right now. A receipt is only ever written from a real
+    /// read-back, and it is the only thing that can later justify a delete.
+    func deletionEvidence(originalIdentifier: String, copyIdentifier: String) -> DeletionEvidence?
+    /// Looks the copy and the original up again and says whether the stored receipt still holds.
+    func revalidateForDeletion(_ evidence: DeletionEvidence) -> CopyRevalidation
+    /// The one deletion path new code should use: every candidate is looked up again first, and
+    /// anything missing, changed or unreadable is left alone. Still one Photos transaction, so
+    /// Photos still asks once.
+    func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult
 }
 
 @MainActor protocol VideoTranscoding {
@@ -28,6 +38,10 @@ import AVFoundation
 protocol VideoVerifying {
     func inspect(_ url: URL) async throws -> VideoMetadata
     func verify(_ url: URL, source: VideoMetadata, expecting codec: VideoCodec?) async throws -> VideoMetadata
+    /// Checks a copy Photos handed back against the properties this run measured and approved
+    /// before saving it, so the read-back path cannot settle for a weaker rule set than the
+    /// export check that came before it.
+    func verifyImportedCopy(_ url: URL, matching expected: VideoMetadata) async throws -> VideoMetadata
 }
 
 @MainActor protocol TemporaryFileManaging {

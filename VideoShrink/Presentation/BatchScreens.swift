@@ -817,6 +817,10 @@ struct BatchFinishedScreen: View {
                 if let warning = batch.cleanupWarning {
                     ShrinkNotice(symbol: "exclamationmark.triangle", title: "Cleanup needs attention", detail: warning)
                 }
+                if let warning = batch.queueWarning {
+                    ShrinkNotice(symbol: "exclamationmark.triangle",
+                                 title: "Something wasn't written down", detail: warning)
+                }
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)

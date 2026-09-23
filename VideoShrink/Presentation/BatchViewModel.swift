@@ -27,6 +27,12 @@ enum BatchPhase: Equatable {
     @Published private(set) var restoredRun = false
     @Published private(set) var pauseReason: BatchPauseReason?
     @Published private(set) var readBackOutcomes: [String: CopyReadBack] = [:]
+    /// The receipt each saved copy earned when Photos handed it back. It is written only from a
+    /// real read-back, and it is the only thing that can later justify deleting an original.
+    @Published private(set) var copyEvidence: [String: DeletionEvidence] = [:]
+    /// The fresh look taken at those receipts and the originals beside them. It is filled by one
+    /// pass over the candidates, never by reading Photos from inside a view update.
+    @Published private(set) var revalidationOutcomes: [String: CopyRevalidation] = [:]
     @Published private(set) var deletionOutcomes: [String: DeletionOutcome] = [:]
     @Published private(set) var deletionInProgress = false
     @Published private(set) var limitedAccess = false
@@ -61,6 +67,9 @@ enum BatchPhase: Equatable {
     /// often iOS shows its delete confirmation.
     private var deletionBatch: [String] = []
     private var activeScreenAwake = false
+    /// Set once a checkpoint the run cannot continue past failed to reach disk. It is cleared when
+    /// a fresh attempt begins, so a stopped run keeps explaining itself instead of looking healthy.
+    private var checkpointFailure = false
     static let deletionBatchSize = 5
 
     init(photos: any PhotoLibraryServing,
@@ -141,7 +150,39 @@ enum BatchPhase: Equatable {
         return DeletionPolicy.decision(mode: effectiveDeletionMode,
                                        saving: saving,
                                        readBack: readBackOutcomes[item.id],
+                                       evidence: copyEvidence[item.id],
+                                       revalidation: revalidationOutcomes[item.id],
                                        alreadyDeleted: alreadyDeleted)
+    }
+
+    /// Takes one fresh look at the copies and originals a delete could remove, and stores the
+    /// answers `deletionDecision(for:)` reads.
+    ///
+    /// This is deliberately not part of `deletionDecision(for:)`: that runs while the finished
+    /// screen builds itself, so a Photos fetch there would run on every update. It is called once
+    /// per moment the interface offers the candidates: when a copy is read back, when a run
+    /// finishes, and when a stored queue is picked up again.
+    private func refreshDeletionLook(for identifiers: [String]? = nil) {
+        for id in identifiers ?? items.map(\.id) {
+            guard let receipt = copyEvidence[id] else {
+                revalidationOutcomes[id] = nil
+                continue
+            }
+            revalidationOutcomes[id] = photos.revalidateForDeletion(receipt)
+        }
+    }
+
+    /// Why an original was kept, in the words the policy itself would use for the same reason.
+    private static func deletionSkipReason(_ outcome: CopyRevalidation) -> String {
+        switch outcome {
+        case .matches: return "The copy and the original still looked the same."
+        case .accessDenied: return "Photos access was withdrawn, so the original stays."
+        case .copyMissing: return "The copy is no longer in Photos, so the original stays."
+        case .copyChanged: return "The copy changed after it was checked, so the original stays."
+        case .sourceMissing: return "Photos can no longer find the original."
+        case .sourceChanged: return "The original changed after the copy was made, so it stays."
+        case .unavailable: return "The copy couldn't be looked up again, so the original stays."
+        }
     }
 
     /// A player item for a quick look at one original, before it is chosen or deleted.
@@ -384,10 +425,13 @@ enum BatchPhase: Equatable {
         restoredRun = false
         pauseReason = nil
         readBackOutcomes = [:]
+        copyEvidence = [:]
+        revalidationOutcomes = [:]
         deletionOutcomes = [:]
         activeDeletionMode = settings.deletionMode
-        queueStore.clear()
+        checkpointFailure = false
         queueWarning = nil
+        clearStoredQueue()
         selection.removeAll()
         estimator = ProcessingEstimator()
         stopRequested = false
@@ -419,6 +463,9 @@ enum BatchPhase: Equatable {
     // MARK: - Run loop
 
     private func run() {
+        // A fresh attempt starts from a clean notice. If this attempt cannot write its
+        // checkpoints either, it stops and says so again.
+        checkpointFailure = false
         runTask = Task { [weak self] in
             await self?.runLoop()
         }
@@ -436,6 +483,9 @@ enum BatchPhase: Equatable {
         }
         // A finished run flushes whatever is left in the delete batch. A pause leaves it, because
         // Photos needs the app in front to show its confirmation.
+        // One fresh look at every candidate, so the screen that offers them reads a stored answer
+        // instead of asking Photos again for each row it draws.
+        refreshDeletionLook()
         if finishRequested || !stopRequested { await flushDeletions() }
         cleanWorkspace()
         currentID = nil
@@ -452,6 +502,17 @@ enum BatchPhase: Equatable {
 
     private func process(id: String) async {
         guard let asset = items.first(where: { $0.id == id })?.asset else { return }
+        // A fresh attempt makes a new copy, so any receipt from an earlier attempt no longer
+        // describes what this one is about to create. It has to be earned again.
+        copyEvidence[id] = nil
+        revalidationOutcomes[id] = nil
+        // Work only starts while the queue can be written. Shrinking a video for an hour and then
+        // finding out the app cannot record the copy is work thrown away, and copying without a
+        // record is worse than not copying at all.
+        guard persistQueue() else {
+            stopForUnwrittenCheckpoint("BatchShrink couldn't write its place on this iPhone, so it stopped before shrinking this video. Nothing in Photos was changed.")
+            return
+        }
         currentID = id
         currentProgress = nil
         currentStage = .retrieving
@@ -496,12 +557,22 @@ enum BatchPhase: Equatable {
             let saving = Savings(originalBytes: original.bytes, compressedBytes: output.bytes)
             if saving.isSmaller {
                 try temporary.requireCapacity(for: DiskHeadroom.bytes(output.bytes, copies: 1))
-                setState(.saving, for: id)
+                // The intent is on disk before Photos is asked to keep anything. A copy Photos has
+                // accepted cannot be taken back, so the queue must already describe it when the
+                // app stops for good.
+                try requireJournaledCheckpoint(setState(.saving, for: id), step: "saving a copy")
                 currentStage = .saving
                 let created = try await photos.save(videoAt: written, identity: workingIdentity)
                 record(output: output, for: id)
-                setState(.saved(saving), for: id)
-                await confirmReadBack(for: id, createdIdentifier: created)
+                // Photos now holds a copy, so the run must not go back on that. When the record of
+                // it cannot be written, the `.saving` entry already on disk is what stops a later
+                // launch from making a second copy, and the run stops here rather than reach a
+                // deletion it could not describe.
+                guard setState(.saved(saving), for: id) else {
+                    stopForUnwrittenCheckpoint("BatchShrink saved a copy but couldn't write that down, so it stopped. Check Photos before running that video again.")
+                    throw PipelineError.cancelled
+                }
+                await confirmReadBack(for: id, createdIdentifier: created, expected: output)
                 if activeDeletionMode == .afterEachCopy {
                     await queueDeletion(for: id)
                 }
@@ -511,7 +582,9 @@ enum BatchPhase: Equatable {
         } catch {
             let normalized = PipelineError.normalize(error, fallback: .export)
             if stopRequested || normalized == .cancelled {
-                setState(.pending, for: id)
+                // A copy Photos already kept is never put back in the waiting list: running that
+                // video again would make a second copy. Anything else is safe to run again.
+                if !hasSavedCopy(id) { setState(.pending, for: id) }
             } else {
                 setState(.failed(normalized), for: id)
                 log.error("Batch item failed")
@@ -535,31 +608,80 @@ enum BatchPhase: Equatable {
         if stopRequested || Task.isCancelled { throw PipelineError.cancelled }
     }
 
-    private func setState(_ state: BatchItemState, for id: String) {
-        guard let index = items.firstIndex(where: { $0.id == id }) else { return }
-        // Progress callbacks repeat the same stored step, so only real transitions are written.
+    /// Whether this video already has a copy Photos accepted, which must never be saved twice.
+    private func hasSavedCopy(_ id: String) -> Bool {
+        guard let item = items.first(where: { $0.id == id }) else { return false }
+        if case .saved = item.state { return true }
+        return false
+    }
+
+    /// Stops the run before the next Photos step when the checkpoint that would describe it is
+    /// not on disk. A run is only allowed to continue while the app can write down what it does.
+    ///
+    /// A run that is already stopped, and a deletion the user asked for on a finished screen, are
+    /// left alone: the warning is the part that matters there.
+    private func stopForUnwrittenCheckpoint(_ detail: String) {
+        queueWarning = detail
+        checkpointFailure = true
+        log.error("A required queue checkpoint could not be written")
+        guard runTask != nil, !stopRequested else { return }
+        stopRequested = true
+        finishRequested = false
+        isStopping = true
+        stopActiveWork()
+        screenAwake.hold(false)
+    }
+
+    /// Refuses a Photos step whose checkpoint did not reach disk.
+    private func requireJournaledCheckpoint(_ journaled: Bool, step: String) throws {
+        guard !journaled else { return }
+        stopForUnwrittenCheckpoint("BatchShrink couldn't write its place on this iPhone, so it stopped before \(step). Nothing was added to or removed from Photos by that step.")
+        throw PipelineError.cancelled
+    }
+
+    /// Records a state change and says whether the queue on disk now describes it.
+    ///
+    /// Progress callbacks repeat the same stored step, so only real transitions are written. A
+    /// repeated step reports whether the last write is still standing, because between two Photos
+    /// mutations the only thing that matters is whether the evidence reached disk.
+    @discardableResult
+    private func setState(_ state: BatchItemState, for id: String) -> Bool {
+        guard let index = items.firstIndex(where: { $0.id == id }) else { return false }
         let changed = BatchQueueReconciliation.persisted(items[index].state)
             != BatchQueueReconciliation.persisted(state)
         items[index].state = state
-        if changed { persistQueue() }
+        if changed { return persistQueue() }
+        return !checkpointFailure
     }
 
-    /// Asks Photos for the copy it just accepted. A copy that cannot be read back is not a failed
-    /// save, because Photos already confirmed the write. It only means the copy could not be
-    /// checked yet, and the summary says exactly that.
-    private func confirmReadBack(for id: String, createdIdentifier: String?) async {
+    /// Asks Photos for the copy it just accepted and compares it with the copy this run measured
+    /// and approved before saving. A copy that cannot be read back is not a failed save, because
+    /// Photos already confirmed the write. It only means the copy could not be checked yet, and
+    /// the summary says exactly that.
+    ///
+    /// Only a copy Photos really hands back earns a receipt, and a receipt is the only thing that
+    /// can later justify deleting the original.
+    private func confirmReadBack(for id: String, createdIdentifier: String?,
+                                 expected: VideoMetadata) async {
         var outcome: CopyReadBack = .unavailable
         if let createdIdentifier {
             for attempt in 0..<3 {
                 if let url = await photos.localFileURL(identifier: createdIdentifier),
-                   (try? await verifier.inspect(url)) != nil {
+                   (try? await verifier.verifyImportedCopy(url, matching: expected)) != nil {
                     outcome = .confirmed
+                    if let receipt = photos.deletionEvidence(originalIdentifier: id,
+                                                             copyIdentifier: createdIdentifier) {
+                        copyEvidence[id] = receipt
+                    }
                     break
                 }
                 if attempt < 2 { try? await Task.sleep(for: .milliseconds(400)) }
             }
         }
         readBackOutcomes[id] = outcome
+        // The copy this run just made is a candidate now, so it gets its fresh look here rather
+        // than when the screen is drawn.
+        refreshDeletionLook(for: [id])
         persistQueue()
     }
 
@@ -581,20 +703,61 @@ enum BatchPhase: Equatable {
 
     /// Sends the waiting originals to Photos in one transaction, which means one confirmation.
     ///
-    /// Intent is written down before the call, so a stop in the middle comes back as uncertain
-    /// instead of being repeated.
+    /// Intent is written down before the call and the answer is written down after it, so a stop
+    /// in the middle comes back as uncertain instead of being repeated.
     private func flushDeletions() async {
-        let batch = deletionBatch
+        let candidates = deletionBatch
         deletionBatch.removeAll()
-        guard !batch.isEmpty else { return }
+        guard !candidates.isEmpty else { return }
+        let previous = candidates.map { ($0, deletionOutcomes[$0]) }
+        // The receipts come from what the run recorded when Photos handed each copy back. A
+        // candidate with no receipt is simply absent from this dictionary, so the service is never
+        // asked about it and it is never deleted. The stored fresh look is applied once more here,
+        // so a copy that changed while the group waited is settled as kept with its reason rather
+        // than riding on the answer it entered the group with.
+        let receipts = candidates.reduce(into: [String: DeletionEvidence]()) { found, id in
+            found[id] = copyEvidence[id]
+        }
+        let looks = candidates.reduce(into: [String: CopyRevalidation]()) { found, id in
+            found[id] = revalidationOutcomes[id]
+        }
+        let offered = DeletionPolicy.split(receipts, outcomes: looks)
+        for (id, outcome) in offered.rejected {
+            deletionOutcomes[id] = .skipped(Self.deletionSkipReason(outcome))
+        }
+        guard !offered.approved.isEmpty else {
+            // Nothing here may be handed to Photos. What each look said is still worth writing
+            // down, because that is this run's answer for those originals.
+            guard persistQueue() else {
+                for (id, outcome) in previous { deletionOutcomes[id] = outcome }
+                stopForUnwrittenCheckpoint("BatchShrink couldn't write down what happened to these originals, so it stopped. Nothing was deleted from Photos.")
+                return
+            }
+            return
+        }
+        let batch = offered.approved
+        let submitted = batch.reduce(into: [String: DeletionEvidence]()) { found, id in
+            found[id] = receipts[id]
+        }
         for id in batch { deletionOutcomes[id] = .deleting }
-        persistQueue()
+        guard persistQueue() else {
+            // Photos was never asked, so the intent goes back to what it was and these originals
+            // stay available for an attempt that can be written down.
+            for (id, outcome) in previous { deletionOutcomes[id] = outcome }
+            stopForUnwrittenCheckpoint("BatchShrink couldn't write down which originals it was about to delete, so it stopped before asking Photos. Nothing was deleted.")
+            return
+        }
         do {
-            let deleted = Set(try await photos.deleteOriginals(identifiers: batch))
+            let result = try await photos.deleteOriginals(afterRevalidating: submitted)
+            let deleted = Set(result.deleted)
             for id in batch {
-                deletionOutcomes[id] = deleted.contains(id)
-                    ? .deleted
-                    : .skipped("Photos couldn’t find this original any more.")
+                if deleted.contains(id) {
+                    deletionOutcomes[id] = .deleted
+                } else if let outcome = result.rejected[id] {
+                    deletionOutcomes[id] = .skipped(Self.deletionSkipReason(outcome))
+                } else {
+                    deletionOutcomes[id] = .skipped("Photos couldn’t find this original any more.")
+                }
             }
             log.info("Deleted \(deleted.count, privacy: .public) originals in one transaction")
         } catch {
@@ -602,7 +765,14 @@ enum BatchPhase: Equatable {
             for id in batch { deletionOutcomes[id] = .failed(code) }
             log.error("Deleting originals failed")
         }
-        persistQueue()
+        // Photos has answered. What it did has to reach disk as well: when it cannot, the only
+        // honest reading is that a delete was in flight, so each original is kept uncertain and a
+        // later launch checks Photos instead of deleting anything again.
+        guard persistQueue() else {
+            for id in batch { deletionOutcomes[id] = .uncertain }
+            stopForUnwrittenCheckpoint("BatchShrink couldn't write down what happened to these originals, so it stopped. Check Recently Deleted in Photos before running those videos again.")
+            return
+        }
     }
 
     /// Deletes the originals a stopped run can justify. Only ever called after the user has read
@@ -624,12 +794,14 @@ enum BatchPhase: Equatable {
         }
     }
 
-    private func persistQueue() {
-        guard !items.isEmpty else {
-            queueStore.clear()
-            queueWarning = nil
-            return
-        }
+    /// Writes the queue and says whether the record reached disk.
+    ///
+    /// Every Photos mutation is gated on this answer. A queue the app cannot write is a queue that
+    /// cannot describe what it asked Photos to do, so a caller must stop rather than take the next
+    /// step without it.
+    @discardableResult
+    private func persistQueue() -> Bool {
+        guard !items.isEmpty else { return clearStoredQueue() }
         let record = BatchQueueRecord(
             settings: BatchQueueRecord.Settings(resolution: activeSettings.resolution.rawValue,
                                                 frameRate: activeSettings.frameRate.rawValue,
@@ -640,25 +812,43 @@ enum BatchPhase: Equatable {
                                       duration: item.asset.duration,
                                       pixelWidth: item.asset.pixelWidth,
                                       pixelHeight: item.asset.pixelHeight,
-                                      bytes: item.asset.bytes,
+                                     bytes: item.asset.bytes,
                                       state: BatchQueueReconciliation.persisted(item.state),
                                       readBack: readBackOutcomes[item.asset.id],
-                                      deletion: deletionOutcomes[item.asset.id])
+                                      deletion: deletionOutcomes[item.asset.id],
+                                      copyEvidence: copyEvidence[item.asset.id])
             })
         do {
             try queueStore.save(record)
-            queueWarning = nil
+            // A notice is only dropped once the run has a written record to put in its place.
+            if !checkpointFailure { queueWarning = nil }
+            return true
         } catch {
-            queueWarning = "BatchShrink couldn’t save its place. If the app closes, this run starts over."
+            queueWarning = "BatchShrink couldn't write its place on this iPhone. It stops before changing anything else in Photos."
             log.error("Storing the queue failed")
+            return false
         }
+    }
+
+    /// Removes the stored queue and says whether the record is really gone.
+    ///
+    /// Clearing writes an empty queue rather than deleting a file, and the store reports nothing
+    /// when that fails, so the queue is read back. A record left behind would let a later launch
+    /// act on work this run has already finished, which is why the user is told about it.
+    @discardableResult
+    private func clearStoredQueue() -> Bool {
+        queueStore.clear()
+        guard queueStore.load() != nil else { return true }
+        queueWarning = "BatchShrink couldn't clear the queue it had saved. The next launch may offer this run again, so check Photos before letting it run."
+        log.error("Clearing the stored queue left a record behind")
+        return false
     }
 
     private func restoreQueue() {
         guard let record = queueStore.load() else { return }
         let reconciled = BatchQueueReconciliation.reconcile(record)
         guard !reconciled.items.isEmpty else {
-            queueStore.clear()
+            clearStoredQueue()
             return
         }
         if let resolution = CopyResolution(rawValue: reconciled.settings.resolution) {
@@ -677,11 +867,17 @@ enum BatchPhase: Equatable {
         readBackOutcomes = Dictionary(uniqueKeysWithValues: reconciled.items.compactMap { item in
             item.readBack.map { (item.identifier, $0) }
         })
+        copyEvidence = Dictionary(uniqueKeysWithValues: reconciled.items.compactMap { item in
+            item.copyEvidence.map { (item.identifier, $0) }
+        })
         deletionOutcomes = Dictionary(uniqueKeysWithValues: reconciled.items.compactMap { item in
             item.deletion.map { (item.identifier, $0) }
         })
         restoredRun = true
         phase = hasPendingWork ? .paused : .finished
+        // A restored run still has to take its own fresh look before it offers anything, because
+        // a receipt written earlier says what the assets looked like then, not now.
+        refreshDeletionLook()
         log.info("Restored a stored queue")
     }
 
