@@ -1,15 +1,23 @@
 #!/usr/bin/env node
-// Prove that the guardrails actually guard, by injecting one fault at a time into a throwaway
-// copy of the tree and checking that scripts/validate.mjs refuses it.
+// Prove that the local gates actually guard, by injecting one fault at a time into a throwaway copy
+// of the tree and checking that the gate aimed at it refuses it.
 //
 // WHY THIS EXISTS
-// `scripts/validate.mjs` is forty-odd assertions about this repository, and every one of them is
-// a claim: "Photos deletion lives in one service", "no original is read through key-value
-// coding", "the scan never allows a network request". A claim that cannot fail is worse than no
-// claim at all, because it reads as coverage. The loop already made this argument for the other
-// checker - "Rules C and D were proved against injected mutations of the real tree in a temp
-// directory, because no broken state survives in git history" - and this is the same proof, for
-// the other script, made repeatable instead of remembered.
+// Three gates are covered here, because all three make claims that read as coverage:
+//
+//   guardrails  scripts/validate.mjs - forty-odd assertions about this repository: "Photos deletion
+//               lives in one service", "no original is read through key-value coding", "the scan
+//               never allows a network request";
+//   mirror      scripts/sync-native-sources.mjs --check - the pod compiles the same Swift as the
+//               app target, and nothing stale is committed;
+//   prebuild    scripts/verify-expo-build.mjs --check-only - what `expo prebuild` will read out of
+//               app.json, and that no generated ios/ directory is in the way.
+//
+// A claim that cannot fail is worse than no claim at all, because it reads as coverage. The loop
+// already made this argument for the other checker - "Rules C and D were proved against injected
+// mutations of the real tree in a temp directory, because no broken state survives in git history"
+// - and this is the same proof, for the scripts that ran at the time it was written, made
+// repeatable instead of remembered.
 //
 // It matters more than usual right now: this is the only gate that runs while the account's
 // GitHub Actions minutes are spent (see AGENT_LOOP.md), so it is the only thing standing between
@@ -38,7 +46,7 @@
 // repository is normally edited on.
 
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -462,6 +470,64 @@ const mutations = [
     replace: null,
     expect: '1024',
     patchByte: { offset: 19, value: 1 }
+  },
+
+  // --- The mirror that keeps the pod compiling the same Swift as the app target ---
+  {
+    id: 'the app source is edited without regenerating the pod mirror',
+    file: 'VideoShrink/Models/DeletionPolicy.swift',
+    find: 'import Foundation',
+    replace: 'import Foundation\n// edited after the mirror was written',
+    gate: 'mirror',
+    expect: 'Native source copy is missing or stale'
+  },
+  {
+    id: 'the pod mirror is edited behind the app source\'s back',
+    file: 'modules/videoshrink-native/ios/VideoShrinkCore/Models/DeletionPolicy.swift',
+    find: 'import Foundation',
+    replace: 'import Foundation\n// edited after it was mirrored',
+    gate: 'mirror',
+    expect: 'Native source copy is missing or stale'
+  },
+  {
+    id: 'the mirror\'s manifest stops matching what it copied',
+    file: 'modules/videoshrink-native/ios/VideoShrinkCore/source-manifest.json',
+    find: '"Models/DeletionPolicy.swift": "',
+    replace: '"Models/DeletionPolicy.swift": "0',
+    gate: 'mirror',
+    expect: 'Native source manifest changed'
+  },
+
+  // --- The Expo build's own preflight, which reads app.json the way `expo prebuild` will ---
+  {
+    id: 'app.json stops naming the app',
+    file: 'app.json',
+    find: '    "name": "BatchShrink",\n',
+    replace: '',
+    gate: 'prebuild',
+    expect: 'does not set "expo.name"'
+  },
+  {
+    id: 'app.json stops carrying a bundle identifier',
+    file: 'app.json',
+    find: '      "bundleIdentifier": "com.wilfr.videoshrink",\n',
+    replace: '',
+    gate: 'prebuild',
+    expect: 'does not set "expo.ios.bundleIdentifier"'
+  },
+  {
+    id: 'app.json is not valid JSON for the prebuild to read',
+    file: 'app.json',
+    find: '    "slug": "videoshrink",',
+    replace: '    "slug": ',
+    gate: 'prebuild',
+    expect: 'app.json is not valid JSON'
+  },
+  {
+    id: 'a generated ios directory is left where the build expects a clean tree',
+    addFile: { path: 'ios/.keep', content: '' },
+    gate: 'prebuild',
+    expect: 'already exists'
   }
 ];
 
@@ -475,9 +541,28 @@ function copyTree(destination) {
       return true;
     }
   });
+  // The pod's mirror is generated and git-ignored, so a clean checkout does not have one and a
+  // developer's tree may have a stale one. Every copy gets a fresh one, which is what `npm ci`'s
+  // postinstall does for CI, so this harness gives the same answer on any machine.
+  const sync = spawnSync(process.execPath, ['scripts/sync-native-sources.mjs'], {
+    cwd: destination,
+    encoding: 'utf8',
+    env: process.env
+  });
+  if (sync.status !== 0) {
+    throw new Error(`could not generate the pod mirror in ${destination}: ${sync.stderr}`);
+  }
 }
 
 function applyMutation(directory, mutation) {
+  // Creating something where there was nothing is the one mutation with no file to start from.
+  if (mutation.addFile) {
+    const target = resolve(directory, mutation.addFile.path);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, mutation.addFile.content ?? '');
+    return null;
+  }
+
   // A mutation either names one file or a directory whose every Swift file it applies to. The
   // directory form exists for the assertions that are about the app as a whole - a phrase that
   // must appear somewhere in it, or a condition that must hold everywhere - because removing the
@@ -535,8 +620,19 @@ function swiftFilesUnder(target) {
   return found;
 }
 
-function runGate(directory) {
-  const result = spawnSync(process.execPath, [gate], {
+// Some claims live in a different local gate. `guardrails` is scripts/validate.mjs - forty-odd
+// assertions about the repository; `mirror` is the check that keeps the pod compiling the same
+// Swift as the app target; `prebuild` is the Expo build's own preflight, which reads app.json the
+// way `expo prebuild` will. A mutation names the gate it is aimed at, and each gate is proved to
+// pass on an untouched copy before any mutation is believed.
+const gates = {
+  guardrails: { args: ['scripts/validate.mjs'] },
+  mirror: { args: ['scripts/sync-native-sources.mjs', '--check'] },
+  prebuild: { args: ['scripts/verify-expo-build.mjs', '--check-only'] }
+};
+
+function runGate(directory, name) {
+  const result = spawnSync(process.execPath, gates[name].args, {
     cwd: directory,
     encoding: 'utf8',
     env: process.env
@@ -551,19 +647,27 @@ try {
   scratchRoot = mkdtempSync(join(tmpdir(), 'videoshrink-guardrails-'));
   console.log(`[prove-guardrails] One copy of the tree per mutation, under ${scratchRoot}\n`);
 
-  // The gate must pass on an untouched copy first, or every mutation below proves nothing: a gate
-  // that fails on everything would report forty CAUGHTs and mean nothing at all.
-  const baseline = join(scratchRoot, 'baseline');
-  copyTree(baseline);
-  const baselineRun = runGate(baseline);
-  if (baselineRun.status !== 0) {
-    console.error('[prove-guardrails] The gate fails on an untouched copy of this tree, so no');
-    console.error('[prove-guardrails] mutation below could mean anything. Its output was:\n');
-    console.error(baselineRun.output);
+  // Every gate must pass on an untouched copy first, or the mutations aimed at it prove nothing: a
+  // gate that failed on everything would report fifty CAUGHTs and mean nothing at all.
+  const unusable = [];
+  for (const name of Object.keys(gates)) {
+    const baseline = join(scratchRoot, `baseline-${name}`);
+    copyTree(baseline);
+    const baselineRun = runGate(baseline, name);
+    rmSync(baseline, { recursive: true, force: true });
+    if (baselineRun.status !== 0) {
+      unusable.push(name);
+      console.error(`[prove-guardrails] The ${name} gate fails on an untouched copy of this tree,`);
+      console.error('[prove-guardrails] so no mutation aimed at it could mean anything. It said:\n');
+      console.error(baselineRun.output);
+    } else {
+      console.log(`[prove-guardrails] Baseline: ${name} passes on an untouched copy.`);
+    }
+  }
+  if (unusable.length > 0) {
     process.exitCode = 1;
   } else {
-    console.log('[prove-guardrails] Baseline: the gate passes on an untouched copy.\n');
-    rmSync(baseline, { recursive: true, force: true });
+    console.log('');
 
     for (const [index, mutation] of mutations.entries()) {
       const directory = join(scratchRoot, `m${String(index).padStart(3, '0')}`);
@@ -575,7 +679,7 @@ try {
         continue;
       }
 
-      const run = runGate(directory);
+      const run = runGate(directory, mutation.gate ?? 'guardrails');
       if (run.status === 0) {
         results.push({ mutation, outcome: 'MISSED', detail: 'the gate passed' });
         console.log(`MISSED     ${mutation.id}: the gate passed, so that assertion is vacuous`);

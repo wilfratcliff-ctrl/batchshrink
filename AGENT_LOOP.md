@@ -20,11 +20,13 @@ deletion and change requests appear only in `PhotoLibraryService.swift`.
 
 **One of those patterns was broken, and `npm run prove:guardrails` is why we know.**
 `scripts/prove-guardrails.mjs` injects one fault per assertion into a throwaway copy of the tree
-and requires the gate to refuse it: fifty-four mutations, each naming a file, the edit that
-should break exactly one assertion, and a fragment of the message that assertion should print.
+and requires the gate aimed at it to refuse it: sixty-one mutations across the three local gates
+(`validate.mjs`, the pod-mirror check, and the Expo prebuild's own preflight), each naming a file,
+the edit that should break exactly one assertion, and a fragment of the message that assertion
+should print.
 Only `CAUGHT` is proof; `MISSED` means the assertion is vacuous, `WRONG` that the failure was
 about a different assertion, and `NO MATCH` that the mutation itself has drifted. It is not part
-of `validate:native` (it copies the tree fifty-four times and takes twenty seconds) and it is
+of `validate:native` (it copies the tree sixty-one times and takes half a minute) and it is
 worth running whenever an assertion is added, changed or doubted.
 
 Its first run found this: the force-unwrap guardrail was written `/\btry!\b/`, and **that
@@ -866,9 +868,10 @@ The blocker did not lift, so the round asked what could still be *verified* here
 local gates: they are the only instruments that run, and nobody had ever checked that they can fail.
 
 **The harness, and what it found.** `scripts/prove-guardrails.mjs` injects one fault per assertion in
-`scripts/validate.mjs` into a throwaway copy of the tree and requires the gate to refuse it: fifty-four
-mutations, each naming a file, the edit that should break exactly one assertion, and a fragment of the
-message that assertion should print. Four outcomes, and only one is good — `CAUGHT`, versus `MISSED`
+each gate into a throwaway copy of the tree and requires it to refuse the fault: sixty-one mutations
+across `validate.mjs`, the pod-mirror check and the Expo prebuild's preflight, each naming a file,
+the edit that should break exactly one assertion, and a fragment of the message that assertion should
+print. Four outcomes, and only one is good — `CAUGHT`, versus `MISSED`
 (the assertion is vacuous), `WRONG` (the failure was about a different assertion) and `NO MATCH` (the
 mutation itself has drifted). It copies the tree once per mutation and takes twenty seconds, so it is
 not part of `validate:native`; run it when an assertion is added, changed or doubted.
@@ -878,7 +881,7 @@ cannot match anything**. `!` is not a word character, so no word boundary can fo
 false for `try! foo()`, for `try!` at the end of a line, and for every other spelling a force unwrap
 can take. An agent could have committed a force unwrap and the gate would have said PASS. It is
 `/\btry!/` now. The other seven forbidden patterns all caught their faults, forty-six further
-assertions caught theirs, and the run is 54 of 54. The same run found one assertion that is
+assertions caught theirs, and the run is 61 of 61. The same run found one assertion that is
 unreachable rather than wrong — the queue store's `!removeItem(` check can never fire, because the
 temporary-file confinement check fails first for any file but `TemporaryFileManager.swift` — and that
 one is recorded rather than changed, because the property it protects is still protected.
