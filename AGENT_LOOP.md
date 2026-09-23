@@ -18,6 +18,21 @@ application Swift for forbidden patterns (`try!`, `as!`, `URLSession`, `value(fo
 `Data(contentsOf:)`, `WKWebView`, `PHAssetCollectionChangeRequest`) and asserts that Photos
 deletion and change requests appear only in `PhotoLibraryService.swift`.
 
+It now also runs `scripts/swift-call-site-check.mjs`, added after the cloud builds found that
+every compile error this project has ever produced was one of two mechanical mistakes. That
+checker catches both without a compiler:
+
+- **argument labels written out of declaration order** — it reported exactly the two
+  `DeletionPolicyTests` errors the compiler later confirmed;
+- **a bare optional parameter shadowing a non-optional stored property inside `init`** — it
+  reported exactly the two `BatchViewModel` errors the compiler later confirmed.
+
+It is a scanner, not a compiler. It checks no types, no generics, no protocol conformance, no
+argument counts, and nothing declared outside these files, so **a clean run is evidence and never
+proof.** It resolved 618 of 3,076 call sites and skipped the rest rather than guess, which is the
+trade that keeps it free of false positives: zero on the two trees the cloud compiler verified
+green, and zero on the current tree.
+
 `sync-native-sources.mjs` mirrors Swift under `VideoShrink/{Models,Services,Presentation}`
 into the Expo pod. Any Swift edit in those folders requires `npm run sync:native` or the
 check fails and EAS builds break. The mirrored copies are git-ignored, so they never appear
@@ -170,6 +185,26 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 2 | see below | N1, N2, N3, N4 and P1-4, by four parallel agents on disjoint file lists | all three PASS | 17 files, ~390 insertions |
 | 3 | see below | N5, N7-N10, eligibility rules, a compile-risk audit and the Mac handoff | all three PASS | 13 files, 145 -> 162 XCTest cases |
 | 4 | `082537a` | First cloud compile; fix the errors it found; move verification to EAS | EAS build FINISHED | core compiles; test gate added |
+| 5 | `7c11f26` | Fix the seven failures from the first test run; add macOS CI; add a local Swift static checker | local gates PASS, **no build minutes** | the fixes are unverified |
+
+### Round 5 detail
+
+The first test run's seven failures were diagnosed as one real bug and three faulty tests.
+The bug: tapping Delete after the copy changed did nothing and said nothing, because the
+tap-time re-check emptied the candidate list and the function returned before recording a
+reason. Refused candidates now carry the fresh look's own wording. The three tests were
+corrected against intent, not against whichever side was written last — one used a 600-byte
+"video" over 120 seconds, which the bitrate guard correctly rejects; one asserted that a
+refresh reports nothing removed when a selected-but-vanished video legitimately is; one held
+the transcoder and never released it for the second video.
+
+Then the build minutes ran out, and rather than stack more unverified Swift the loop built the
+two things that make the next verified build more likely to be green:
+
+- `.github/workflows/ios-tests.yml`, which runs the same `scripts/verify-native-tests.mjs` on a
+  free macOS runner. It needs a GitHub remote, which this repository does not have.
+- `scripts/swift-call-site-check.mjs`, now part of `npm run validate:native`, which catches the
+  two mechanical mistakes behind every compile error this project has produced.
 
 ### Round 4 detail
 
