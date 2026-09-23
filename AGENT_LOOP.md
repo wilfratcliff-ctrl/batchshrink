@@ -389,6 +389,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 402 tests, none executed |
 | 25 | see below | The count, the menu hint and the two empty states say what they mean - and the physical-device plan is made to cover the deletion it never tested | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 | 26 | see below | The Originals sheet checked against the code and found honest, and the first audit of the launch path: the advisories a user has to see are no longer buried, and the shell says something rather than nothing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
+| 27 | see below | The launch label now reaches the screen before the restore that blocks the runloop, the uncertain-original advisory says what the app has decided, and the quick look speaks for itself when Photos cannot hand a video over to play | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 406 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -1396,7 +1397,7 @@ rest are recorded with what they need.
 | ID | Priority | Item | Status |
 |----|----------|------|--------|
 | LP1 | 1 | The shell draws no words of its own: `App.tsx` renders one native view, the view behind it is a flat colour, and the SwiftUI host attaches lazily - so until the first SwiftUI frame the app can be a wordless near-black rectangle, and if the host never attaches it stays one | **half done, round 26.** The native view now draws its own words while it is waiting (a centred "Starting…" in the app's near-black) and replaces them with "BatchShrink could not start. Close the app and open it again." if the controller is never found - see LP5. What is *not* done is the shell's own segment before the view exists (Expo's splash covers it) and a ready signal that would let JS draw something until the host reports itself; that needs a render to justify a new inter-layer contract |
-| LP2 | 1 | The interrupted-run restore runs on the main actor in front of the first frame: `cleanWorkspace`, the adopted save notes, the queue restore with one Photos revalidation per saved item, the mid-save resolution and the monitor's registration all happen when the view first touches the session | **open, and the obvious fix is blocked by something worth recording.** Deferring the per-item `refreshDeletionLook` to a task after the first frame would shorten the wait and is safe on its own (it only delays the delete offer), but `resolveMidSaveItems` *reads* those lookups to settle a mid-save record - so deferring the refresh would silently turn a video whose copy Photos still holds back into an open question. Splitting the two means the settle path needs its own bounded look, which is a change to the exactly-once work, not a launch tweak. The cost itself is a measurement: the restored-run audit already named it as device-only, and this makes it the *first* question for the 1 October session |
+| LP2 | 1 | The interrupted-run restore runs on the main actor in front of the first frame: `cleanWorkspace`, the adopted save notes, the queue restore with one Photos revalidation per saved item, the mid-save resolution and the monitor's registration all happen when the view first touches the session | **open, and now with the fix shape rather than a blocked one.** The settle path needs the lookups only for the *flagged* items - `resolveMidSaveItems` iterates `.needsCheck` items, which is usually none or one - while the full `refreshDeletionLook()` over every saved item exists for the finished screen's delete offer and for nothing else. So the split is: look up the flagged items before settling, and let the screen that offers the deletion ask for the rest when it appears (`BatchFinishedScreen` is the only reader of `deletableItemIDs`, and the run's own tail and `finishNow()` already take that look before that screen is drawn). It is a change to the exactly-once work, not a launch tweak, and the cost it removes is still a **measurement**: the restored-run audit named the launch cost as device-only in round 20, and it is the first question for the 1 October session, because if the restore is fast the whole thing is invisible |
 | LP3 | 2 | The notice for a record that could not be read was the last item of about 850 points of scroll on the start screen, below a 300-point illustration, and its twin on the selection screen sat below the whole grid - while the advice it carries ("look in Photos before running the same videos again") is about the choice the user is making on that screen | **done, round 26.** Both notices are now drawn under the headline on the start screen and above the grid on the selection screen, with the reason written beside them |
 | LP4 | 2 | The app icon and splash are a generated placeholder, and two documents described it as the finished brand mark | **docs done, round 26**: `docs/DESIGN.md` no longer claims a brand mark it has not got and `marketing/app-store-listing.md` no longer counts the icon as existing rather than owed. **The mark itself is open and is a design decision**: `scripts/generate-icon.mjs` draws it deterministically, so a new mark either has to be drawn in that script or the convention that keeps binaries out of the repository has to change deliberately |
 | LP5 | 2 | If the host controller is never found, the view drew nothing, logged nothing and said nothing - indistinguishable from a slow start | **done, round 26**: the view retries twenty times at 50ms, then says "BatchShrink could not start. Close the app and open it again." and logs an error naming the reason. Reachability is low (an ordinary Expo hierarchy has the controller as an ancestor) but the failure mode was a silent black screen on the shipping path |
@@ -1441,3 +1442,70 @@ own initialisers run while the root view is built), which is fixed by moving the
 host's view is added; a give-up log that stated a verdict rather than the observation it had; and that
 the one sentence written for a stuck user was the only string in three rounds of VoiceOver work that
 nothing announced, which now posts an announcement when it appears.
+
+### Round 27 — the label that was never drawn, and an advisory with no way to act on it
+
+Round 26 gave the shell a placeholder so a launch would not be a wordless rectangle, and an
+independent read then found it was removed one line too early. Round 27 found that both of those fixes
+were aimed at the wrong thing. **The label was never drawn at all on the path that matters.** The
+common case is the controller being found on the first layout pass: the label is added and removed
+inside that one call, and between those two lines the root view is built - which is the first touch of
+the session's statics, whose initialisers run the workspace sweep, the adopted notes and the queue
+restore **on the main actor, inside the same runloop turn**. UIKit commits a turn's drawing at the end
+of the turn, so a label added and covered within it never reaches the screen; the screen stays the
+native view's own background, which is the app's near-black. Neither when the label was removed nor
+what covered it was the problem; nothing could draw.
+
+The fix is one hop through the main queue between finding the controller and building the host, so the
+label commits before the work it describes starts, and the removal then happens after that work rather
+than before it. The cost is that the app draws its own content one frame later on a launch where the
+restore is instant, and the gain is that a launch where it is not shows a word instead of a blank
+rectangle. A `isBuildingHost` flag keeps a burst of layout passes from building two hosts, and the
+give-up path now distinguishes a view that left its window (where the next attach will do) from a
+controller that went away (where another look is worth taking) - so the log line is an observation
+rather than a verdict about a controller that may never have been missing.
+
+The lesson is one this file already carries and had to be taught again: a fix aimed at the line that
+looked wrong, without asking what the mechanism does, is not a fix. Two agents and two rounds moved one
+`removeFromSuperview()`.
+
+The other half of the round closes `DEL7`, the last *reachable* advisory with no way to act on it. An
+original whose delete Photos never answered for comes back as uncertain, and the app then never offers
+it for deletion again - in this run or a later one - so there was nothing for the user to do and
+nothing that said so. Both screens now end that sentence with what the app has decided, and the
+sentence itself moved into one function, because the paused screen's note and the finished screen's
+line carry the same branch and either can be the one a user reads.
+
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 405
+XCTest cases present), the call-site checker PASS over 52 files, 1,240 declarations and 8,075 call sites with 0 findings, the pod mirror verified, and the cases that state the uncertain-original
+sentence updated with it. The shell change cannot be compiled or rendered here at all - no target on
+this machine builds the module, and the transition has never been observed - so it is written to be
+read rather than to be trusted.
+
+**The same round opened the last surface no audit had ever read: what the app shows when it previews a
+video.** Two places do that - the quick look from the selection grid, and the copy the one-video flow
+shows before saving it - and neither had been through anything. The audit is
+**[docs/AUDIT_PREVIEW.md](docs/AUDIT_PREVIEW.md)**, its own status map is at the top of that file, and
+the shape of what it found is one this project should recognise by now: a state the code can reach that
+says nothing at all.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| PV1 | 2 | The 20-second bound covers PhotoKit's *request*, not the player: an item that arrives and never becomes ready left a black rectangle under a note telling the user to press play, with no sentence and no bound left running | **half done, round 27**: the sheet waits for the item's own status, under 10 seconds of its own, and a `.failed` item or a wait that gets nowhere gets a sentence. Two clocks now, and the device plan's row says so |
+| PV2 | 2 | The one-video preview has no loading and no failure state at all - one unconditional player under a footer asking the user to check the picture | **open**, with the shape PV1 got, and a note that its reachability is lower: the file is local and was verified seconds earlier by the flow's own verifier, so a failure there means the file is gone, which the save path refuses as well |
+| PV3 | 2 | Both of the scrub sheet's notes were drawn in the states that contradict them | done, round 27 |
+| PV4 | 2 | The one failure line is whichever pipeline sentence was written for another moment - including "add it to your allowed videos in Settings" for a video Photos no longer has | **done, round 27**, with the sheet's own words for the two errors it can see and a plain sentence for the rest, pinned by a case |
+| PV5 | 2 | Nothing tells VoiceOver that the look finished, failed or arrived | **half done**: the failure is one element with a label; an announcement when a look *finishes* is open |
+| PV6 | 2 | Both previews play PhotoKit's `.current` version while the run exports `.original` - kept in step today only because edited videos are refused by name | **open, latent, and a decision**: the preview must be given the version the run will export, and getting it wrong shows a different video from the one the user gets |
+| PV7 | 3 | Neither preview reacts to backgrounding, and no audio session is configured, so "check the sound" can be silenced by the Ring/Silent switch | open, and it is a decision about what the app claims from the phone rather than a patch |
+| PV8 | 3 | "Size on screen" is PhotoKit's pixel size, while every other picture size in the app is the media's with rotation applied | open |
+| PV9 | 3 | Dismissing during the load could build a player nothing would ever clear | done for the scrub sheet, round 27; the other preview's await belongs with PV2 |
+| PV10 | 3 | At the largest text sizes the failure sentence lived in a box whose height is decided by its width | done, round 27: the words moved out of the box and under it, where they wrap |
+| PV11 | 3 | A copy this app made was labelled "Original file" on its own sheet | done, round 27: the row names the file's size, not whose file it is |
+
+The audit's sound list is worth keeping too: nothing in either preview ever calls `play()`, both pause
+and clear their item on dismissal, the batch's sheet cannot outlive its screen, the 20-second bound and
+its failure line are pinned by two tests, the iCloud sentence matches `isNetworkAccessAllowed`, the copy
+the one-video sheet plays is byte-for-byte the file `save()` re-verifies, and neither sheet is offered
+where it cannot work.
+

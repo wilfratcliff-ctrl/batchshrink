@@ -505,8 +505,33 @@ import SwiftUI
         var one = DeletionReport()
         one.uncertain = 1
         XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(one),
-                       "1 original may already have been deleted. Check Photos before running it again.")
+                       "1 original may already have been deleted. Check Photos before running it again. This run will not try to delete it again.")
         // The plural form is pinned by `testThePausedScreenNamesOnlyDeletionsThatHaveAlreadyHappened`.
+    }
+
+    /// The quick look's own sentences, which are not the pipeline's.
+    ///
+    /// The error it can be handed is written for a run that is about to change something: a failed
+    /// fetch tells the user to add the video to the app's allowed videos in Settings, which is right
+    /// for a video outside a limited grant and wrong for one Photos no longer has - and the sheet
+    /// cannot tell those apart, so round 27 gave it its own words for the two it can see. Neither
+    /// mentions a copy, because nothing on that screen makes one.
+    func testTheQuickLookNamesItsOwnFailures() {
+        let unavailable = VideoScrubSheet.failureSentence(for: PipelineError.assetUnavailable)
+        XCTAssertTrue(unavailable.contains("no longer in your Photos library"))
+        XCTAssertTrue(unavailable.contains("access"))
+        XCTAssertFalse(unavailable.lowercased().contains("copy"))
+
+        let retrieval = VideoScrubSheet.failureSentence(for: PipelineError.retrieval)
+        XCTAssertTrue(retrieval.contains("could not fetch"))
+        XCTAssertFalse(retrieval.lowercased().contains("copy"))
+
+        // Every other pipeline error is a step this screen does not take, so it gets the plain
+        // sentence rather than a claim about a run.
+        XCTAssertEqual(VideoScrubSheet.failureSentence(for: PipelineError.insufficientStorage),
+                       "Photos could not hand this video over to play.")
+        XCTAssertEqual(VideoScrubSheet.failureSentence(for: PipelineError.verification),
+                       "Photos could not hand this video over to play.")
     }
 
     /// The overflow control's hint names what is actually behind it.
@@ -1102,7 +1127,13 @@ import SwiftUI
         var uncertain = DeletionReport()
         uncertain.uncertain = 2
         XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(uncertain),
-                       "2 originals may already have been deleted. Check Photos before running those again.")
+                       "2 originals may already have been deleted. Check Photos before running those again. This run will not try to delete them again.")
+        // One function answers for both screens, so the paused note and the finished line cannot
+        // drift apart about a state either of them can be the one a user reads.
+        XCTAssertEqual(BatchFinishedScreen.uncertainOriginalsNote(uncertain),
+                       BatchPausedScreen.settledOriginalsNote(uncertain))
+        XCTAssertNil(BatchFinishedScreen.uncertainOriginalsNote(DeletionReport()),
+                     "a run with nothing uncertain says nothing here")
 
         // A run that is merely waiting for a confirmation has not reached anything reportable.
         var waiting = DeletionReport()

@@ -1423,13 +1423,11 @@ struct BatchPausedScreen: View {
                 ? "1 original has already been deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals have already been deleted. They sit in Recently Deleted for 30 days."
         }
-        if report.uncertain == 1 {
-            return "1 original may already have been deleted. Check Photos before running it again."
-        }
-        if report.uncertain > 0 {
-            return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
-        }
-        return nil
+        // The second sentence is the finished screen's own, because it is the sentence a run that has
+        // ended says: nothing can act on that answer - an original whose delete was interrupted is
+        // never offered for deletion again, in this run or a later one - so it says what the app has
+        // decided rather than leaving an advisory with no way to act on it.
+        return BatchFinishedScreen.uncertainOriginalsNote(report)
     }
 
     /// Only the reasons worth putting on screen. A pause the user asked for needs no explanation,
@@ -1775,6 +1773,23 @@ struct BatchFinishedScreen: View {
         )
     }
 
+    /// What the app says about an original whose delete was interrupted, drawn by both screens that
+    /// can know about it.
+    ///
+    /// One function rather than the same two sentences in two places: the paused screen's note and
+    /// the finished screen's line each carry this branch, and they have to stay word for word the
+    /// same, because they describe one state and either of them can be the one a user reads. The
+    /// last clause is the answer to a question neither of them used to answer - what happens next -
+    /// and the answer is that nothing does: an original whose delete was interrupted is never
+    /// offered for deletion again, in this run or a later one, so the app says so rather than leaving
+    /// an advisory with no way to act on it.
+    static func uncertainOriginalsNote(_ report: DeletionReport) -> String? {
+        guard report.uncertain > 0 else { return nil }
+        return report.uncertain == 1
+            ? "1 original may already have been deleted. Check Photos before running it again. This run will not try to delete it again."
+            : "\(report.uncertain) originals may already have been deleted. Check Photos before running those again. This run will not try to delete them again."
+    }
+
     /// What the run did with originals, in one honest line.
     ///
     /// Static, internal and taking the model, because the paused screen draws the same sentence: a
@@ -1789,12 +1804,7 @@ struct BatchFinishedScreen: View {
                 ? "1 original deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals deleted. They sit in Recently Deleted for 30 days."
         }
-        if report.uncertain == 1 {
-            return "1 original may already have been deleted. Check Photos before running it again."
-        }
-        if report.uncertain > 0 {
-            return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
-        }
+        if let uncertain = Self.uncertainOriginalsNote(report) { return uncertain }
         if mode.deletesOriginals {
             // "Delete at the end" is the one mode whose whole design is a confirmation that has not
             // happened yet, and this line used to return nil for exactly that state - the state the

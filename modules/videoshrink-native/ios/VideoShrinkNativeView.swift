@@ -78,6 +78,9 @@ final class VideoShrinkNativeView: ExpoView {
   /// two, and one retry per layout pass would burn twenty attempts in milliseconds and tell a user
   /// the app could not start moments before it does.
   private var retryScheduled = false
+  /// True between the hop that lets the placeholder draw and the build that follows it, so a burst of
+  /// layout passes cannot build the host twice.
+  private var isBuildingHost = false
   /// Twenty tries at 50ms apart is one second, which is far longer than the hop that finds the
   /// controller in an ordinary hierarchy and short enough that a user who is stuck is told soon.
   private static let attachAttemptLimit = 20
@@ -126,13 +129,37 @@ final class VideoShrinkNativeView: ExpoView {
   }
 
   private func attachHostIfNeeded() {
-    guard window != nil, host == nil else { return }
-    guard let parent = containingController else {
+    guard window != nil, host == nil, !isBuildingHost else { return }
+    guard containingController != nil else {
       // Nothing else in this view can draw, so say something rather than nothing - and keep trying,
       // because the controller appears a hop or two after the first layout in every hierarchy this
       // has been seen in.
       showPlaceholder()
       retryAttach()
+      return
+    }
+    // The words have to reach the screen before the work they describe, and that takes one hop
+    // through the queue. This method runs inside a layout pass, and what it would do next is build
+    // the root view - which is the first touch of the session's statics, whose initialisers run the
+    // workspace sweep, the adopted notes and the queue restore with one Photos revalidation per
+    // saved item, all on this actor inside that call. A label added and then covered within the same
+    // runloop turn is never drawn at all, so the app would be a blank rectangle for exactly the
+    // stretch this label exists to cover. The cost of the hop is that the app draws its own content
+    // one frame later than it otherwise would.
+    showPlaceholder()
+    isBuildingHost = true
+    DispatchQueue.main.async { [weak self] in self?.buildHost() }
+  }
+
+  /// Builds the SwiftUI host - the call the session's own work runs inside.
+  private func buildHost() {
+    guard window != nil, host == nil, let parent = containingController else {
+      // Either this view left its window while the hop was pending - in which case the next
+      // `didMoveToWindow` attaches, and retrying now would only spend the budget and log about a
+      // controller that was never the problem - or the controller went away under it, which is
+      // worth another look.
+      isBuildingHost = false
+      if window != nil { retryAttach() }
       return
     }
     // A later detach and re-attach starts its own count: the retries are for finding the controller
@@ -147,12 +174,9 @@ final class VideoShrinkNativeView: ExpoView {
     controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     addSubview(controller.view)
     controller.didMove(toParent: parent)
-    // The label goes *after* the host's view is in the hierarchy, not before it is built: building
-    // the root view is the first touch of the session's statics, and their initialisers are where the
-    // main-actor work runs - the workspace sweep, the adopted save notes, the queue restore with one
-    // Photos revalidation per saved item. Removing the words before that would leave the screen blank
-    // for exactly the slow part this label exists to cover.
+    // And the label goes only now: the work above is the slow part it was covering.
     placeholder.removeFromSuperview()
+    isBuildingHost = false
   }
 
   /// Looks again shortly, and gives up out loud rather than silently.
@@ -167,7 +191,7 @@ final class VideoShrinkNativeView: ExpoView {
         // The observation, not a verdict: a controller arriving later still attaches, and this view
         // is reachable again from the next layout pass. The sentence on screen is the one a user
         // needs; this line is what a log should say.
-        log.error("No parent view controller was found for the SwiftUI host after 20 looks over about a second")
+        log.error("Gave up attaching the SwiftUI host after 20 looks over about a second: no parent view controller was found, or this view is no longer in a window")
         UIAccessibility.post(notification: .announcement, argument: Self.couldNotStart)
       }
       return
@@ -199,6 +223,9 @@ final class VideoShrinkNativeView: ExpoView {
   }
 
   private func detachHost() {
+    // A detach in the middle of the hop leaves nothing to build: `buildHost` checks the window again
+    // and the flag here means the next attach starts from scratch.
+    isBuildingHost = false
     guard let controller = host else { return }
     // Teardown keeps the backgrounding rule: work in flight is cancelled, an accepted save
     // settles, and a finished copy is kept rather than deleted.
