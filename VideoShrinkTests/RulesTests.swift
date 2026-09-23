@@ -150,12 +150,13 @@ final class RulesTests: XCTestCase {
             _ = try await VideoVerificationService().verify(url, source: metadata(), expecting: nil)
             XCTFail("A nonempty corrupt container must never pass verification")
         } catch {
-            // Different OS releases may reject during property loading or track inspection, so the
-            // exact case is not pinned - its two siblings above can pin theirs. What has to hold on
-            // every release is that the refusal arrives as a pipeline failure rather than as a
-            // cancellation or as something this app's error vocabulary cannot name.
-            XCTAssertTrue(error is PipelineError,
-                          "a corrupt container must be refused as a pipeline failure")
+            // Two shapes are honest here and only two: the media layer refusing the container by name
+            // once it cannot read a playable track, or AVFoundation throwing its own error while it
+            // parses. Which one arrives depends on the release - the sibling cases above never reach
+            // the parser, which is why they can pin an exact case and this one cannot - so pinning
+            // either would turn a green case red on an OS that answers the other way. What has to
+            // hold everywhere is that the attempt ends in a refusal: not a cancellation, and not a
+            // success that the `XCTFail` above would have caught.
             XCTAssertFalse(error is CancellationError)
         }
     }

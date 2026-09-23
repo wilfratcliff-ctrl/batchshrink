@@ -61,6 +61,14 @@ import Photos
         // was handing over, so it comes back as a question instead of as work.
         XCTAssertEqual(BatchQueueReconciliation.persisted(.saving), .saving)
         XCTAssertEqual(BatchQueueReconciliation.live(.saving), .needsCheck)
+        // And every pair has to be claimed by one of those three arms. Without this a stored value
+        // this case has never been taught about - a new `.skipped` reason, say - would be filtered out
+        // of both loops and checked by nothing, while the case still passed.
+        for (live, stored) in cases {
+            XCTAssertEqual(BatchQueueReconciliation.persisted(live), stored)
+            XCTAssertTrue(lossless.contains(stored) || stored == .running || stored == .saving,
+                          "\(stored) is in neither table, so this case stopped checking it")
+        }
     }
 
     func testFailureCodesStayUsefulAfterARestart() {

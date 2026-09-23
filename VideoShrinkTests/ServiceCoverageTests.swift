@@ -1130,9 +1130,10 @@ import UIKit
                        "Neither this app's copy nor the original it came from is picked automatically")
         // And the flow's own promise, which no case held before: the Originals sheet says "This
         // applies to batch runs. The one-video flow never deletes." Nothing on this path has an
-        // original to remove, and the fake would record it if anything asked.
+        // original to remove. The fake records a deletion when one is *submitted*, so what this
+        // observes is the sharper of the two: nothing on this path ever got far enough to ask.
         XCTAssertTrue(oneVideo.photos.deleteBatches.isEmpty,
-                      "the one-video flow never asks Photos to delete anything")
+                      "the one-video flow never submitted a deletion")
     }
 
     /// A save is the one step whose outcome the app cannot recover from not knowing, and this flow

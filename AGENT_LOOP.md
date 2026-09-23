@@ -1546,8 +1546,7 @@ set, rather than a change: for every video this app will play the two are the sa
 nothing while risking a full iCloud download for a look.
 
 Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 407
-XCTest cases present), the call-site checker PASS over 52 files, 1,243 declarations and 8,105 call
-sites with 0 findings, the pod mirror verified, and a case that pins the readiness wait's timeout path
+XCTest cases present), the call-site checker PASS over 52 files, 1,246 declarations and 8,142 call sites with 0 findings, the pod mirror verified, and a case that pins the readiness wait's timeout path
 with an item for a file that is not there - which is deterministic, because a wait of no seconds
 answers before the item can change its mind. What no case can hold is the two views' layout, the
 announcement, or whether AVKit paints anything over an item that never becomes ready.
@@ -1555,14 +1554,14 @@ announcement, or whether AVKit paints anything over an item that never becomes r
 **The other half of the round was aimed at the thing that will be the only evidence in October.** The
 suite is the gate once CI returns, and a case that cannot fail is worse than no case - so this round
 audited the suite itself. The audit is **[docs/AUDIT_TEST_SUITE.md](docs/AUDIT_TEST_SUITE.md)**, it read
-all 408 case bodies, and it found fourteen worth naming. Four were repaired here, because they were
+all 408 case bodies, and it named eight findings, with a further list of cases that are thin but honest. Four of the findings were repaired here, because they were
 false assurance about safety rather than redundancy.
 
 | # | Priority | Item | Status |
 |---|----------|------|--------|
 | 1 | 1 | `testLiveStatesRoundTripThroughTheStoredForm` asserted `live(stored) == live(stored)`: `live` is pure, so the assertion held whatever the mapping did, in the case that guards the queue's state machine | **done, round 28.** Six pairs round-trip in both directions and five are asserted as the coarsening they are - everything in flight waits again, and a save Photos may have committed comes back as a question |
 | 2 | 1 | Every `FlowRoutingTests` case fed the rule a *copy* of `canChoose`'s stage list, so a model that gained `.choosing` would leave all eight green while a user could walk away from an open picker | **done, round 28**, in `PipelineTests`, where the real model fixture lives: two cases drive the model to `.choosing` and to `.readyToSave` and hold the rule to its own answer |
-| 3 | 1 | The two sentences that tell a user to look in Photos were never asserted as text - every reference compared a constant with itself, so "Look in Photos" could have become its opposite with all 407 cases green | done, round 28 |
+| 3 | 1 | The two sentences that tell a user to look in Photos were never asserted as text - every reference compared a constant with itself, so "Look in Photos" could have become its opposite with the whole suite green | done, round 28 |
 | 4 | 2 | The failure vocabulary was pinned for shape only, and one confirmation case built its expectation out of the very string it was checking | **done, round 28**: the sentences that carry an instruction are asserted as content, including `.save`'s "Inspect Photos before retrying" and the three `DeletionMode.detail` strings |
 | 5 | 2 | `testTheLiveOverloadsReportWhatTheSystemSays` cannot fail on a runner, and its comment claimed the opposite | recorded, round 28: the case now says what it cannot catch and why the two cases above it matter more |
 | 6 | 2 | The `PlayerReadiness` case added in the same round passes against a stub returning false, because a wait of no seconds ends at the deadline | recorded, round 28: the case says so, and names the simulator plan as where a real item would come from |

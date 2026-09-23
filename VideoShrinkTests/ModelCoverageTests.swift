@@ -623,7 +623,7 @@ import Photos
         XCTAssertTrue(PipelineError.cancelled.localizedDescription.contains("not changed"))
 
         // The Originals sheet's descriptions are what a user reads before turning deletion on, and one
-        // of them is quoted by the confirmation case elsewhere in this file - so a change there has to
+        // of them is quoted by the confirmation case in BatchTests - so a change there has to
         // fail here rather than quietly rewriting both sides of that assertion.
         XCTAssertEqual(DeletionMode.off.detail, "Nothing is deleted. You keep both copies.")
         XCTAssertEqual(DeletionMode.afterEachCopy.detail,
@@ -837,6 +837,10 @@ import Photos
         XCTAssertEqual(item.id, asset.id)
         XCTAssertEqual(item.id, "video-a")
         XCTAssertEqual(item.state, .pending)
+        // And the identity belongs to the video rather than to what the row is doing: a row keeps the
+        // same identity as its state changes, which is what lets a run's record, its rows and the
+        // screens that follow them keep pairing one with another across a stop and a relaunch.
+        XCTAssertEqual(BatchItem(asset: asset, state: .needsCheck).id, item.id)
         XCTAssertNotEqual(BatchItem(asset: coverageAsset("video-b", bytes: 1_000), state: .pending).id,
                           item.id)
     }

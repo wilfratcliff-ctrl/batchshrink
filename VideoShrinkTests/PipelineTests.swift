@@ -75,6 +75,12 @@ import Combine
         let kept = Fixture()
         await ready(kept)
         XCTAssertEqual(kept.model.stage, .readyToSave)
+        // The stage is kept on purpose, so this is the state that must *not* be one the flow could
+        // start over from: if `canChoose` ever gained `.readyToSave`, the action bar would draw
+        // "Choose another video" over a copy that has not been saved, and tapping it resets the export
+        // - which is the whole failure this rule exists to prevent.
+        XCTAssertFalse(kept.model.canChoose,
+                       "a finished copy waiting to be saved is not a state the flow may start over from")
         XCTAssertTrue(FlowRouting.oneVideoIsAtRest(canChoose: kept.model.canChoose,
                                                    stage: kept.model.stage),
                       "the copy is kept on purpose, so the screen that can save it stays reachable")

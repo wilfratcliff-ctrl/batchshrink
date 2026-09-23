@@ -1552,18 +1552,16 @@ struct BatchFinishedScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 totalsCard
-                if batch.readBackReport.total > 0 {
-                    Text(readBackLine)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                // What wants an answer comes before what merely has to be accounted for: the rows that
+                // need the user, then the videos the run never took, then its own notes. The read-back
+                // line moved into the card above, where the copies it describes are counted.
+                failures
                 // The same list the working and paused screens carry, in the same sentence: the
                 // videos the chosen-video read took out before the run began. They are not in
                 // `items`, so without this the counts above cannot be reconciled with what was
                 // picked, and they are named as unsupported rather than as anything that failed.
                 VideoReasonList(assets: batch.preflightRefusals,
                                  context: "Taken out of this run before it started.")
-                failures
                 if let note = Self.deletionNote(batch) {
                     Text(note)
                         .font(.footnote).foregroundStyle(.secondary)
@@ -1830,6 +1828,14 @@ struct BatchFinishedScreen: View {
                            detail: "across \(batch.summary.savedCount) saved \(batch.summary.savedCount == 1 ? "copy" : "copies")")
                 Divider()
                 ShrinkSizeComparison(original: savings.originalBytes, copy: savings.compressedBytes)
+                // In the card, not floating under it: this line is about the copies the card counts,
+                // and the finished page had it sitting between the numbers and the rows that want an
+                // answer from the user.
+                if batch.readBackReport.total > 0 {
+                    Text(readBackLine)
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             } else {
                 ShrinkStat(value: "Nothing measured", label: "no smaller copies",
                            detail: "originals were left as they were")
