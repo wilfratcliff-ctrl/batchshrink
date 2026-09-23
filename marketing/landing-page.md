@@ -183,6 +183,10 @@ run through and quietly changed:
 - shared or restricted items
 - anything that is not a video, or a video with more than one audio track
 
+Most of those are turned down as soon as the library is listed. HDR and ProRes cannot be told
+apart from an ordinary video until the file is opened, so one of those can be selected and only
+refused once the run reaches it - with the reason on screen either way.
+
 That list is the point of the app. A smaller copy of a slow-motion clip loses the slow motion; a
 flattened cinematic export loses the moving focus point; an SDR-shaped export of an HDR video
 changes how it looks. BatchShrink is the option you pick when you would rather be told "not this
@@ -433,10 +437,10 @@ both in plain words.
   `VideoShrinkTests/EligibilityTests.swift`), but it has never seen a real HDR or ProRes original.
   The copy says the app refuses them, which is true of the code, and does not claim the detection
   catches every file.
-- **A precise test count for the status line.** The brief says 263 cases, the older docs say 162,
-  and the tree currently declares 264 `func test` cases across ten test files. That
-  disagreement is why the page says "its automated test suite" instead of a number; put a figure
-  in only after a CI run confirms one.
+- **A precise test count for the status line.** The brief's figure, the older documents' figure and
+  the tree's own count all disagree, and the count has moved several times in a single day. That is
+  why the page says "its automated test suite" instead of a number; put a figure in only after a
+  CI run at a named commit confirms one.
 - **Support contact details.** None exist in the repo, so the footer keeps a placeholder rather
   than inventing an address.
 - **The app icon and screenshots.** The repo carries a generated placeholder icon

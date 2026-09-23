@@ -1,4 +1,4 @@
-# Compile and run the 162-case XCTest target on a macOS runner.
+# Compile and run the XCTest target on a macOS runner.
 #
 # This exists because EAS iOS builds are a rationed monthly resource on the free plan:
 # the minutes were exhausted and do not reset until 1 October 2026, so the `verify-tests`
@@ -68,5 +68,5 @@ jobs:
         # would make a failing run harder to trust.
         run: npm ci
 
-      - name: Compile and run the 162 XCTest cases
+      - name: Compile and run the XCTest cases
         run: node scripts/verify-native-tests.mjs

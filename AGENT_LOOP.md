@@ -169,6 +169,17 @@ Each agent owns a fixed file list for the round and edits nothing else. When a c
 needed outside the list, the agent reports it instead of making it. This is what stops four
 agents from tearing each other's work apart in a codebase no one can compile.
 
+## Keeping this file honest
+
+**This backlog goes stale, and agents have already been misled by it.** In round 10 three
+separate marketing agents correctly declined to tell users that HDR and ProRes videos are
+refused — because the N12 row above still said those rules were dead. It had been fixed two
+rounds earlier. Each agent trusted this file over the tree and wrote less than the app can
+actually do, which is the same class of error as overclaiming, and just as damaging.
+
+So: when a task depends on what the app currently does, **read the code, not the status column
+here.** And when you close an item, update its row in the same commit that closes it.
+
 ## Backlog
 
 Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of record.
@@ -193,7 +204,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N9 | 2 | `ThumbnailService` key index grew unbounded | done, round 3 |
 | N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
 | N11 | 1 | 162 XCTest cases had never been compiled or run | done, round 5: 162 compiled and executed, 155 pass |
-| N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing can ever set either trait, so both rules are dead and an HDR original is still processed. `NEXT_PHASE.md` requires HDR exclusion. Needs codec/colour-tag detection where the media is readable, applied to both `Traits` call sites in the same round | open |
+| N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing could set either trait | **done, rounds 6 and 7.** `VideoVerificationService` now reads the codec subtype and the transfer function where the media is readable, so HDR and ProRes originals ARE refused, in `AssetRules`' own words, and the refusal reaches the user as `PipelineError.unsupportedOriginal(reason:)` |
 | N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
 | N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
 | N15 | 3 | `withTaskCancellationHandler(operation:onCancel:)` is the pre-`isolation:` overload, deprecated in the iOS 18 SDK | open |
@@ -201,8 +212,8 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N17 | 1 | The 162 cases compiled but had never executed | done, round 5: the `verify-tests` profile runs them on a simulator |
 | N18 | 2 | `expo doctor` reports 1 failed check during every EAS setup. The build continues, so it is a warning, but a release should not ship past it unnoticed | open |
 | N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
-| N20 | 0 | **7 of 162 tests fail.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | fixed in `7c11f26`, **unverified** |
-| N21 | 0 | Prove `7c11f26` actually turns the suite green. One of the four fixes is behaviour-changing code in the deletion path, so this is not a formality | blocked, needs build minutes |
+| N20 | 0 | **7 of 162 tests failed.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | **done.** Fixed in `7c11f26`, proven green by CI from `5d72357` onward |
+| N21 | 0 | Prove the fixes turn the suite green | **done for the suite.** Green in CI since `5d72357`. The deletion path still needs a device run, which is N19 |
 
 ## Round log
 
@@ -214,6 +225,36 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 3 | see below | N5, N7-N10, eligibility rules, a compile-risk audit and the Mac handoff | all three PASS | 13 files, 145 -> 162 XCTest cases |
 | 4 | `082537a` | First cloud compile; fix the errors it found; move verification to EAS | EAS build FINISHED | core compiles; test gate added |
 | 5 | `7c11f26` | Fix the seven failures from the first test run; add macOS CI; add a local Swift static checker | local gates PASS, **no build minutes** | the fixes are unverified |
+| 6 | `e2a13a3` | HDR/ProRes refusal, exactly-once save reconciliation, accessibility, 162→224 tests, docs | CI: compile FAILED | one type error, caught by CI |
+| 7 | `07526c4` | Close round 6's seams: the refusal reaches the user as itself; two reported defects fixed | CI: **green** | — |
+| 8 | `0849dfd` | A false line in the start dialog; mid-save findings rendered; device readiness; 263 tests | CI: green | — |
+| 9 | `81ab92c` | A scan that survives the library changing underneath it | CI: green | — |
+| 10 | see below | First growth round: six marketing agents in parallel with five app agents | local gates PASS | six documents in `marketing/` |
+
+### Round 10 — the app, and the business
+
+Five agents worked the app: the mid-save finding is now rendered instead of left as a flat
+question; the scan survives the library changing underneath it; a second coverage pass took the
+suite to 264 cases; the first-run flow was audited against five questions a new user has; and
+device readiness was swept (permission strings rewritten to match what the app does with iCloud
+originals, privacy manifest verified against the APIs actually used, build 11 set, `expo-doctor`
+now 21/21).
+
+That audit found the worst single line in the product: the confirmation dialog before a batch
+started said **"Your originals stay exactly where they are"** unconditionally, including when the
+user had switched deletion on. It was the last thing anyone read before work began.
+
+Six marketing agents produced the first business documents, in `marketing/`: a landing page with
+its claims traced to evidence, an App Store listing with keyword reasoning, a social content
+pack, a Reddit research and drafting pack, a ranked channel map, and a pricing decision. All of
+them were required to mark each claim as verified, repo-sourced, or inferred, and none was allowed
+to claim a result the app has not produced.
+
+**The most useful thing that happened in this round was a failure.** Four of those marketing
+agents read the stale N12 row above and correctly refused to say the app declines HDR and ProRes
+videos — so they wrote copy that understated the product, and one of them hung a pricing gate on
+the same wrong fact. A fifth agent caught it independently by reading the code. This is why the
+section above exists.
 
 ### Round 5 detail
 

@@ -11,7 +11,7 @@ built on.
 
 | Fact | Status |
 | --- | --- |
-| BatchShrink finds videos in Photos, estimates what smaller copies would save, makes smaller copies as new Photos items, checks each copy, and can optionally delete originals behind a gate that is off by default | Implemented source. 162 XCTest cases compile and pass in CI on commit `5d72357` |
+| BatchShrink finds videos in Photos, estimates what smaller copies would save, makes smaller copies as new Photos items, checks each copy, and can optionally delete originals behind a gate that is off by default | Implemented source. Its automated test suite compiles and passes in CI |
 | A scan never downloads originals | Implemented source. Not watched on a real device yet |
 | The app is an iPhone app, iOS 18+, and free | Decided |
 | The app has never been run on a device | True. Build 10 is the last build known to have reached testers |
@@ -292,9 +292,10 @@ Tags: #iphonestorage #iphonehelp #datasafety #iphonetips #tech
 
 9.
 Hook: What my app refuses, and why that is the feature.
-Body: Ordinary videos only. Edited clips, slow-motion, time-lapse, spatial and cinematic video are
-left alone rather than processed badly. The app is a tool for the normal case, not a
-one-size-fits-all converter.
+Body: Ordinary videos only. Edited clips, slow-motion, time-lapse, spatial and cinematic video, and
+HDR and ProRes files, are left alone rather than processed badly. The last two are spotted when the
+app opens the file, not in the list, so a video you pick can stop there. The app is a tool for the
+normal case, not a one-size-fits-all converter.
 Tags: #iphonehelp #iphonevideos #iphonestorage #apps #techtips
 
 10.
@@ -394,10 +395,12 @@ Hard no:
   or shrunk.
 - No pretending to be a user. No fake testimonial, no invented comment screenshot, no staged
   "I tried this and..." post written in someone else's voice.
-- No claim that it works on HDR or ProRes video. The refusal rules for those two formats exist in
-  the source but nothing in the app can currently set those traits, so an HDR original is still
-  processed. Say edited, slow-motion, time-lapse, spatial and cinematic if you list refusals, and
-  drop HDR and ProRes until the rule actually fires and a device run has confirmed it.
+- No claim that it handles HDR or ProRes video. Both are refused, but only once the app opens the
+  video: a file's codec subtype and its colour transfer function appear in no Photos listing, so a
+  video can be selected and then refused at that point
+  (`VideoShrink/Services/VideoVerificationService.swift`). If you list refusals, say edited,
+  slow-motion, time-lapse, spatial, cinematic, Live Photos and shared or restricted items are
+  turned down from the list, and HDR and ProRes are turned down when the app opens them.
 - No "your videos are safe" as a flat statement. Say what is true: the original is not touched
   unless deletion is switched on, and anything deleted sits in Recently Deleted for 30 days before
   the space comes back, and only after the devices sync.
@@ -473,9 +476,9 @@ dropping it.
   for 30 days, and only after the devices sync.
 - Any "no quality loss" claim. The copy is a smaller re-encode, and the honest framing is that the
   original is kept and the copy is checked, not that the two are identical.
-- Any claim that it handles HDR or ProRes. The rules are in the source but unreachable, so an HDR
-  original is still processed today. This is the one place where the brief and the repository
-  disagree, and the repository wins.
+- Any claim that it handles HDR or ProRes. Both are refused, but discovered only when the app
+  opens the video rather than in the list, so never imply that everything in the list is
+  processable or that the check happens up front.
 - Any claim about Live Photos other than that the app does not work on them.
 - Any claim that the scan, the app or anything else has been verified on a phone. The test suite
   passing is stated as exactly that, and never as a device result.
