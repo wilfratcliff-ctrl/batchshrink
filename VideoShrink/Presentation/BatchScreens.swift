@@ -1423,10 +1423,10 @@ struct BatchPausedScreen: View {
                 ? "1 original has already been deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals have already been deleted. They sit in Recently Deleted for 30 days."
         }
-        // The second sentence is the finished screen's own, because it is the sentence a run that has
-        // ended says: nothing can act on that answer - an original whose delete was interrupted is
-        // never offered for deletion again, in this run or a later one - so it says what the app has
-        // decided rather than leaving an advisory with no way to act on it.
+        // The second sentence belongs to the finished screen, and it says what the app has decided
+        // rather than leaving an advisory with no way to act on it. Nothing can be in flight while
+        // this screen is up - a run's own deletes happen while it is processing, and the finished
+        // screen's offer is on the other screen - so the clause is drawn with its default.
         return BatchFinishedScreen.uncertainOriginalsNote(report)
     }
 
@@ -1780,14 +1780,23 @@ struct BatchFinishedScreen: View {
     /// the finished screen's line each carry this branch, and they have to stay word for word the
     /// same, because they describe one state and either of them can be the one a user reads. The
     /// last clause is the answer to a question neither of them used to answer - what happens next -
-    /// and the answer is that nothing does: an original whose delete was interrupted is never
-    /// offered for deletion again, in this run or a later one, so the app says so rather than leaving
-    /// an advisory with no way to act on it.
-    static func uncertainOriginalsNote(_ report: DeletionReport) -> String? {
+    /// and the answer, for this run, is that nothing does: an original whose delete was interrupted
+    /// is never offered for deletion again while this run's record is the one in hand, which is why
+    /// the sentence is scoped to the run rather than promising anything about a later one.
+    ///
+    /// - Parameter deleting: true while a deletion is still with Photos. The last clause is a
+    ///   statement about what the app has decided, and it has decided nothing yet: an outcome that
+    ///   comes back refused leaves the original deletable again, which is the state this sentence is
+    ///   not drawn for at all. So the clause waits for the answer instead of predicting it.
+    static func uncertainOriginalsNote(_ report: DeletionReport, deleting: Bool = false) -> String? {
         guard report.uncertain > 0 else { return nil }
+        let counted = report.uncertain == 1
+            ? "1 original may already have been deleted. Check Photos before running it again."
+            : "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
+        guard !deleting else { return counted }
         return report.uncertain == 1
-            ? "1 original may already have been deleted. Check Photos before running it again. This run will not try to delete it again."
-            : "\(report.uncertain) originals may already have been deleted. Check Photos before running those again. This run will not try to delete them again."
+            ? counted + " This run will not try to delete it again."
+            : counted + " This run will not try to delete them again."
     }
 
     /// What the run did with originals, in one honest line.
@@ -1804,7 +1813,9 @@ struct BatchFinishedScreen: View {
                 ? "1 original deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals deleted. They sit in Recently Deleted for 30 days."
         }
-        if let uncertain = Self.uncertainOriginalsNote(report) { return uncertain }
+        if let uncertain = Self.uncertainOriginalsNote(report, deleting: batch.deletionInProgress) {
+            return uncertain
+        }
         if mode.deletesOriginals {
             // "Delete at the end" is the one mode whose whole design is a confirmation that has not
             // happened yet, and this line used to return nil for exactly that state - the state the

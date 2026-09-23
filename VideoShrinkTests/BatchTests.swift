@@ -1134,6 +1134,10 @@ import SwiftUI
                        BatchPausedScreen.settledOriginalsNote(uncertain))
         XCTAssertNil(BatchFinishedScreen.uncertainOriginalsNote(DeletionReport()),
                      "a run with nothing uncertain says nothing here")
+        // While a delete is still with Photos the app has decided nothing, and an outcome that comes
+        // back refused leaves the original deletable again - so the clause waits for the answer.
+        XCTAssertEqual(BatchFinishedScreen.uncertainOriginalsNote(uncertain, deleting: true),
+                       "2 originals may already have been deleted. Check Photos before running those again.")
 
         // A run that is merely waiting for a confirmation has not reached anything reportable.
         var waiting = DeletionReport()

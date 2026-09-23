@@ -11,6 +11,10 @@ struct VideoScrubSheet: View {
     @State private var player: AVPlayer?
     @State private var problem: String?
     @State private var loading = true
+    /// True once the item the system player was handed says it can play. `loading` cannot carry this:
+    /// it means "Photos answered the fetch", and an item that arrives and stays undecided would then
+    /// read as ready - which is the state this whole wait exists for.
+    @State private var playable = false
 
     var body: some View {
         NavigationStack {
@@ -23,7 +27,7 @@ struct VideoScrubSheet: View {
                     // control that was not there - while the fetch was still running, or after it had
                     // failed - and explain an iCloud fetch under a line saying nothing could be
                     // opened. Each is now drawn only where it is true.
-                    if player != nil {
+                    if playable {
                         Text("Press play, or drag the bar, to check you’ve got the right video.")
                             .font(.footnote).foregroundStyle(.secondary)
                     }
@@ -53,7 +57,7 @@ struct VideoScrubSheet: View {
     private var playerArea: some View {
         ZStack {
             Color.black
-            if let player {
+            if playable, let player {
                 VideoPlayer(player: player)
                     // The loading and failure branches each carry a line of text, and this one
                     // carried nothing - the failure state's is now drawn under the box by
@@ -63,22 +67,24 @@ struct VideoScrubSheet: View {
                     // accessibility tree exactly as they were.
                     .accessibilityElement(children: .contain)
                     .accessibilityLabel("Video player")
-            } else if loading {
+            } else if problem == nil {
+                // The spinner covers both waits: PhotoKit answering, and then the item it answered
+                // with saying it can play. Either way there is nothing to press yet, which is what
+                // the note below the box used to imply there was.
                 VStack(spacing: 10) {
                     ProgressView().tint(.white)
                     Text("Opening…").font(.footnote).foregroundStyle(.white.opacity(0.8))
                 }
             } else {
-                // The symbol stays in the box and the sentence comes out of it: the box is a fixed
-                // 16:9 shape, so a failure sentence inside it is clipped at accessibility text sizes,
-                // which is exactly when a user needs to read it.
-                VStack(spacing: 10) {
-                    Image(systemName: "video.slash").font(.largeTitle)
-                }
-                .foregroundStyle(.white)
-                .padding(20)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("This video could not be opened")
+                // The symbol stays in the box and the sentence is drawn under it by `problemLine`:
+                // the box is a fixed 16:9 shape, so a failure sentence inside it is clipped at
+                // accessibility text sizes, which is exactly when a user needs to read it. The symbol
+                // is decoration - the sentence is the element - so it says nothing of its own.
+                Image(systemName: "video.slash")
+                    .font(.largeTitle)
+                    .foregroundStyle(.white)
+                    .padding(20)
+                    .accessibilityHidden(true)
             }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
@@ -87,14 +93,12 @@ struct VideoScrubSheet: View {
 
     /// The failure's words, drawn under the box rather than inside it.
     @ViewBuilder private var problemLine: some View {
-        if player == nil, !loading {
-            // One sentence, spoken as one thing.
-            Text(problem ?? "This video couldn’t be opened.")
+        if let problem {
+            Text(problem)
                 .font(.subheadline)
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .center)
-                .accessibilityElement(children: .combine)
         }
     }
 
@@ -148,7 +152,10 @@ struct VideoScrubSheet: View {
             try? await Task.sleep(for: .milliseconds(150))
         }
         guard !Task.isCancelled else { return }
-        guard item.status != .readyToPlay else { return }
+        guard item.status != .readyToPlay else {
+            playable = true
+            return
+        }
         problem = "Photos handed over a file that would not play. Nothing was changed."
         player = nil
     }

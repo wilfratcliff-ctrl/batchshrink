@@ -1471,13 +1471,14 @@ looked wrong, without asking what the mechanism does, is not a fix. Two agents a
 
 The other half of the round closes `DEL7`, the last *reachable* advisory with no way to act on it. An
 original whose delete Photos never answered for comes back as uncertain, and the app then never offers
-it for deletion again - in this run or a later one - so there was nothing for the user to do and
+it for deletion again while this run's record is the one in hand - so there was nothing for the user to do and
 nothing that said so. Both screens now end that sentence with what the app has decided, and the
 sentence itself moved into one function, because the paused screen's note and the finished screen's
 line carry the same branch and either can be the one a user reads.
 
-Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 405
-XCTest cases present), the call-site checker PASS over 52 files, 1,240 declarations and 8,075 call sites with 0 findings, the pod mirror verified, and the cases that state the uncertain-original
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 406
+XCTest cases present), the call-site checker PASS over 52 files, 1,240 declarations and 8,074 call
+sites with 0 findings, the pod mirror verified, and the cases that state the uncertain-original
 sentence updated with it. The shell change cannot be compiled or rendered here at all - no target on
 this machine builds the module, and the transition has never been observed - so it is written to be
 read rather than to be trusted.
@@ -1494,7 +1495,7 @@ says nothing at all.
 | PV1 | 2 | The 20-second bound covers PhotoKit's *request*, not the player: an item that arrives and never becomes ready left a black rectangle under a note telling the user to press play, with no sentence and no bound left running | **half done, round 27**: the sheet waits for the item's own status, under 10 seconds of its own, and a `.failed` item or a wait that gets nowhere gets a sentence. Two clocks now, and the device plan's row says so |
 | PV2 | 2 | The one-video preview has no loading and no failure state at all - one unconditional player under a footer asking the user to check the picture | **open**, with the shape PV1 got, and a note that its reachability is lower: the file is local and was verified seconds earlier by the flow's own verifier, so a failure there means the file is gone, which the save path refuses as well |
 | PV3 | 2 | Both of the scrub sheet's notes were drawn in the states that contradict them | done, round 27 |
-| PV4 | 2 | The one failure line is whichever pipeline sentence was written for another moment - including "add it to your allowed videos in Settings" for a video Photos no longer has | **done, round 27**, with the sheet's own words for the two errors it can see and a plain sentence for the rest, pinned by a case |
+| PV4 | 2 | The one failure line is whichever pipeline sentence was written for another moment - including "add it to your allowed videos in Settings" for a video Photos no longer has | **done, round 27**, with the sheet's own words for the two errors it can see and a plain sentence for the rest - which is also where a disk-full error and a cancelled fetch land - pinned by a case |
 | PV5 | 2 | Nothing tells VoiceOver that the look finished, failed or arrived | **half done**: the failure is one element with a label; an announcement when a look *finishes* is open |
 | PV6 | 2 | Both previews play PhotoKit's `.current` version while the run exports `.original` - kept in step today only because edited videos are refused by name | **open, latent, and a decision**: the preview must be given the version the run will export, and getting it wrong shows a different video from the one the user gets |
 | PV7 | 3 | Neither preview reacts to backgrounding, and no audio session is configured, so "check the sound" can be silenced by the Ring/Silent switch | open, and it is a decision about what the app claims from the phone rather than a patch |
@@ -1509,3 +1510,20 @@ its failure line are pinned by two tests, the iCloud sentence matches `isNetwork
 the one-video sheet plays is byte-for-byte the file `save()` re-verifies, and neither sheet is offered
 where it cannot work.
 
+**An independent read of the round found four things, and three of them were in the round's own new
+code.** The first was the class the round had just fixed, one state further in: while the quick look
+waits for the item to become playable, the box is drawn as a player - so the note under it said "press
+play" over something that does nothing, for up to ten seconds. The spinner now covers both waits and
+the note is drawn only once the item says it can play. The second and third were in the shell's hop: a
+`host != nil` that arrives while a hop is pending was being retried and could eventually log "no parent
+view controller was found" and announce a failure on an app that started, which now returns quietly;
+and the retry budget was never reset when a cycle gave up *without* building, so the comment promising
+that a later attach starts its own count was only true of the cycles that succeeded - it is now reset
+on detach as well. The fourth was in the deletion sentence the round added: it is drawn for a deletion
+still with Photos, where the app has decided nothing and an answer that comes back refused leaves the
+original deletable again, so the clause now waits for the answer rather than predicting it, and a case
+pins both forms. The read also corrected three claims in this record and one in the audit's status map
+- the sentence is scoped to *this run* rather than promising anything about a later one, the sheet's
+own words cover two errors while a disk-full error and a cancelled fetch land on the plain sentence,
+and hiding the iCloud note on failure goes one step past what the audit recommended, which is now
+recorded as a choice rather than as the finding's own fix.

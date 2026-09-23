@@ -153,7 +153,13 @@ final class VideoShrinkNativeView: ExpoView {
 
   /// Builds the SwiftUI host - the call the session's own work runs inside.
   private func buildHost() {
-    guard window != nil, host == nil, let parent = containingController else {
+    // A host that already exists means an earlier pending hop built one: nothing to do, and nothing
+    // worth retrying or logging about.
+    guard host == nil else {
+      isBuildingHost = false
+      return
+    }
+    guard window != nil, let parent = containingController else {
       // Either this view left its window while the hop was pending - in which case the next
       // `didMoveToWindow` attaches, and retrying now would only spend the budget and log about a
       // controller that was never the problem - or the controller went away under it, which is
@@ -224,8 +230,10 @@ final class VideoShrinkNativeView: ExpoView {
 
   private func detachHost() {
     // A detach in the middle of the hop leaves nothing to build: `buildHost` checks the window again
-    // and the flag here means the next attach starts from scratch.
+    // and the flag here means the next attach starts from scratch - including its retry budget, since
+    // a cycle that never found a controller never reached the success path that resets it.
     isBuildingHost = false
+    attachAttempts = 0
     guard let controller = host else { return }
     // Teardown keeps the backgrounding rule: work in flight is cancelled, an accepted save
     // settles, and a finished copy is kept rather than deleted.
