@@ -45,6 +45,13 @@ struct ShrinkOnboarding: View {
                         Text(details[page])
                             .font(.body).foregroundStyle(.secondary)
                             .lineSpacing(3)
+                        if let note {
+                            Label(note, systemImage: noteSymbol)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 4)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
@@ -88,6 +95,27 @@ struct ShrinkOnboarding: View {
         case 0: return "Compressed on your iPhone"
         case 1: return "You choose the balance of size and quality"
         default: return "Photos access is requested when you scan"
+        }
+    }
+
+    /// The honest qualifier each page's promise carries, on the page that makes the promise.
+    ///
+    /// Page two promises to work on the videos you choose, so it says which videos it will not
+    /// touch. Page three promises a lighter copy, so it says what that lighter copy costs before
+    /// it saves anything. Neither sentence is a warning: the first is what careful means and the
+    /// second is arithmetic. The page that needs neither carries none.
+    private var note: String? {
+        switch page {
+        case 1: return "BatchShrink only compresses ordinary videos. Anything it cannot compress carefully is skipped and left untouched, and you are told why."
+        case 2: return "A copy is a second video, so storage goes up before it comes down. Space comes back only when originals are deleted and Recently Deleted clears, and nothing is deleted unless you turn it on."
+        default: return nil
+        }
+    }
+
+    private var noteSymbol: String {
+        switch page {
+        case 1: return "checkmark.shield"
+        default: return "arrow.up.arrow.down"
         }
     }
 }

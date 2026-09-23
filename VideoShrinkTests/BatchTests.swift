@@ -1111,6 +1111,61 @@ import Photos
         XCTAssertEqual(monitor.revision, 2)
     }
 
+    /// The first foreground of a fresh install, which is where this flow used to break.
+    ///
+    /// Nobody has refused anything yet: `PhotoLibraryService.requestAccess()` is what asks, and it
+    /// has not run. iOS still sends `didBecomeActive` on the way up, the monitor reports that, and
+    /// the model has to tell "not asked yet" from "access was withdrawn" - otherwise a new user
+    /// lands on a recovery screen saying Photos access is unavailable, offering a scan they never
+    /// asked for, before the app has asked for anything.
+    func testTheFirstForegroundBeforeAnythingHasAskedLeavesTheStartScreenAlone() {
+        let status = AccessBox(.notDetermined)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)], monitor: monitor)
+        XCTAssertEqual(fixture.batch.phase, .start)
+        XCTAssertNil(fixture.batch.message)
+
+        // What iOS does: the app becomes active while access is still `.notDetermined`.
+        monitor.enteredForeground()
+
+        XCTAssertEqual(fixture.batch.phase, .start)
+        XCTAssertNil(fixture.batch.message)
+        // And nothing was reconciled: with no access there is no library to re-list.
+        XCTAssertEqual(fixture.scanner.reconcileCount, 0)
+        XCTAssertTrue(fixture.scanner.reconciledSelection.isEmpty)
+    }
+
+    /// The other side of the same report: a status that really is access lost still fails the
+    /// flow, in `PipelineError.permissionDenied`'s own words. Refused and restricted are the same
+    /// state to this app, so both are driven here.
+    func testAccessRefusedOrRestrictedOnTheWayInStillFailsTheFlow() {
+        for status in [PHAuthorizationStatus.denied, .restricted] {
+            let monitor = LibraryChangeMonitor(authorizationStatus: { status })
+            let fixture = BatchFixture(assets: [], monitor: monitor)
+
+            monitor.enteredForeground()
+
+            XCTAssertEqual(fixture.batch.phase, .failed, "\(status) must fail the flow")
+            XCTAssertEqual(fixture.batch.message,
+                           PipelineError.permissionDenied.localizedDescription,
+                           "\(status) must say why in the app's own words")
+        }
+    }
+
+    /// Limited access is readable, so the same first foreground keeps the flow where it is and
+    /// only notes that the library is partly unreadable.
+    func testLimitedAccessOnTheWayInStaysReadableAndKeepsTheFlow() {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .limited })
+        let fixture = BatchFixture(assets: [], monitor: monitor)
+
+        monitor.enteredForeground()
+
+        XCTAssertTrue(monitor.canReadLibrary)
+        XCTAssertTrue(fixture.batch.limitedAccess)
+        XCTAssertEqual(fixture.batch.phase, .start)
+        XCTAssertNil(fixture.batch.message)
+    }
+
     // MARK: - Helpers
 
     private func scan(_ fixture: BatchFixture) async {

@@ -226,8 +226,13 @@ struct ShrinkHelp: View {
                 }
                 Section("Fast answers") {
                     Label("Space comes back 30 days after a delete, when Photos clears Recently Deleted.", systemImage: "clock.arrow.circlepath")
+                    Label("A copy is a second video, so storage goes up before it comes down.", systemImage: "arrow.up.arrow.down")
                     Label("Looking through your library never downloads your videos. Preview images may come from iCloud.", systemImage: "icloud.slash")
                     Label("Sizes here are estimates. The end of a run shows measured results.", systemImage: "ruler")
+                }
+                Section("Which videos it can work on") {
+                    Text("BatchShrink compresses ordinary videos. A video it cannot compress carefully is left untouched, and the reason is shown.")
+                    Text("Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, and shared or restricted videos aren't supported yet. HDR and ProRes are read from the video itself: looking through your library reads the ones already on your iPhone, and every video you pick is read again before a run starts. A video still in iCloud, one the scan did not reach, or one whose read failed hasn't been read yet, so it can still turn out to be unsupported.")
                 }
                 Section("A smaller copy, safely") {
                     if settings.deletionMode.deletesOriginals {
@@ -254,8 +259,6 @@ struct ShrinkHelp: View {
                 Section("Estimates") {
                     Text("Size and time estimates are ranges, not measurements. The finished screen reports measured sizes.")
                     Text("Photos doesn’t report an original size for every video, so those are counted but left out of the estimate.")
-                    Text("A smaller file isn’t freed storage. Keeping both copies uses more space.")
-                    Text("Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, and shared or restricted videos aren't supported yet. HDR and ProRes can only be found when the app opens a video, so a video you pick can still turn out to be unsupported.")
                 }
                 Section("Preferences") {
                     Toggle("Completion haptics", isOn: $completionHaptics)

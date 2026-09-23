@@ -77,9 +77,15 @@ struct BatchScanningScreen: View {
     /// The scan has three phases now. The listing wording describes neither of the on-device ones,
     /// and "measuring" describes only the size pass, so reading a video's format gets its own
     /// heading and body rather than borrowing the listing's.
-    private enum Wording: Equatable { case listing, measuring, inspectingFormats }
+    ///
+    /// `chosen` is not a scan at all: it is the moment between the user's tap on Shrink and the
+    /// first export, when the videos they picked are read for the formats BatchShrink cannot
+    /// shrink. It says so in its own words, because a person watching a bar move after tapping
+    /// Shrink is owed the reason they are waiting.
+    private enum Wording: Equatable { case listing, measuring, inspectingFormats, chosen }
 
     private var wording: Wording {
+        if batch.preflight != nil { return .chosen }
         guard let phase = batch.scanProgress?.phase else { return .listing }
         switch phase {
         case .listing: return .listing
@@ -87,6 +93,10 @@ struct BatchScanningScreen: View {
         case .inspectingFormats: return .inspectingFormats
         }
     }
+
+    /// The count the screen draws, whichever pass is reporting it. The pre-flight and a scan never
+    /// run at once: one happens before a run and the other before a choice.
+    private var progress: LibraryScanProgress? { batch.preflight ?? batch.scanProgress }
 
     var body: some View {
         ScrollView {
@@ -118,11 +128,14 @@ struct BatchScanningScreen: View {
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
-        .navigationTitle("Your library")
+        // The same bar carries the chosen-video read, which is not a library being looked through.
+        .navigationTitle(batch.preflight == nil ? "Your library" : "Checking")
         .navigationBarTitleDisplayMode(.inline)
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ShrinkActionBar {
-                Button("Stop looking") { batch.cancelScan() }
+                // The same stop, named for what it is stopping: reading the library is looking,
+                // and reading the videos just chosen is not.
+                Button(batch.preflight == nil ? "Stop looking" : "Stop") { batch.cancelScan() }
                     .font(.headline).frame(maxWidth: .infinity, minHeight: 52)
             }
         }
@@ -133,6 +146,7 @@ struct BatchScanningScreen: View {
         case .listing: return "Looking through\nyour videos."
         case .measuring: return "Measuring what’s\nalready here."
         case .inspectingFormats: return "Reading formats."
+        case .chosen: return "Checking the videos\nyou picked."
         }
     }
 
@@ -146,6 +160,8 @@ struct BatchScanningScreen: View {
             return "This iOS version doesn’t report original sizes, so BatchShrink is measuring the videos already on your iPhone."
         case .inspectingFormats:
             return "Reading the codec and colour information of videos already on your iPhone. Nothing is downloaded, and a video that is still in iCloud stays unknown."
+        case .chosen:
+            return "Reading the codec and colour information of the videos you chose, before the first copy is made. Nothing is downloaded, so a video whose original is still in iCloud is read when the run opens it."
         }
     }
 
@@ -154,14 +170,19 @@ struct BatchScanningScreen: View {
         case .listing: return "Listing videos"
         case .measuring: return "Measuring on-device videos"
         case .inspectingFormats: return "Reading video formats"
+        case .chosen: return "Checking chosen videos"
         }
     }
 
     /// The count line the scan has always published. The same "n of m" is true in every phase, so
     /// only the two labels around it change.
     private var countText: String {
-        guard let progress = batch.scanProgress, progress.total > 0 else {
-            return wording == .measuring ? "Measuring…" : "Looking…"
+        guard let progress = progress, progress.total > 0 else {
+            switch wording {
+            case .listing, .inspectingFormats: return "Looking…"
+            case .measuring: return "Measuring…"
+            case .chosen: return "Checking…"
+            }
         }
         let noun = progress.total == 1 ? "video" : "videos"
         return wording == .measuring
@@ -287,7 +308,7 @@ struct BatchSummaryScreen: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         if result.unsupportedCount > 0 {
-            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself, so the scan refuses the ones already on your iPhone; a video still in iCloud, or one the scan did not reach, has not been read, so a video you pick can still turn out to be unsupported.")
+            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself: the scan reads the ones already on your iPhone, and the videos you pick are read again before a run starts. A video still in iCloud is only read once the run opens it, so one of those can still turn out to be unsupported.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -358,6 +379,13 @@ struct BatchSelectionScreen: View {
                 QualityRow(settings: batch.settings, open: openQuality)
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(assets) { asset in row(asset) }
+                }
+                // The one case where nothing started at all: every video the user picked was read
+                // and refused before the run could begin. The list below names them and says why,
+                // and this says that no export was attempted.
+                if batch.preflightLeftNothingToRun {
+                    ShrinkNotice(symbol: "nosign", title: "Nothing was exported.",
+                                 detail: "Every video you picked is one BatchShrink read and cannot shrink, so no run started. They are listed below with the reason, and they are untouched in Photos.")
                 }
                 RefusedVideoList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
@@ -540,6 +568,10 @@ private func rowLabel(_ asset: LibraryAsset) -> String {
 /// was refused or why.
 struct RefusedVideoList: View {
     let assets: [LibraryAsset]
+    /// A sentence for the screen this list is drawn on, when the screen has something to add about
+    /// why these videos are here. The run screens say they came out before the first export; the
+    /// library screens have nothing to add and pass nothing.
+    var context: String? = nil
 
     var body: some View {
         if !assets.isEmpty {
@@ -547,15 +579,26 @@ struct RefusedVideoList: View {
                 Text("Not supported")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(assets.count == 1
-                     ? "BatchShrink read this video and cannot shrink it. It stays in Photos untouched."
-                     : "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched.")
+                Text(spoken)
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(assets) { asset in row(asset) }
             }
             .padding(.top, 4)
         }
+    }
+
+    /// What this list says above its rows: whatever the screen that drew it had to add, then the
+    /// account of what the list itself is.
+    private var spoken: String {
+        guard let context = context else { return summary }
+        return "\(context) \(summary)"
+    }
+
+    private var summary: String {
+        assets.count == 1
+            ? "BatchShrink read this video and cannot shrink it. It stays in Photos untouched."
+            : "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched."
     }
 
     private func row(_ asset: LibraryAsset) -> some View {
@@ -625,6 +668,11 @@ struct BatchProcessingScreen: View {
                         .accessibilityAddTraits(.isHeader)
                     Text(subhead).font(.body).foregroundStyle(.secondary)
                 }
+                // The videos the chosen-video read refused, named with the reason the media itself
+                // gave. They are here rather than in the run, so the count under this heading is
+                // the count the user was promised minus exactly these.
+                RefusedVideoList(assets: batch.preflightRefusals,
+                                 context: "Taken out of this run before it started.")
                 currentCard
                 estimateCard
                 if let savings = batch.summary.measuredSavings, savings.isSmaller {
@@ -974,13 +1022,24 @@ struct BatchPausedScreen: View {
                                  title: midSave.title, detail: midSave.detail)
                 }
                 if let warning = batch.queueWarning {
+                    // The same notice, under the same title, that the start, summary, selection,
+                    // processing, recovery and finished screens draw. What this screen has to add
+                    // is the button: Continue still works, and it is a relaunch that may not find
+                    // this run again, because the record the relaunch reads may be older than it.
                     ShrinkNotice(symbol: "exclamationmark.triangle",
-                                 title: "This run can’t be resumed", detail: warning)
+                                 title: "Something wasn't written down", detail: warning)
+                    Text("Continue still works. Part of this run's record may be missing, so a relaunch may not pick it up again.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 if let savings = batch.summary.measuredSavings, savings.isSmaller {
                     Text("\(ShrinkFormat.bytes(savings.bytesSaved)) smaller so far · \(batch.summary.savedCount) saved.")
                         .font(.footnote).foregroundStyle(.secondary)
                 }
+                // The same list the working screen carries: a run that was stopped still has to
+                // account for the videos it never took.
+                RefusedVideoList(assets: batch.preflightRefusals,
+                                 context: "Taken out of this run before it started.")
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -1028,6 +1087,12 @@ struct BatchFinishedScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // The same list the working and paused screens carry, in the same sentence: the
+                // videos the chosen-video read took out before the run began. They are not in
+                // `items`, so without this the counts above cannot be reconciled with what was
+                // picked, and they are named as unsupported rather than as anything that failed.
+                RefusedVideoList(assets: batch.preflightRefusals,
+                                 context: "Taken out of this run before it started.")
                 failures
                 if let note = deletionNote {
                     Text(note)
@@ -1239,8 +1304,9 @@ struct BatchRecoveryScreen: View {
 /// A queue that could not be written down, or a stored queue that could not be cleared.
 ///
 /// The view model sets this from more than one place, and the run can come to rest on several
-/// screens afterwards, so every one of them draws it. `BatchPausedScreen` and
-/// `BatchFinishedScreen` keep their own wording because they explain it in their own terms.
+/// screens afterwards, so every one of them draws it, under this one title. `BatchPausedScreen`
+/// and `BatchFinishedScreen` draw it directly instead of through this view, because each has one
+/// thing of its own to say about a run that has stopped or ended.
 struct QueueWarningNotice: View {
     let warning: String?
 

@@ -88,8 +88,10 @@ struct CopySizeModel: Equatable, Sendable {
         abs(measuredLongEdge - resolution.longEdge) <= max(8, resolution.longEdge / 20)
     }
 
-    /// Fewer frames means fewer bits at the same picture size. The planning band assumes a
-    /// 30 fps original, which the interface states next to the estimate.
+    /// Fewer frames means fewer bits at the same picture size. The planning band is a 30 fps
+    /// band and this is what a lower target scales it down from. The interface names the scaling
+    /// beside the estimate ("scaled for 24 fps") and never the band's own baseline, so 30 fps
+    /// stays an implementation detail of this file.
     static func frameRateScale(_ frameRate: FrameRateOption) -> Double {
         guard let wanted = frameRate.framesPerSecond else { return 1 }
         return min(1, max(0.4, wanted / 30))
@@ -301,6 +303,10 @@ enum LibraryAccess: Equatable, Sendable {
     }
 
     /// True when the app may list the library at all.
+    ///
+    /// This answers "may the app read?", which is not the same question as "has access been
+    /// lost?". It is false both for a refusal and for a user who has never been asked, so a
+    /// caller working out whether to report access as gone has to read `self` rather than this.
     var canRead: Bool { self == .full || self == .limited }
     /// True when the app can see only part of the library.
     var isLimited: Bool { self == .limited }

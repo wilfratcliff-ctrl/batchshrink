@@ -58,11 +58,28 @@ enum BatchPhase: Equatable {
     @Published private(set) var changedThumbnailIdentifiers: [String] = []
     /// Bumped whenever the thumbnail cache is dropped, so a view can re-key the picture it draws.
     @Published private(set) var thumbnailRevision = 0
+    /// The chosen-video format read a run now begins with, while it is running.
+    ///
+    /// It is set only between the user's tap on Shrink and the first export, and the screen reads
+    /// it to say what the wait is for. Nil at every other moment, including a scan's own passes,
+    /// which report through `scanProgress` instead.
+    @Published private(set) var preflight: LibraryScanProgress?
+    /// The videos this run began without, because the media itself refused them, each carrying
+    /// `AssetRules`' sentence. Named on the screens the run passes through, so the drop from "I
+    /// picked twenty" to "eighteen to go" is explained rather than left to be worked out.
+    @Published private(set) var preflightRefusals: [LibraryAsset] = []
+    /// True when the pre-flight took every chosen video out, so no run started at all. The
+    /// selection screen is where that user lands, and it is the one screen that has to say so.
+    @Published private(set) var preflightLeftNothingToRun = false
 
     let settings: ShrinkSettings
 
     private let photos: any PhotoLibraryServing
     private let scanner: any LibraryScanning
+    /// The scanner, when it can read a video's own format. The pre-flight runs through this and
+    /// does nothing without it, which is what keeps a scanner that cannot read a format (a test
+    /// double, say) from having to pretend it can.
+    private let formatProbe: (any OriginalFormatProbing)?
     private let transcoder: any VideoTranscoding
     private let verifier: any VideoVerifying
     private let temporary: any TemporaryFileManaging
@@ -118,9 +135,17 @@ enum BatchPhase: Equatable {
          // Only passed to watch something other than the real Photos library, which is how a test
          // drives a library change without one. Omitted everywhere in the app.
          libraryChanges: LibraryChangeMonitor? = nil,
-         settings: ShrinkSettings) {
+         settings: ShrinkSettings,
+         // Omitted everywhere in the app: the scanner that can read a video's own format is the
+         // one passed above, and this is only here for a test that wants to watch the pre-flight
+         // without a Photos library.
+         formatProbe: (any OriginalFormatProbing)? = nil) {
         self.photos = photos
         self.scanner = scanner
+        // The one thing in the app that can read a video's own format is the scanner. A local
+        // name, so nothing below can reach for the optional parameter by mistake.
+        let probe = formatProbe ?? (scanner as? any OriginalFormatProbing)
+        self.formatProbe = probe
         self.transcoder = transcoder
         self.verifier = verifier
         self.temporary = temporary
@@ -335,6 +360,10 @@ enum BatchPhase: Equatable {
         // A pass that reads the library from scratch is the beginning of a run of its own, so
         // nothing this one goes on to do was read back from a stored queue.
         restoredRun = false
+        // The library is about to be read from scratch, so whatever a run's pre-flight had to say
+        // about the videos it left out is superseded by what this pass finds.
+        preflightRefusals = []
+        preflightLeftNothingToRun = false
         phase = .scanning
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
@@ -383,7 +412,10 @@ enum BatchPhase: Equatable {
 
     func cancelScan() {
         guard phase == .scanning else { return }
-        scanner.cancel()
+        // Only a scan has a stop switch of its own. During the pre-flight the scan service is not
+        // running anything, and asking it to stop would set a flag belonging to a pass this app
+        // never started; the pre-flight stops on its task's cancellation alone.
+        if preflight == nil { scanner.cancel() }
         runTask?.cancel()
     }
 
@@ -391,11 +423,28 @@ enum BatchPhase: Equatable {
 
     /// One report from the monitor: Photos changed outside the app, or the app came back to the
     /// front, where access can have changed while it was suspended.
+    ///
+    /// The report is read against the three states `LibraryAccess` names rather than against
+    /// "can read or not", because two of those states cannot read and only one of them is access
+    /// lost. A fresh install reaches its first foreground with `.notDetermined` - nobody has
+    /// refused anything, the app itself is what asks for Photos on the first scan - and reading
+    /// that as a refusal is what put a recovery screen and its scan button in front of a new user
+    /// before the app had asked for anything at all.
     private func libraryChanged(_ reason: LibraryChangeReason) {
         limitedAccess = libraryChanges.isLimited
-        guard libraryChanges.canReadLibrary else {
+        // Written as a switch over every state so a state added later has to be given an answer
+        // here rather than falling into whichever branch `canRead` happens to put it in.
+        switch libraryChanges.access {
+        case .notDetermined:
+            // Never asked is not lost. There is nothing to re-list either, so this report ends
+            // here and the start screen or the onboarding stays exactly as it was.
+            return
+        case .denied:
+            // Refused or restricted: this really is access lost, and the flow says so.
             libraryAccessLost()
             return
+        case .full, .limited:
+            break
         }
         log.info("Photos reported a change (\(String(describing: reason), privacy: .public))")
         refreshLibrary()
@@ -551,6 +600,93 @@ enum BatchPhase: Equatable {
         // These items come from the selection on screen, not from a stored queue, so the claim
         // that this run was picked up from disk ends with the run before it.
         restoredRun = false
+        // A fresh start clears what the last one had to say about the videos it could not run.
+        preflightRefusals = []
+        preflightLeftNothingToRun = false
+        guard formatProbe != nil else {
+            // Nothing here can read a video's own format, so the run starts exactly as it always
+            // did. The real app always has the service that can.
+            beginRun(with: chosen)
+            return
+        }
+        // A selection is tens of videos, not thousands, so the videos the user actually chose can
+        // be read exactly - cap or no cap - before the first export begins. This is the one thing
+        // that keeps the worst of the old experience out of a run: a video that turns out to be
+        // HDR or ProRes is refused here, in a moment, while the user is still watching, instead of
+        // halfway through. The read is the scan's own, with the network switched off, so a video
+        // whose original is in iCloud stays unknown and is refused later exactly as it was before.
+        message = nil
+        phase = .scanning
+        preflight = LibraryScanProgress(phase: .inspectingFormats, scanned: 0, total: chosen.count)
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            var refused: [LibraryAsset]?
+            do {
+                refused = try await self.formatProbe?.refusedByFormat(among: chosen) { [weak self] update in
+                    self?.preflight = update
+                }
+            } catch {
+                // A read that failed changes nothing: every chosen video stays eligible and the
+                // run starts. A read the user stopped is different - nothing was refused and
+                // nothing has begun - and that is settled below by the task's own cancellation.
+                if PipelineError.normalize(error, fallback: .libraryScan) != .cancelled { refused = [] }
+            }
+            self.preflight = nil
+            guard !Task.isCancelled, let refused else {
+                // The Stop button, or access going while the read was in flight: nothing was
+                // refused and nothing started, so the flow goes back to the choice being made.
+                if self.phase == .scanning { self.phase = .selecting }
+                self.runTask = nil
+                self.reconcileAfterScan()
+                return
+            }
+            let eligible = self.settlePreflight(refused, chosen: chosen)
+            guard !eligible.isEmpty else {
+                // Every chosen video turned out to be one this app cannot shrink. Nothing is
+                // exported, and the selection screen names them with the reason.
+                self.preflightLeftNothingToRun = true
+                if self.phase == .scanning { self.phase = .selecting }
+                self.runTask = nil
+                self.reconcileAfterScan()
+                return
+            }
+            self.beginRun(with: eligible)
+            // A change Photos reported while this read was going is not lost, exactly as it is not
+            // lost by a scan: the listing the read began from may be older than the change.
+            self.reconcileAfterScan()
+        }
+    }
+
+    /// Takes the pre-flight's answer.
+    ///
+    /// The videos it could not refuse are the run. The ones it refused come out of the selection
+    /// and out of the library's own list, into the refusals the screens name, so the listing says
+    /// the same thing the run does: a video this app has read and refused is not one that can be
+    /// chosen. The reason is always `AssetRules`' sentence, read from the media, so a video refused
+    /// here reads exactly like one the scan refused while it was listing the library.
+    private func settlePreflight(_ refused: [LibraryAsset], chosen: [LibraryAsset]) -> [LibraryAsset] {
+        guard !refused.isEmpty else { return chosen }
+        let refusedIDs = Set(refused.map(\.id))
+        preflightRefusals = refused
+        selection.subtract(refusedIDs)
+        if let result = scanResult {
+            let remaining = result.assets.filter { !refusedIDs.contains($0.id) }
+            scanResult = LibraryScanResult(assets: remaining,
+                                           videoCount: result.videoCount,
+                                           unsupportedCount: result.unsupportedCount + refused.count,
+                                           unknownSizeCount: remaining.filter { $0.bytes == nil }.count,
+                                           sizeSource: result.sizeSource,
+                                           measuredOnDeviceCount: result.measuredOnDeviceCount,
+                                           refusedAssets: result.refusedAssets + refused)
+        }
+        return chosen.filter { !refusedIDs.contains($0.id) }
+    }
+
+    /// Begins the run itself with the videos the pre-flight left eligible.
+    ///
+    /// These are the steps a start has always taken, in the same order, so nothing about a run
+    /// changed except the list it was handed.
+    private func beginRun(with chosen: [LibraryAsset]) {
         items = chosen.map { BatchItem(asset: $0, state: .pending) }
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
@@ -628,6 +764,8 @@ enum BatchPhase: Equatable {
         screenAwake.hold(false)
         items = []
         restoredRun = false
+        preflightRefusals = []
+        preflightLeftNothingToRun = false
         pauseReason = nil
         readBackOutcomes = [:]
         copyEvidence = [:]

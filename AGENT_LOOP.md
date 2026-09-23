@@ -205,8 +205,8 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
 | N11 | 1 | 162 XCTest cases had never been compiled or run | done, round 5: 162 compiled and executed, 155 pass |
 | N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing could set either trait | **done, rounds 6 and 7.** `VideoVerificationService` now reads the codec subtype and the transfer function where the media is readable, so HDR and ProRes originals ARE refused, in `AssetRules`' own words, and the refusal reaches the user as `PipelineError.unsupportedOriginal(reason:)` |
-| N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
-| N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
+| N13 | 2 | `PhotoLibraryScanService.cancelled` was shared between `scan()` and `refreshListing()` | **done, round 6.** The flag is `scanCancelled` and belongs to the scan alone. Note the sequel: it then leaked into the pre-flight, which read a stop flag only a new scan clears, so a stop-then-run would have silently done nothing — found and fixed in round 13 |
+| N14 | 3 | `BatchSelectionScreen.detail(_:)` had no caller | **done, round 6.** Removed. This row was stale for seven rounds and is exactly the kind of thing the warning above is about |
 | N15 | 3 | `withTaskCancellationHandler(operation:onCancel:)` is the pre-`isolation:` overload, deprecated in the iOS 18 SDK | open |
 | N16 | 1 | Exactly-once save reconciliation (NEXT_PHASE): a save receipt is evidence, not proof the copy completed | open |
 | N17 | 1 | The 162 cases compiled but had never executed | done, round 5: the `verify-tests` profile runs them on a simulator |
@@ -232,6 +232,26 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 10 | see below | First growth round: six marketing agents in parallel with five app agents | local gates PASS | six documents in `marketing/` |
 | 11 | `42d67f6` | HDR/ProRes refusal moved into the scan; every user-facing string audited | CI: **green** | 276 tests |
 | 12 | see below | Close round 11's seams: the new scan phase gets its own wording, refused videos are named, stale strings fixed | local gates PASS | 277 tests |
+| 13 | see below | A pre-run format check, first-run expectations, and a whole-app coherence review | local gates PASS | 286 tests |
+
+### Round 13 — the last mile of the refusal problem, and a review that paid for itself
+
+**The pre-flight.** The scan refuses HDR and ProRes for the newest 400 videos whose original is
+on the device. Everything else — an iCloud-only video, or one past the cap — was still refused
+*after* the run started. `start()` now reads the formats of the videos the user actually chose, in
+one bounded cancellable pass with its own screen wording, and takes the refused ones out before
+the first export. A selection can be checked exactly, cap or no cap, because a selection is tens
+of videos rather than thousands. A video still in iCloud stays unknown and is refused later,
+exactly as before, because the probe never downloads.
+
+**The coherence review.** Eight findings across an app that had been changed by thirty agents. It
+was read-only, and it is the highest-value agent of the day: it found a **first-run blocker** that
+every gate had missed — on a fresh install the app treated "Photos access was never asked for" as
+"access lost" and could show a false recovery screen *instead of onboarding*. It also found a
+contradiction between two screens about when HDR is detected, a paused screen whose title denied
+the button beneath it, and a finished screen that never explained videos the pre-flight removed.
+Six of the eight are fixed in this round; two were fixed by the agent that wrote the code it was
+reviewing.
 
 ### Round 10 — the app, and the business
 

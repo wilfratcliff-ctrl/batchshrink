@@ -2,6 +2,27 @@ import Photos
 import AVFoundation
 import CoreMedia
 
+/// The one call the batch flow makes before a run starts: read the formats of the videos the user
+/// actually chose, with the network switched off, and name the ones the media itself refuses.
+///
+/// It is declared here rather than beside `LibraryScanning` because the machinery that reads a
+/// format lives in this file, and because the batch flow can reach it through the scanner it
+/// already holds. A scanner that cannot read a format simply does not conform, and a flow holding
+/// one starts its run the way it always did rather than pretending a video was checked.
+@MainActor protocol OriginalFormatProbing {
+    /// The videos among `assets` whose own format this app refuses, each already carrying
+    /// `AssetRules`' sentence as its `unsupportedReason`.
+    ///
+    /// A video whose original is not on this iPhone - because it is still in iCloud, or because
+    /// its header could not be opened - cannot be read, so it is absent from the answer and stays
+    /// eligible. Nothing here downloads an original and nothing here is guessed: "not read" is
+    /// never the same answer as "unsupported".
+    func refusedByFormat(
+        among assets: [LibraryAsset],
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void
+    ) async throws -> [LibraryAsset]
+}
+
 /// Builds the library summary the batch screen works from.
 ///
 /// The scan never downloads an original. Listing uses library metadata, and the bounded
@@ -9,7 +30,7 @@ import CoreMedia
 /// in iCloud answers nothing instead of being fetched. The refresh used to reconcile a library
 /// that changed outside the app is the listing half alone, so it can never fetch anything
 /// either.
-@MainActor final class PhotoLibraryScanService: LibraryScanning {
+@MainActor final class PhotoLibraryScanService: LibraryScanning, OriginalFormatProbing {
     /// `PHAssetResource.dataSize` is public API from iOS 27. A build toolchain may predate
     /// that SDK, so the documented property is probed at runtime instead of linked.
     private static let dataSizeSelector = NSSelectorFromString("dataSize")
@@ -23,6 +44,10 @@ import CoreMedia
     /// most 400 requests on it whatever the library holds. A video past the bound is left exactly
     /// as the listing described it, and is refused later in a run for the same reason it would
     /// have been refused here.
+    ///
+    /// It bounds a *scan*, which reads a library nobody chose. The chosen-video read of
+    /// `refusedByFormat(among:progress:)` is not bounded by it: a selection is the user's own
+    /// answer to which videos matter, so all of it is read.
     static let onDeviceProbeLimit = 400
 
     /// How many videos the listing pass reads between two progress updates. The yield beside
@@ -270,13 +295,43 @@ import CoreMedia
         progress: @escaping @MainActor (LibraryScanProgress) -> Void,
         probe: (String) async -> OnDeviceFinding?
     ) async throws -> (assets: [LibraryAsset], refused: [LibraryAsset], measured: Int) {
-        let candidates = Array(assets.prefix(Self.onDeviceProbeLimit))
+        return try await readOnDevice(
+            assets,
+            phase: phase,
+            progress: progress,
+            probe: probe,
+            bound: Self.onDeviceProbeLimit,
+            scanOwned: true)
+    }
+
+    /// The loop both callers of this pass share, with the one thing they disagree about made
+    /// explicit: how many videos may be read.
+    ///
+    /// `bound` is the scan's own limit while a library is being read, because a library is not the
+    /// user's choice and can be enormous. The chosen-video read passes the size of the selection
+    /// instead, because a selection is the user's own answer to "which videos?" and the whole point
+    /// of that pass is that none of them is left to be refused half-way through a run.
+    ///
+    /// `scanOwned` says whose stop switch this pass reads, for the same reason `walkListing` needs
+    /// it: only a scan has one. The flag belongs to the scan and only a new scan clears it, so a
+    /// chosen-video read that read it would stop for a cancel that was meant for a scan the user
+    /// stopped earlier - and would stop for every later one too. It stops on its task's
+    /// cancellation alone.
+    private func readOnDevice(
+        _ assets: [LibraryAsset],
+        phase: LibraryScanProgress.Phase,
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void,
+        probe: (String) async -> OnDeviceFinding?,
+        bound: Int,
+        scanOwned: Bool
+    ) async throws -> (assets: [LibraryAsset], refused: [LibraryAsset], measured: Int) {
+        let candidates = Array(assets.prefix(bound))
         guard !candidates.isEmpty else { return (assets, [], 0) }
         var measured: [String: Int64] = [:]
         var refusals: [String: String] = [:]
         progress(LibraryScanProgress(phase: phase, scanned: 0, total: candidates.count))
         for (index, candidate) in candidates.enumerated() {
-            try checkCancellation(scanOwned: true)
+            try checkCancellation(scanOwned: scanOwned)
             if let finding = await probe(candidate.id) {
                 if candidate.bytes == nil, let bytes = finding.bytes { measured[candidate.id] = bytes }
                 if let refusal = finding.refusal { refusals[candidate.id] = refusal }
@@ -296,6 +351,54 @@ import CoreMedia
             return measured[asset.id].map { asset.withBytes($0) } ?? asset
         }
         return (updated, refused, measured.count)
+    }
+
+    /// The videos among `assets` that the media itself refuses, read before a run starts.
+    ///
+    /// This is the scan's own on-device pass, asked a narrower question: the videos the user
+    /// actually picked instead of the newest few hundred in the library. It runs the scan's own
+    /// loop (`readOnDevice`, the body of `classifyOnDevice`), the same one PhotoKit request per
+    /// video with the network switched off, and the same two owners of the answer, so a video
+    /// refused here is refused in `AssetRules`' own words and reads exactly like one the scan
+    /// refused while the library was being listed. There is nothing else to keep in step, because
+    /// there is no second copy of the reading or of the sentence.
+    ///
+    /// A selection is tens of videos, not thousands, so the bound a scan keeps for a whole library
+    /// has no place here: every chosen video is read, however deep in the library it sits. (A user
+    /// who selects more than a scan would read is still answered in full - that is the point of
+    /// asking about a selection rather than about a library.) It reports the refusals alone - the
+    /// sizes the same pass can measure have no part in answering "can BatchShrink run this video?"
+    /// - and a video it could not read is left out entirely rather than reported, which leaves it
+    /// eligible for the run to refuse later, on the media itself, if that is what it deserves.
+    func refusedByFormat(
+        among assets: [LibraryAsset],
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void
+    ) async throws -> [LibraryAsset] {
+        return try await refusedByFormat(
+            among: assets,
+            progress: progress,
+            probe: { await self.findings(for: $0) })
+    }
+
+    /// The same read with its one PhotoKit request narrowed to a closure, so everything above that
+    /// request - how many videos are read, whose stop switch applies, and what a refusal says - can
+    /// be driven without a Photos library, exactly as the scan's own pass is driven.
+    ///
+    /// The real caller of this file's protocol method passes `findings(for:)`; a test passes what
+    /// it wants the media to have said, including nothing at all.
+    func refusedByFormat(
+        among assets: [LibraryAsset],
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void,
+        probe: (String) async -> OnDeviceFinding?
+    ) async throws -> [LibraryAsset] {
+        let outcome = try await readOnDevice(
+            assets,
+            phase: .inspectingFormats,
+            progress: progress,
+            probe: probe,
+            bound: assets.count,
+            scanOwned: false)
+        return outcome.refused
     }
 
     /// Reads what one original already on this iPhone can answer, without downloading or decoding

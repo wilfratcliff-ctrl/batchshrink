@@ -333,6 +333,184 @@ import Photos
         XCTAssertEqual(outcome.measured, 0)
     }
 
+    // MARK: - The chosen-video read before a run starts
+
+    // The residual version of the worst experience was that a video turning out to be unsupported
+    // surfaced only halfway through a run, when the pipeline opened it. These tests cover the read
+    // that closes that for the videos the user actually chose, and the two answers it must never
+    // give: refusing a video it could not read, and downloading one to find out.
+
+    func testTheChosenVideoReadNamesEachRefusalInTheRulesOwnWords() async throws {
+        // The sentence has one owner. This read writes no second copy of it, and the video the
+        // media refused is the only one that comes back refused.
+        let service = PhotoLibraryScanService()
+
+        let refused = try await service.refusedByFormat(
+            among: [scanScaleAsset("ordinary"), scanScaleAsset("hdr")],
+            progress: { _ in },
+            probe: { identifier in
+                identifier == "hdr"
+                    ? PhotoLibraryScanService.OnDeviceFinding(refusal: scanScaleHDRReason)
+                    : nil
+            })
+
+        XCTAssertEqual(refused.map(\.id), ["hdr"])
+        XCTAssertEqual(refused.first?.unsupportedReason, scanScaleHDRReason)
+        XCTAssertFalse(refused.first?.isEligible ?? true)
+    }
+
+    func testTheChosenVideoReadIsNotBoundedByTheScansOwnLimit() async throws {
+        // The cap belongs to reading a library nobody chose. A selection is the user's own answer
+        // to which videos matter, so all of it is read however deep it sits: leaving the rest to be
+        // refused half-way through a run is the experience this read exists to close.
+        let service = PhotoLibraryScanService()
+        let assets = (0..<(PhotoLibraryScanService.onDeviceProbeLimit + 25))
+            .map { scanScaleAsset("video-\($0)") }
+        var read: [String] = []
+
+        let refused = try await service.refusedByFormat(
+            among: assets,
+            progress: { _ in },
+            probe: { identifier in
+                read.append(identifier)
+                return nil
+            })
+
+        XCTAssertEqual(read, assets.map(\.id))
+        XCTAssertTrue(refused.isEmpty)
+    }
+
+    func testAStopThatBelongedToAScanDoesNotStopTheChosenVideoRead() async throws {
+        // The scan's stop switch belongs to the scan, and only a new scan clears it. A read that
+        // consulted it would refuse to run at all after any scan the user had stopped, for a reason
+        // the user could not see. This read stops for its own task and nothing else.
+        let service = PhotoLibraryScanService()
+        service.cancel()
+        var read = 0
+
+        let refused = try await service.refusedByFormat(
+            among: [scanScaleAsset("a"), scanScaleAsset("b")],
+            progress: { _ in },
+            probe: { _ in
+                read += 1
+                return nil
+            })
+
+        XCTAssertEqual(read, 2)
+        XCTAssertTrue(refused.isEmpty)
+    }
+
+    func testAChosenVideoTheMediaRefusesIsTakenOutBeforeTheRunStarts() async {
+        let fixture = ScanScaleFixture(assets: [scanScaleAsset("ordinary"), scanScaleAsset("hdr")])
+        fixture.scanner.formatRefusals = ["hdr": scanScaleHDRReason]
+
+        await scanScaleStart(fixture, choosing: ["ordinary", "hdr"])
+
+        // The run holds one video, and the refused one never reached it.
+        XCTAssertEqual(fixture.batch.items.map(\.id), ["ordinary"])
+        // It is named where the user will see it, in the rules' own words...
+        XCTAssertEqual(fixture.batch.preflightRefusals.map(\.id), ["hdr"])
+        XCTAssertEqual(fixture.batch.preflightRefusals.first?.unsupportedReason, scanScaleHDRReason)
+        // ...and the library stops offering it, exactly as it stops offering one the scan refused.
+        XCTAssertEqual(fixture.batch.scanResult?.refusedAssets.map(\.id), ["hdr"])
+        XCTAssertFalse(fixture.batch.selection.contains("hdr"))
+        XCTAssertFalse(fixture.batch.preflightLeftNothingToRun)
+        // The queue describes what is actually running, which is the durability rule a run keeps
+        // whatever it worked out before it started.
+        XCTAssertFalse(fixture.queue.saved.isEmpty)
+        XCTAssertTrue(fixture.queue.saved.allSatisfy { $0.items.map(\.identifier) == ["ordinary"] })
+    }
+
+    func testAVideoTheReadCouldNotAnswerStaysInTheRun() async {
+        // The honest rule, at the moment before a run. A video whose original is only in iCloud
+        // cannot be read with the network switched off, so it is not refused here: it rides into
+        // the run and is refused later, when the pipeline opens it, exactly as before this read
+        // existed.
+        let fixture = ScanScaleFixture(assets: [scanScaleAsset("in-the-cloud"),
+                                                scanScaleAsset("ordinary")])
+
+        await scanScaleStart(fixture, choosing: ["in-the-cloud", "ordinary"])
+
+        XCTAssertEqual(fixture.batch.items.map(\.id), ["in-the-cloud", "ordinary"])
+        XCTAssertTrue(fixture.batch.preflightRefusals.isEmpty)
+        XCTAssertEqual(fixture.batch.scanResult?.assets.map(\.id), ["in-the-cloud", "ordinary"])
+    }
+
+    func testAReadThatFailedLeavesEveryChosenVideoEligible() async {
+        // A read that could not be taken is not evidence about anything. Refusing on it would be
+        // the one thing this app must never do: refusing a video it could not read.
+        let fixture = ScanScaleFixture(assets: [scanScaleAsset("a"), scanScaleAsset("b")])
+        fixture.scanner.formatError = PipelineError.libraryScan
+
+        await scanScaleStart(fixture, choosing: ["a", "b"])
+
+        XCTAssertEqual(fixture.batch.items.map(\.id), ["a", "b"])
+        XCTAssertTrue(fixture.batch.preflightRefusals.isEmpty)
+        XCTAssertFalse(fixture.batch.preflightLeftNothingToRun)
+    }
+
+    func testEveryVideoTheUserChoseIsOfferedToTheRead() async {
+        // The read is given the selection itself, in the order the library lists it, and nothing
+        // else: not the videos the app made, not the ones it already shrank, not a cap of one.
+        let fixture = ScanScaleFixture(assets: (0..<12).map { scanScaleAsset("video-\($0)") })
+        let chosen = (0..<12).map { "video-\($0)" }
+
+        await scanScaleStart(fixture, choosing: chosen)
+
+        XCTAssertEqual(fixture.scanner.formatRead, chosen)
+        XCTAssertEqual(fixture.batch.items.map(\.id), chosen)
+    }
+
+    func testASelectionWhereEveryVideoIsRefusedStartsNoRun() async {
+        // Nothing to export is a run that must not begin, and the user has to be told that rather
+        // than left watching a count that never moves.
+        let fixture = ScanScaleFixture(assets: [scanScaleAsset("hdr"), scanScaleAsset("prores")])
+        fixture.scanner.formatRefusals = [
+            "hdr": scanScaleHDRReason,
+            "prores": AssetRules.unsupportedFormatReason(isHDR: false, isProRes: true) ?? ""
+        ]
+
+        await scanScaleStart(fixture, choosing: ["hdr", "prores"])
+
+        XCTAssertEqual(fixture.batch.phase, .selecting)
+        XCTAssertTrue(fixture.batch.items.isEmpty)
+        XCTAssertTrue(fixture.batch.preflightLeftNothingToRun)
+        XCTAssertEqual(fixture.batch.scanResult?.refusedAssets.map(\.id), ["hdr", "prores"])
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+        XCTAssertTrue(fixture.queue.saved.isEmpty)
+    }
+
+    func testTheReadIsShownWhileItRunsAndCanBeStopped() async {
+        // Cancellable, and honest about what it is doing: the screen names the pass while it runs,
+        // and the stop puts the user back on their choice without refusing or exporting anything.
+        let fixture = ScanScaleFixture(assets: [scanScaleAsset("a"), scanScaleAsset("b")])
+        fixture.scanner.holdFormats = true
+        fixture.scanner.formatRefusals = ["a": scanScaleHDRReason]
+        fixture.batch.scan()
+        await scanScaleEventually { fixture.batch.phase == .scanned }
+        fixture.batch.beginSelecting()
+        fixture.batch.toggle("a")
+        fixture.batch.toggle("b")
+        fixture.batch.start()
+        await scanScaleEventually { fixture.scanner.formatGate != nil }
+
+        // What the user sees while they wait: the pass, and how far through it is.
+        XCTAssertEqual(fixture.batch.phase, .scanning)
+        XCTAssertEqual(fixture.batch.preflight?.phase, .inspectingFormats)
+        XCTAssertEqual(fixture.batch.preflight?.total, 2)
+        XCTAssertTrue(fixture.batch.isRunning)
+
+        fixture.batch.cancelScan()
+        fixture.scanner.releaseFormats()
+
+        await scanScaleEventually { !fixture.batch.isRunning }
+        XCTAssertEqual(fixture.batch.phase, .selecting)
+        XCTAssertTrue(fixture.batch.items.isEmpty)
+        XCTAssertTrue(fixture.batch.preflightRefusals.isEmpty)
+        XCTAssertNil(fixture.batch.preflight)
+        XCTAssertTrue(fixture.queue.saved.isEmpty)
+    }
+
     // MARK: - A format read on the device survives a refresh
 
     func testARefreshKeepsAFormatThisAppReadOnTheDevice() {
@@ -499,6 +677,20 @@ private var scanScaleHDRReason: String {
     AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false) ?? ""
 }
 
+/// Takes a selection through the confirmation dialog and lets the run it starts end, so a test
+/// asserts on the state the user is left with rather than on a moment inside the pass.
+///
+/// The run itself always ends without a copy here: this fixture's Photos service cannot retrieve a
+/// video. What these tests are about is which videos reached the run at all.
+@MainActor private func scanScaleStart(_ fixture: ScanScaleFixture, choosing ids: [String]) async {
+    fixture.batch.scan()
+    await scanScaleEventually { fixture.batch.phase == .scanned }
+    fixture.batch.beginSelecting()
+    for id in ids { fixture.batch.toggle(id) }
+    fixture.batch.start()
+    await scanScaleEventually { !fixture.batch.isRunning }
+}
+
 private func scanScaleEventually(_ predicate: () -> Bool, file: StaticString = #filePath,
                                  line: UInt = #line) async {
     for _ in 0..<500 {
@@ -541,7 +733,7 @@ private final class ScanScaleAccessBox {
     }
 }
 
-@MainActor private final class ScanScaleMockScanner: LibraryScanning {
+@MainActor private final class ScanScaleMockScanner: LibraryScanning, OriginalFormatProbing {
     var result = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0, unknownSizeCount: 0,
                                    sizeSource: .reportedByPhotos, measuredOnDeviceCount: 0)
     /// The library as Photos now has it, for a refresh. Left nil, a refresh repeats the last pass.
@@ -551,6 +743,17 @@ private final class ScanScaleAccessBox {
     var gate: CheckedContinuation<Void, Error>?
     var cancelCount = 0
     var reconcileCount = 0
+    /// What the chosen-video read says about each video. A video it does not name could not be
+    /// read, which is not a refusal: it stays eligible.
+    var formatRefusals: [String: String] = [:]
+    /// The identifiers that read took, in the order it took them.
+    var formatRead: [String] = []
+    /// Makes the read fail rather than answer, for the rule that a read this app could not take
+    /// refuses nothing.
+    var formatError: Error?
+    /// Holds the chosen-video read open, so a test can stop it the way the Stop button does.
+    var holdFormats = false
+    var formatGate: CheckedContinuation<Void, Error>?
     private var cancelled = false
 
     func scan(progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> LibraryScanResult {
@@ -583,6 +786,29 @@ private final class ScanScaleAccessBox {
     func release() {
         gate?.resume(returning: ())
         gate = nil
+    }
+
+    /// The chosen-video read, reporting the same phase and the same "n of m" a scan's format pass
+    /// does, because the screen draws both from one place.
+    func refusedByFormat(among assets: [LibraryAsset],
+                         progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> [LibraryAsset] {
+        progress(LibraryScanProgress(phase: .inspectingFormats, scanned: 0, total: assets.count))
+        if holdFormats { try await withCheckedThrowingContinuation { formatGate = $0 } }
+        if let formatError = formatError { throw formatError }
+        var refused: [LibraryAsset] = []
+        for (index, asset) in assets.enumerated() {
+            formatRead.append(asset.id)
+            if let reason = formatRefusals[asset.id] { refused.append(asset.refusing(reason)) }
+            progress(LibraryScanProgress(phase: .inspectingFormats, scanned: index + 1, total: assets.count))
+        }
+        return refused
+    }
+
+    /// Lets a held chosen-video read answer, which is what happens on a device when the read the
+    /// user stopped finishes the video it was on.
+    func releaseFormats() {
+        formatGate?.resume(returning: ())
+        formatGate = nil
     }
 }
 
@@ -648,8 +874,10 @@ private final class ScanScaleMockVerifier: VideoVerifying {
 }
 
 @MainActor private final class ScanScaleMockQueue: BatchQueueStoring {
+    /// Every record this run wrote, so a test can read what the app said it was doing.
+    var saved: [BatchQueueRecord] = []
     func load() -> BatchQueueRecord? { nil }
-    func save(_ record: BatchQueueRecord) throws {}
+    func save(_ record: BatchQueueRecord) throws { saved.append(record) }
     func clear() {}
 }
 
