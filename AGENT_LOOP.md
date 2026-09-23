@@ -836,7 +836,7 @@ and eight new things:
 | AX1 | 2 | Round 23's notice about a record that could not be read said the app had **"set it aside"**, and nothing in the code moves, deletes or clears that file - the store answers a Bool and the record stays. It also meant the notice returns on every launch until a run overwrites the record, which the sentence did not say | **done, round 24.** The sentence now says what is true: nothing could be restored, nothing in Photos was changed, the record stays, and the notice comes back until a run writes one of its own. Found by an independent audit of the *accessibility* of the screens, which is a reminder that this class of defect is not confined to what a test asserts |
 | AX2 | 3 | The **working** screen's "N of M finished" counted a video whose save Photos never confirmed as finished - the same claim round 20 took off the paused screen, left standing one screen earlier, directly above a card whose own row says Photos did not confirm that save | **done, round 24**, as `BatchProcessingScreen.processingSubhead` in the paused screen's own words, with a case pinning both plural forms |
 | AX3 | 3 | The finished screen says "lighter" and "a smaller copy in Photos" in the state round 19's `E8` declared in scope (a stored `.saved` whose copy is not smaller), while its own row and totals card say the opposite | open. Same caveat `E8` accepted; a stored non-shrinking saving has to be handled once, in one place |
-| AX4 | 3 | The finished screen's overflow hint names all three actions ("Delete originals, try the failed ones again, or run the ones you checked") whatever subset the menu actually holds, so a run with only failures reads a hint promising a Delete that is not there | open, and cheap: the trigger and the contents already come from one list, and the hint is the one string that does not |
+| AX4 | 3 | The finished screen's overflow hint names all three actions ("Delete originals, try the failed ones again, or run the ones you checked") whatever subset the menu actually holds, so a run with only failures reads a hint promising a Delete that is not there | **done, round 25**: `BatchFinishedScreen.overflowHint(_:)` names exactly what the menu holds, built from the same list that decides the trigger and its contents, with a case pinning all eight subsets |
 | AX5 | 3 | "Delete 1 originals" in that menu, and six other counts with no singular form (`1 videos to explore`, `1 videos left`, `All 1 copies confirmed`, `From 1 copies measured`, `1 originals may already have been deleted`, `1 of 1 videos`). The confirmation dialog for the same count pluralizes correctly, so one control names its own count two ways | open, and a batch rather than a one-off: several screens want one small plural helper, which is why it is not being patched string by string |
 | AX6 | 3, latent | "To look at in Photos" heads every `.needsCheck` item, including one whose finding the app has already answered, which the notice above it can describe as "Nothing is left to check". Latent: both halves need the state `Q1` records as unreachable from any shipped build | open with `Q1`, and it is the heading half of `Q1`'s own proposed fix |
 | AX7 | 3 | An empty library announces "Nothing to shrink yet." twice, once as the header and once as the notice title, with "0 videos in your Photos library." between them | open, cosmetic |
@@ -1346,3 +1346,20 @@ open Photos and count the copies after a save was killed - the one observation t
 question rests on. The process-termination row became two cases, one per flow. The audit's D9 to D11
 are recorded above rather than taken in passing; the plan's own file carries the changes, and it is
 the one part of this round a person can check by reading.
+
+**An independent read of the round found one thing that would have failed the first gate, and
+several the eye had missed.** The failing one was a *pre-existing* case: changing the empty notice's
+heading left `testAnEmptyLibraryDoesNotClaimVideosWereRefused` asserting the old string, so the first
+CI run after 1 October would have reported a failure in a case the round did not touch - and the audit
+document that prompted the change named that very case as its pin. It is updated, and the round's own
+case no longer repeats what it already asserts. Two more were wording: `1 isn't measured yet` and
+`1 isn't supported yet` used a bare digit as the subject of a verb, where every other singular this
+round pairs the number with a noun, so both now read `1 video isn't ...` - and the two `measured`
+sites are the summary screen's notice *and* the selection screen's footer, which had the same
+sentence. The paused screen's "Copies already saved are in Photos." read as a plural over one copy, so
+it says "The copy already saved is in Photos." at one. And the new helper was dropping the thousands
+grouping the old string had, so it formats its own count. The remaining findings are recorded rather
+than patched: the overflow hint's `the originals` is a generic plural (`the original` would be wrong
+for several, and the count is on the menu item right beside it), and `marketing/app-store-listing.md`
+now asks for a multi-copy run for the screenshot whose caption quotes the read-back line, because the
+one-copy screen no longer prints that line.

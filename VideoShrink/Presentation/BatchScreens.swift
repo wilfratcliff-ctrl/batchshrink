@@ -399,14 +399,14 @@ struct BatchSummaryScreen: View {
 
     @ViewBuilder private func notices(result: LibraryScanResult) -> some View {
         if result.unknownSizeCount > 0 {
-            Text(result.unknownSizeCount == 1
-                 ? "1 isn’t measured yet, so it’s not in the estimate."
-                 : "\(result.unknownSizeCount) aren’t measured yet, so they’re not in the estimate.")
+            Text(ShrinkFormat.counted(result.unknownSizeCount,
+                                      "video isn’t measured yet, so it’s not in the estimate.",
+                                      "videos aren’t measured yet, so they’re not in the estimate."))
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         if result.unsupportedCount > 0 {
-            Text("\(ShrinkFormat.counted(result.unsupportedCount, "isn't", "aren't")) supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself: the scan reads the ones already on your iPhone, and the videos you pick are read again before a run starts. A video still in iCloud is only read once the run opens it, so one of those can still turn out to be unsupported.")
+            Text("\(ShrinkFormat.counted(result.unsupportedCount, "video isn't", "videos aren't")) supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself: the scan reads the ones already on your iPhone, and the videos you pick are read again before a run starts. A video still in iCloud is only read once the run opens it, so one of those can still turn out to be unsupported.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -636,7 +636,9 @@ struct BatchSelectionScreen: View {
         var lines = ["Anything that doesn’t get smaller is skipped, so you never get a bigger copy."]
         let unknown = batch.eligibleAssets.filter { $0.bytes == nil }.count
         if unknown > 0 {
-            lines.append("\(unknown) aren’t measured yet, so they’re not in the estimate.")
+            lines.append(ShrinkFormat.counted(unknown,
+                                              "video isn’t measured yet, so it’s not in the estimate.",
+                                              "videos aren’t measured yet, so they’re not in the estimate."))
         }
         return lines.joined(separator: " ")
     }
@@ -1371,7 +1373,12 @@ struct BatchPausedScreen: View {
     /// does not know the outcome of. It now counts the copies it can account for and names the ones
     /// the user still has to look at. Static and internal so a case can state the sentence.
     static func pauseSubhead(saved: Int, total: Int, toCheck: Int) -> String {
-        let counted = "\(saved) of \(total) saved. Copies already saved are in Photos."
+        // One copy is "the copy", not "copies": this is the screen a run with a single video rests on,
+        // and it read "1 of 1 saved. Copies already saved are in Photos." next to a line that says
+        // "1 video left" since round 25.
+        let counted = saved == 1
+            ? "1 of \(total) saved. The copy already saved is in Photos."
+            : "\(saved) of \(total) saved. Copies already saved are in Photos."
         guard toCheck > 0 else { return counted }
         return toCheck == 1
             ? "\(counted) One more needs a look in Photos."

@@ -80,15 +80,17 @@ extension View {
 }
 
 enum ShrinkFormat {
-    /// A count with the noun it counts, singular where the count is one.
+    /// A count with the words that follow it, singular where the count is one.
     ///
     /// Several screens wrote "1 videos to explore", "1 videos left" and "Delete 1 originals": the
     /// count was right and the sentence was wrong, on exactly the screens somebody with a single
     /// video in their library sees first. One helper rather than a ternary at every site, because
-    /// these strings are what drift apart when they multiply - and the noun is passed in, so the
-    /// caller still owns its own words.
+    /// these strings are what drift apart when they multiply - and what follows the count is passed
+    /// in, so the caller still owns its own words and can put a verb there where the sentence needs
+    /// one ("1 video isn't" / "2 videos aren't"). The number is grouped as the rest of the app groups
+    /// numbers, so a four-figure library reads "1,024 videos" wherever it appears.
     static func counted(_ count: Int, _ singular: String, _ plural: String) -> String {
-        "\(count) \(count == 1 ? singular : plural)"
+        "\(count.formatted()) \(count == 1 ? singular : plural)"
     }
 
     static func bytes(_ value: Int64) -> String {

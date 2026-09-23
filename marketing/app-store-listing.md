@@ -224,8 +224,11 @@ actual library on a real iPhone. See "Unsubstantiated and open" below.
 6. **Caption: "Measured results, and every copy confirmed in Photos."**
    Must show: the finished screen on `BatchFinishedScreen` - the "Finished" eyebrow, the "N videos,
    lighter." headline, the "A LITTLE LIGHTER" card with measured bytes and the copy count, and the
-   read-back line ("All N copies confirmed in Photos."). The numbers must come from a real run, and
-   the screenshot must not be taken until a run has actually happened on a device.
+   read-back line. Ask for a run of several videos: with one copy that line reads "The copy is
+   confirmed in Photos." and with several it reads "All N copies confirmed in Photos.", so a
+   screenshot of a single-video run cannot carry the quote in this caption. The numbers must come
+   from a real run, and the screenshot must not be taken until a run has actually happened on a
+   device.
 
 If a sixth-slot swap is ever wanted, the honest alternative is the Originals sheet
 (`DeletionSheet.swift`), which states the 30-day Recently Deleted window and the confirmation

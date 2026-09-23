@@ -490,9 +490,9 @@ import SwiftUI
         let empty = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0,
                                       unknownSizeCount: 0, sizeSource: .reportedByPhotos,
                                       measuredOnDeviceCount: 0)
-        // The summary screen's headline already says "Nothing to shrink yet." for this state, and the
-        // notice under it used to repeat it word for word. Each now names its own finding.
-        XCTAssertEqual(BatchEmptyNotice(result: empty, limitedAccess: false).title, "No videos to shrink")
+        // The empty title itself is pinned by `testAnEmptyLibraryDoesNotClaimVideosWereRefused`, which
+        // predates this round; what that case does not say is that the heading does not depend on
+        // whether Photos access is limited, because the detail below it carries that difference.
         XCTAssertEqual(BatchEmptyNotice(result: empty, limitedAccess: true).title, "No videos to shrink")
         // The other empty state: a library whose videos are all ones this app cannot use, which the
         // notice has to name as itself rather than as an empty library.
@@ -506,10 +506,7 @@ import SwiftUI
         one.uncertain = 1
         XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(one),
                        "1 original may already have been deleted. Check Photos before running it again.")
-        var two = DeletionReport()
-        two.uncertain = 2
-        XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(two),
-                       "2 originals may already have been deleted. Check Photos before running those again.")
+        // The plural form is pinned by `testThePausedScreenNamesOnlyDeletionsThatHaveAlreadyHappened`.
     }
 
     /// The overflow control's hint names what is actually behind it.
@@ -527,6 +524,10 @@ import SwiftUI
         XCTAssertEqual(BatchFinishedScreen.overflowHint([.deleteOriginals, .retryFailed,
                                                         .requeueUncertain]),
                        "Delete the originals that have copies, try the failed ones again, or run the ones you checked in Photos.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.deleteOriginals, .retryFailed]),
+                       "Delete the originals that have copies, or try the failed ones again.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.deleteOriginals, .requeueUncertain]),
+                       "Delete the originals that have copies, or run the ones you checked in Photos.")
         XCTAssertEqual(BatchFinishedScreen.overflowHint([.retryFailed, .requeueUncertain]),
                        "Try the failed ones again, or run the ones you checked in Photos.")
     }
@@ -1068,7 +1069,7 @@ import SwiftUI
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 2, total: 3, toCheck: 0),
                        "2 of 3 saved. Copies already saved are in Photos.")
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 3, toCheck: 1),
-                       "1 of 3 saved. Copies already saved are in Photos. One more needs a look in Photos.")
+                       "1 of 3 saved. The copy already saved is in Photos. One more needs a look in Photos.")
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 4, toCheck: 2),
                        "1 of 4 saved. Copies already saved are in Photos. 2 more need a look in Photos.")
     }
@@ -1883,7 +1884,10 @@ import SwiftUI
         let empty = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0, unknownSizeCount: 0,
                                       sizeSource: .reportedByPhotos, measuredOnDeviceCount: 0)
         let nothing = BatchEmptyNotice(result: empty, limitedAccess: false)
-        XCTAssertEqual(nothing.title, "Nothing to shrink yet")
+        // The notice used to repeat the summary's headline word for word, so an empty library read
+        // "Nothing to shrink yet" twice with only "0 videos in your Photos library." between them.
+        // Round 25 gave each the finding it is about; this case pins the empty one.
+        XCTAssertEqual(nothing.title, "No videos to shrink")
         XCTAssertTrue(nothing.detail.contains("no videos"))
         XCTAssertFalse(nothing.detail.lowercased().contains("refused"))
         XCTAssertFalse(nothing.detail.lowercased().contains("unsupported"))
