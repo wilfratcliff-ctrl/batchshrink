@@ -2,7 +2,7 @@
 
 All cases are **NOT RUN** at creation. Use expendable or separately backed-up test clips, starting on the iPhone 15 Pro Max. No test instructs you to remove your original media. An installed internal build and a passing simulator test suite are prerequisites, not proof of the media pipeline.
 
-These cases describe the source at commit `07526c4`. Build 10 (`0.1.0`) is the last build known to have run anywhere, and it predates the round 1 queue, deletion and verification changes and every round after them, so a pass against build 10 covers none of this. The first build to carry that work is `0.1.0` (build 11), and nothing since build 10 has been installed on a device, so the first run of this plan is the first evidence about any of it.
+These cases describe the source at commit `07526c4`. Build 10 (`0.1.0`) is the last build known to have run anywhere, and it predates the round 1 queue, deletion and verification changes and every round after them, so a pass against build 10 covers none of this. The first build to carry that work is `0.1.0` (build 11), and nothing since build 10 has been installed on a device, so the first run of this plan is the first evidence about any of it. Two rows - the free-space gate and the bounded format read - were added in the round after `4d5da93` and describe that tree.
 
 Record: app version/build, Git revision once available, iOS/Xcode versions, device, permission mode, codec/resolution/HDR/frame rate, duration, audio, network/power/thermal conditions, source/output byte counts, observed outcome and pass/fail. Do not put private filenames, library identifiers, locations or personal footage in the repository.
 
@@ -15,6 +15,21 @@ Record: app version/build, Git revision once available, iOS/Xcode versions, devi
 5. **Long 4K HDR video:** remain in foreground on power, preview and save only if verified and smaller. Compare brightness, highlights, color, orientation, sound and end playback with the original. Any washed-out image, unexpected SDR conversion or lost HDR behavior is a recorded feasibility issue, even if automated checks passed.
 
 ## Full matrix
+
+Two of the rows below are about the numbers the app decides with rather than about the media pipeline, and
+neither can be settled on a simulator.
+
+The free-space gate is a heuristic in all three places it fires - before a retrieval, before an export and
+before a save - and it compares a figure the app computes against what the volume reports as available for
+important usage; the write itself stays the real report. At the time of writing, the export check asked for
+two copies of the original plus the reserve, which is one copy more than the step needs: the original is
+already on the disk and already reflected in the free space the check reads, so a phone with room to finish an
+export could be refused before it started. `DiskHeadroom.neededToWrite(_:)` is the corrected quantity and its
+arithmetic is pinned by test, but the two export call sites - `BatchViewModel.process(id:)` and
+`CompressionViewModel.selected(identifier:)` - still pass the older two-copy figure, so run this case again
+once those two expressions are changed. The reserve itself has never been measured on a device, and a video
+smaller than the reserve can be refused for want of room that the file itself would not have needed; only a
+device can say whether 256 MB is the right margin.
 
 | Case | Action and expected result |
 | --- | --- |
@@ -34,6 +49,8 @@ Record: app version/build, Git revision once available, iOS/Xcode versions, devi
 | Cancellation by stage | Permission, cloud download, preparation, export, verification and ready-to-save discard. Confirm cancelled state, no save and eventual cleanup. Preparation/verification may finish quickly; exercise these with mocks as well. |
 | Save transaction | Double tap Save; only one request. Cancellation is unavailable during save. Confirm no cleanup before Photos finishes. Revoke permission before Save to confirm readable failure. |
 | Low storage | On a controlled test device, reduce available space using expendable test data. Test preflight rejection, download failure, mid-export disk-full, and save requiring another copy. No success claim from a preflight alone. Space can change at any time. |
+| Free-space gate near a full disk | Establish the numbers before changing any of them. With a known free-space figure and a known original size: a level an export could clearly finish must be allowed to start, and the run must then actually finish it; a level it clearly could not must be refused before the export starts, with nothing added to or removed from Photos. Read the refusal as a user would: it must say how much is needed and how much there is, and it must name the step that refused, rather than telling a user whose original is already on the phone that downloading needs the room. Then record the two facts the pre-retrieval check depends on: whether retrieving an original that is already on the iPhone writes into the app's own temporary workspace, and whether PhotoKit's own out-of-space failure arrives before or after bytes are transferred. Space can change at any time. |
+| Format read that never answers | The on-device read of a video's format waits for one PhotoKit callback with the network switched off, bounded at 10 s (`PhotoLibraryScanService.onDeviceRequestTimeout`), and gives up on that video instead of leaving the screen on the reading step with a Stop button that has nothing behind it. On a device: with a large local selection on screen, tap Stop while the reading step is running and confirm the screen returns to the choice at once rather than after a wait. Then scan a library of several hundred local videos and time the pass, to see whether the bound is ever reached on a healthy device and how long one read actually takes. A video the bound gives up on is left unread rather than refused, so a run can still refuse it later on the media itself. Only a device can say whether PhotoKit ever fails to call its handler at all, which is the case this bound exists for. |
 | Incoming call/interruption | Receive a call during export. Record whether iOS only makes the scene inactive or backgrounds it. Inactive alone need not cancel; background must request cancellation. No automatic save or false success. |
 | Lock/Home/app switch | Lock or background during cloud/export/verification. App requests cancellation, possibly completes cleanup only after resuming. It must not claim processing continues overnight. Background while ready-to-save may retain the temporary output until discard/save or restart. |
 | Process termination | Force quit during export, reopen and check startup cleanup. Repeat during save: Photos may have committed despite no completion UI. A stored queue flags a mid-save item for a look rather than repeating it, but automatic exactly-once reconciliation is not implemented; inspect Photos before manually retrying. |

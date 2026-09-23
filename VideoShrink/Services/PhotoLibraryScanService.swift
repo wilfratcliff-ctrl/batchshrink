@@ -1,6 +1,7 @@
 import Photos
 import AVFoundation
 import CoreMedia
+import Foundation
 
 /// The one call the batch flow makes before a run starts: read the formats of the videos the user
 /// actually chose, with the network switched off, and name the ones the media itself refuses.
@@ -54,6 +55,17 @@ import CoreMedia
     /// each one is what keeps the main actor free for the interface while a large library is
     /// being read, and the readings are what make the count the user watches move.
     static let listingProgressStride = 32
+
+    /// How long one on-device read may wait for PhotoKit to answer before this pass gives up on
+    /// that video.
+    ///
+    /// The read is a header read of a file that is already on this iPhone, which takes
+    /// milliseconds, so a bound this loose is not a slow path: it is what turns a read that never
+    /// answers into a bounded one. A video the pass gives up on is left unread - no size and no
+    /// format - rather than refused, so this can never refuse a video the pass could not read.
+    /// Only a device can say whether the number is ever reached in practice; the case for that is
+    /// in `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
+    static let onDeviceRequestTimeout: Duration = .seconds(10)
 
     private let manager = PHImageManager.default()
     /// The stop button on the scanning screen, and the scan's alone.
@@ -412,6 +424,10 @@ import CoreMedia
     /// The size is a `stat` on the file PhotoKit handed over. The format comes out of the video
     /// track's format descriptions, which live in the file's header: reading them seeks and reads
     /// a few kilobytes, and decodes nothing.
+    ///
+    /// The wait for PhotoKit is bounded by `onDeviceRequestTimeout` and is given up the moment
+    /// the pass is stopped, because a read that never answers would otherwise leave the pass
+    /// suspended with nothing to press: see `boundedAnswer(timeout:start:)`.
     private func findings(for identifier: String) async -> OnDeviceFinding? {
         guard let asset = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { return nil }
@@ -419,26 +435,65 @@ import CoreMedia
         options.version = .original
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = false
-        // A `.highQualityFormat` video request calls its handler exactly once.
-        let requested = await withCheckedContinuation { (continuation: CheckedContinuation<AVURLAsset?, Never>) in
-            // PhotoKit is documented to call this once; the flag makes a double callback harmless
-            // rather than a crash, because resuming a continuation twice traps.
-            var finished = false
-            manager.requestAVAsset(forVideo: asset, options: options) { handed, _, _ in
-                guard !finished else { return }
-                finished = true
+        let manager = self.manager
+        let requested: AVURLAsset? = await Self.boundedAnswer(timeout: Self.onDeviceRequestTimeout) { answer in
+            let request = manager.requestAVAsset(forVideo: asset, options: options) { handed, _, _ in
+                // Only a file already on this iPhone may answer. A streaming asset is not this
+                // pass's business, and following one would fetch bytes this pass never fetches.
                 guard let urlAsset = handed as? AVURLAsset, urlAsset.url.isFileURL else {
-                    continuation.resume(returning: nil)
+                    answer(nil)
                     return
                 }
-                continuation.resume(returning: urlAsset)
+                answer(urlAsset)
             }
+            return { manager.cancelImageRequest(request) }
         }
         guard let urlAsset = requested else { return nil }
         var finding = OnDeviceFinding()
         finding.bytes = Self.fileSize(of: urlAsset.url)
         finding.refusal = await Self.refusalReadingFormats(of: urlAsset)
         return finding
+    }
+
+    /// Waits for one PhotoKit read under a bound, and answers with what it handed back.
+    ///
+    /// The read is asked for once. `start` is given the single callback it may finish through and
+    /// returns the way to cancel the request it just made, which is used when the wait is given
+    /// up rather than left running.
+    ///
+    /// Three things can end a read: the handler PhotoKit calls, the bound on how long this pass
+    /// will wait, and the stop that cancels the pass. They arrive on different threads and in any
+    /// order, and a checked continuation may only be resumed once, so a single claim decides
+    /// which of them wins and the others do nothing at all. A handler that arrives after the
+    /// bound is therefore exactly as harmless as one that never arrives, and a stop cannot race
+    /// the handler either.
+    ///
+    /// Nil is the answer for a read that did not finish, which is the same answer a video whose
+    /// original is only in iCloud gets: nothing measured, nothing refused.
+    ///
+    /// `timeout` is a parameter and this is internal rather than private so that all three
+    /// endings can be driven without a Photos library. The real caller passes
+    /// `onDeviceRequestTimeout`.
+    static func boundedAnswer<T: AnyObject>(
+        timeout: Duration,
+        start: (@escaping @Sendable (T?) -> Void) -> () -> Void
+    ) async -> T? {
+        let read = BoundedRead<T>()
+        return await withTaskCancellationHandler(operation: {
+            await withCheckedContinuation { (continuation: CheckedContinuation<T?, Never>) in
+                // A stop that arrived before the request was made has already given this read up,
+                // and `attach` has resumed the continuation itself.
+                guard read.attach(continuation) else { return }
+                let cancelRequest = start { answer in read.answer(answer) }
+                read.hold(cancelRequest: cancelRequest)
+                Task {
+                    try? await Task.sleep(for: timeout)
+                    read.giveUp()
+                }
+            }
+        }, onCancel: {
+            read.giveUp()
+        }, isolation: #isolation)
     }
 
     /// The original's byte size, read from the file PhotoKit handed over. Nil when the size could
@@ -479,5 +534,79 @@ import CoreMedia
     private func checkCancellation(scanOwned: Bool) throws {
         if Task.isCancelled { throw PipelineError.cancelled }
         if scanOwned, scanCancelled { throw PipelineError.cancelled }
+    }
+}
+
+/// The one thing that may finish a bounded read, and the only place that touches its
+/// continuation.
+///
+/// A checked continuation has to be resumed exactly once. The handler PhotoKit calls, the bound
+/// on the wait, and the stop that cancels the pass can arrive in any order and on different
+/// threads - the handler may be called from any queue - so one claim decides which of them wins
+/// and the others return without touching the continuation. The lock is what makes that true
+/// across those threads; it is held for no longer than a few assignments, and nothing inside it
+/// calls back into PhotoKit.
+private final class BoundedRead<T: AnyObject>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<T?, Never>?
+    private var cancelRequest: (() -> Void)?
+    private var finished = false
+
+    /// Hands in the continuation and says whether the read should start.
+    ///
+    /// False means this read was already given up - a stop that arrived before the request was
+    /// even made - and in that case the continuation has already been resumed here and the caller
+    /// must do nothing else with it.
+    func attach(_ continuation: CheckedContinuation<T?, Never>) -> Bool {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            continuation.resume(returning: nil)
+            return false
+        }
+        self.continuation = continuation
+        lock.unlock()
+        return true
+    }
+
+    /// Keeps the way to cancel the request, and uses it at once when the read is already over.
+    func hold(cancelRequest: @escaping () -> Void) {
+        lock.lock()
+        if finished {
+            lock.unlock()
+            cancelRequest()
+            return
+        }
+        self.cancelRequest = cancelRequest
+        lock.unlock()
+    }
+
+    /// PhotoKit answered.
+    func answer(_ value: T?) {
+        finish(value, cancellingRequest: false)
+    }
+
+    /// The bound was reached, or the pass was stopped.
+    ///
+    /// The request is cancelled here rather than left for PhotoKit to finish work that nothing is
+    /// waiting for any more.
+    func giveUp() {
+        finish(nil, cancellingRequest: true)
+    }
+
+    private func finish(_ value: T?, cancellingRequest: Bool) {
+        lock.lock()
+        guard !finished else {
+            lock.unlock()
+            return
+        }
+        finished = true
+        let continuation = self.continuation
+        let cancelRequest = cancellingRequest ? self.cancelRequest : nil
+        self.continuation = nil
+        self.cancelRequest = nil
+        lock.unlock()
+        cancelRequest?()
+        continuation?.resume(returning: value)
     }
 }

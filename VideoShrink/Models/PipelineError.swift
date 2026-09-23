@@ -11,10 +11,31 @@ enum PipelineError: Error, LocalizedError, Equatable, Sendable {
     /// HDR or ProRes original reads here exactly as it does on the screening screen.
     case unsupportedOriginal(reason: String)
 
+    /// The sentence for Photos access the user refused.
+    ///
+    /// It is read in the batch flow and in the one-video flow, so it names neither a single video
+    /// nor a count: the wording it replaced - "the video you want to test" - was the one-video
+    /// flow's way of talking reaching a user who had just picked twenty videos.
+    static let refusedAccess = "Photos access is unavailable. In Settings, allow BatchShrink access to your videos, then come back and try again."
+
+    /// The sentence for Photos access a restriction outside this app took away.
+    ///
+    /// Screen Time and a device management profile can switch Photos off for every app on the
+    /// iPhone. That is not a refusal the user can undo in Settings, and while it is on, Photos is
+    /// not on this app's Settings page at all - so this sentence never sends anyone there.
+    static let restrictedAccess = "Photos is blocked on this iPhone, so BatchShrink cannot read your library. Screen Time or a device management profile is holding it back, and nothing in BatchShrink can change it."
+
+    /// The sentence for access the app does not have, in the words that match the reason it does
+    /// not have it. The two cannot be told apart from the reading alone, so the caller that knows
+    /// says which one it is.
+    static func accessSentence(restricted: Bool) -> String {
+        restricted ? restrictedAccess : refusedAccess
+    }
+
     var errorDescription: String? {
         switch self {
-        case .permissionDenied: return "Photos access is unavailable. In Settings, allow BatchShrink access to the video you want to test."
-        case .assetUnavailable: return "This video is outside the Photos access granted to BatchShrink. Add it to your allowed photos in Settings, then select it again. The system picker does not grant PhotoKit access by itself."
+        case .permissionDenied: return Self.refusedAccess
+        case .assetUnavailable: return "This video is outside the Photos access granted to BatchShrink. Add it to your allowed videos in Settings, then try again."
         case .unsupported: return "BatchShrink cannot process this video. Live Photos, slow-motion, time-lapse, cinematic, spatial, edited, shared or restricted, HDR and ProRes videos are not supported yet. Try an ordinary, unedited video with one video track and at most one audio track."
         case .unsupportedOriginal(let reason): return reason
         case .retrieval: return "Photos could not retrieve this video. If its original is in iCloud, check your connection and local storage, then try again."

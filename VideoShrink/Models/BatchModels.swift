@@ -174,8 +174,49 @@ struct ProcessingEstimator: Equatable, Sendable {
 /// The single place where the disk-space heuristics live. These are heuristics, not
 /// reservations: PhotoKit and the encoder still report their own failures.
 enum DiskHeadroom {
+    /// Kept free on top of whatever a step is about to write, and never counted as one of the
+    /// files themselves.
+    ///
+    /// It covers the scratch an export session uses for its own work, the queue write, and the
+    /// headroom iOS wants before it will keep handing out space quickly. It is a round number
+    /// that nothing has measured on a device, and it is deliberately not scaled to the file: the
+    /// file is counted separately, below. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` carries the case
+    /// that is meant to settle it.
     static let reserve: Int64 = 256 * 1_024 * 1_024
 
+    /// What a step needs free before it starts writing one more file of this size: that file,
+    /// plus the reserve.
+    ///
+    /// This is the question a space check should be asking, and it is deliberately *not* a
+    /// function of how many files exist. A step that is about to write a copy is already holding
+    /// the file it is copying from, and that file is already reflected in the free space a check
+    /// reads. Counting it a second time demands space the step will never need, which is how a
+    /// phone with room to finish an export gets refused before that export starts.
+    ///
+    /// Pass the size of the file the step is about to write, or nil when that size is not known
+    /// yet - before a retrieval whose original may still be in iCloud, for instance - which asks
+    /// only for the reserve. A video whose size is unknown is never refused over a figure the
+    /// app invented, and the write itself still reports a real failure.
+    ///
+    /// What it does not promise: a copy that comes out larger in bytes than the file it came
+    /// from can still run the device out of room inside the encoder. That is a real, reported
+    /// failure that loses nothing - no copy is saved and the original is untouched - and the only
+    /// alternative would be to demand space for a copy size that nothing can predict.
+    static func neededToWrite(_ bytes: Int64?) -> Int64 {
+        guard let bytes, bytes > 0 else { return reserve }
+        let (total, overflow) = bytes.addingReportingOverflow(reserve)
+        return overflow ? Int64.max : total
+    }
+
+    /// The size of `copies` files this size, plus the reserve.
+    ///
+    /// This answers "how much space will these files take", which is deliberately not the same
+    /// question as "how much space does this step still need free": the file a step is copying
+    /// from is part of this total but none of what it still needs. Size a step with
+    /// `neededToWrite(_:)`; this arithmetic is kept because the existing call sites and the pinned
+    /// arithmetic tests are written against it, and the two export checks still pass `copies: 2`,
+    /// which is one copy more than that step needs. See the free-space case in
+    /// `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
     static func bytes(_ bytes: Int64, copies: Int64) -> Int64 {
         let (product, overflow) = bytes.multipliedReportingOverflow(by: copies)
         let (total, addOverflow) = product.addingReportingOverflow(reserve)

@@ -133,6 +133,63 @@ import UIKit
         }
     }
 
+    func testTheFreeSpaceAStepNeedsIsTheOneFileItIsAboutToWritePlusTheReserve() {
+        // The question every check in the pipeline is really asking. A size that is not known yet
+        // asks only for the reserve, because a video must never be refused over a figure the app
+        // made up.
+        XCTAssertEqual(DiskHeadroom.neededToWrite(nil), DiskHeadroom.reserve)
+        XCTAssertEqual(DiskHeadroom.neededToWrite(0), DiskHeadroom.reserve)
+        XCTAssertEqual(DiskHeadroom.neededToWrite(-1), DiskHeadroom.reserve)
+        XCTAssertEqual(DiskHeadroom.neededToWrite(1_000_000_000),
+                       1_000_000_000 + DiskHeadroom.reserve)
+        // A number this large cannot be a real requirement: it means "refuse", not a wrapped total.
+        XCTAssertEqual(DiskHeadroom.neededToWrite(Int64.max), Int64.max)
+    }
+
+    func testAStepNeverDemandsRoomForTheFileItIsCopyingFrom() {
+        // The finding this arithmetic exists to answer. An export writes one more file, and the
+        // original it is copying from is already on the disk and already reflected in the free
+        // space the check reads. Sizing the step as two files - which is what the call sites did -
+        // demands room the step will never need, and that is how a phone with space to finish an
+        // export gets told there is not enough space to start one.
+        let original: Int64 = 3_000_000_000
+        let phoneWithRoomToFinish: Int64 = 3_100_000_000
+
+        XCTAssertEqual(DiskHeadroom.neededToWrite(original), DiskHeadroom.bytes(original, copies: 1))
+        XCTAssertLessThan(DiskHeadroom.neededToWrite(original), DiskHeadroom.bytes(original, copies: 2))
+        // One more copy against the same phone: the first fits, the second refuses it.
+        XCTAssertLessThanOrEqual(DiskHeadroom.neededToWrite(original), phoneWithRoomToFinish)
+        XCTAssertGreaterThan(DiskHeadroom.bytes(original, copies: 2), phoneWithRoomToFinish)
+    }
+
+    func testAFreeSpaceReadingRefusesOnlyWhenItIsSmallerThanTheStepNeeds() throws {
+        let tight = TemporaryFileManager(capacity: { _ -> Int64? in 1_000 })
+        // Exactly at the line is enough: the comparison refuses only a step that needs more.
+        try tight.requireCapacity(for: 1_000)
+        do {
+            try tight.requireCapacity(for: 1_001)
+            XCTFail("A step needing more than the volume reports must be refused")
+        } catch {
+            XCTAssertEqual(error as? PipelineError, .insufficientStorage)
+        }
+
+        let roomy = TemporaryFileManager(capacity: { _ -> Int64? in 5_000 })
+        try roomy.requireCapacity(for: 1_001)
+    }
+
+    func testAFreeSpaceReadingThisDeviceWillNotGiveUpIsNotEvidenceOfAFullDisk() throws {
+        // Nil means unknown, and unknown is not zero: a step is never turned away with a message
+        // about storage that the reading cannot back up. The write itself is still the real
+        // report, so nothing here can hide a genuinely full disk.
+        let silent = TemporaryFileManager(capacity: { _ -> Int64? in nil })
+        try silent.requireCapacity(for: Int64.max)
+
+        // The same rule for a reading that cannot be taken at all: on this machine the read is a
+        // `resourceValues` call on the temporary directory, which can fail outright.
+        let unreadable = TemporaryFileManager(capacity: { _ -> Int64? in throw PipelineError.temporaryFiles })
+        try unreadable.requireCapacity(for: Int64.max)
+    }
+
     // MARK: - Keeping the screen awake
 
     /// The controller exists for one pair of facts: the flag is on exactly while a run holds it,

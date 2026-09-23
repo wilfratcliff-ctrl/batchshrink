@@ -1139,22 +1139,138 @@ import Photos
         XCTAssertTrue(fixture.scanner.reconciledSelection.isEmpty)
     }
 
-    /// The other side of the same report: a status that really is access lost still fails the
-    /// flow, in `PipelineError.permissionDenied`'s own words. Refused and restricted are the same
-    /// state to this app, so both are driven here.
-    func testAccessRefusedOrRestrictedOnTheWayInStillFailsTheFlow() {
-        for status in [PHAuthorizationStatus.denied, .restricted] {
-            let monitor = LibraryChangeMonitor(authorizationStatus: { status })
-            let fixture = BatchFixture(assets: [], monitor: monitor)
+    /// The other side of the same report: a refusal really is access lost, and the flow says so in
+    /// the words that name the route back - Settings, where they can allow access again.
+    func testAccessRefusedOnTheWayInStillFailsTheFlow() {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .denied })
+        let fixture = BatchFixture(assets: [], monitor: monitor, authorizationStatus: { .denied })
 
-            _ = fixture.batch
-            monitor.enteredForeground()
+        _ = fixture.batch
+        monitor.enteredForeground()
 
-            XCTAssertEqual(fixture.batch.phase, .failed, "\(status) must fail the flow")
-            XCTAssertEqual(fixture.batch.message,
-                           PipelineError.permissionDenied.localizedDescription,
-                           "\(status) must say why in the app's own words")
-        }
+        XCTAssertEqual(fixture.batch.phase, .failed)
+        XCTAssertEqual(fixture.batch.message, PipelineError.refusedAccess)
+        XCTAssertEqual(fixture.batch.accessBlock, .refused)
+    }
+
+    /// A refusal, then the user allows access in Settings and comes back.
+    ///
+    /// This is the first-run dead end: the grant was reported, but the report reached a refresh
+    /// with no library in hand that returned without doing anything, so the failure sentence stayed
+    /// on screen and the tap that would have worked was never made. The pass the user asked for is
+    /// finished for them instead - which is why the sentence above promises only that the route is
+    /// in Settings.
+    func testAllowingAccessInSettingsFinishesThePassTheUserAskedFor() async {
+        let status = AccessBox(.denied)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)], monitor: monitor,
+                                   authorizationStatus: { status.value })
+
+        // The first look, refused: the flow says so, and nothing has been read.
+        _ = fixture.batch
+        monitor.enteredForeground()
+        XCTAssertEqual(fixture.batch.phase, .failed)
+        XCTAssertEqual(fixture.batch.message, PipelineError.refusedAccess)
+        XCTAssertEqual(fixture.batch.accessBlock, .refused)
+        XCTAssertNil(fixture.batch.scanResult)
+        XCTAssertTrue(fixture.batch.items.isEmpty)
+
+        // The user allows Photos access in Settings and comes back. The library this pass is about
+        // to read has to be there, or the assertions below would pass on an empty listing.
+        fixture.scanner.result = LibraryScanResult(assets: fixture.assets,
+                                                   videoCount: fixture.assets.count,
+                                                   unsupportedCount: 0, unknownSizeCount: 0,
+                                                   sizeSource: .reportedByPhotos,
+                                                   measuredOnDeviceCount: 0)
+        status.value = .authorized
+        monitor.enteredForeground()
+
+        await eventually { fixture.batch.phase == .scanned }
+        XCTAssertEqual(fixture.batch.scanResult?.assets.map(\.id), ["a"])
+        XCTAssertNil(fixture.batch.message)
+        XCTAssertNil(fixture.batch.accessBlock)
+    }
+
+    /// A device restriction is not a refusal, and reading it as one cost a new user their
+    /// introduction: the flow was moved off `.start` before anything had been asked for, so
+    /// onboarding never ran and the screen that replaced it sent them to a Photos switch a
+    /// restricted device does not show.
+    func testASystemRestrictionLeavesAFreshInstallOnItsIntroduction() {
+        let monitor = LibraryChangeMonitor(authorizationStatus: { .restricted })
+        let fixture = BatchFixture(assets: [], monitor: monitor, authorizationStatus: { .restricted })
+
+        _ = fixture.batch
+        monitor.enteredForeground()
+
+        // Nothing has been lost and there is nothing to re-list, so the flow that had no library in
+        // hand stays where it was. Onboarding is gated on this phase, and the first look through
+        // the library will say what is wrong when the user asks for it.
+        XCTAssertEqual(fixture.batch.phase, .start)
+        XCTAssertNil(fixture.batch.message)
+        XCTAssertNil(fixture.batch.accessBlock)
+        XCTAssertEqual(fixture.scanner.reconcileCount, 0)
+    }
+
+    /// The same restriction on a flow that has a library in hand: this app cannot read it any more,
+    /// so the flow stops - with the truth, because Photos is not on this app's Settings page while
+    /// the restriction is on and naming it would send the user to a switch that is not there.
+    func testARestrictionWithALibraryInHandStopsTheFlowWithoutNamingASettingThatIsNotThere() async {
+        let status = AccessBox(.authorized)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)], monitor: monitor,
+                                   authorizationStatus: { status.value })
+        await scan(fixture)
+        XCTAssertEqual(fixture.batch.phase, .scanned)
+        await eventually { !fixture.batch.isRunning }
+
+        // Screen Time or a device manager is turned on while the app is in the background.
+        status.value = .restricted
+        monitor.enteredForeground()
+
+        await eventually { fixture.batch.phase == .failed }
+        XCTAssertEqual(fixture.batch.accessBlock, .restricted)
+        XCTAssertEqual(fixture.batch.message, PipelineError.restrictedAccess)
+        let sentence = (fixture.batch.message ?? "").lowercased()
+        XCTAssertFalse(sentence.contains("settings"),
+                       "a restricted device has no Photos switch to send anyone to")
+    }
+
+    /// A check stopped by the app leaving the foreground used to return the user to the selection
+    /// screen they tapped from, exactly as it was, with nothing said - a tap that appeared to have
+    /// done nothing at all.
+    func testLeavingTheAppWhileCheckingTheChosenVideosSaysSo() async {
+        let probe = BatchMockFormatProbe()
+        probe.hold = true
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)],
+                                   formatProbe: probe)
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { probe.gate != nil }
+        XCTAssertEqual(fixture.batch.phase, .scanning)
+        XCTAssertEqual(fixture.batch.preflight?.phase, .inspectingFormats)
+        XCTAssertNil(fixture.batch.preflightNotice)
+
+        // The user leaves the app while "Checking the videos you picked." is on screen, and the
+        // read it was on finishes the video it was holding.
+        fixture.batch.enteredBackground()
+        probe.release()
+
+        await eventually { fixture.batch.phase == .selecting }
+        XCTAssertTrue(fixture.batch.items.isEmpty)
+        XCTAssertNil(fixture.batch.preflight)
+        XCTAssertNil(fixture.batch.message)
+        // The read that was stopped had been handed the videos the user chose, in the library's own
+        // order, and nothing about stopping it changed that.
+        XCTAssertEqual(probe.read, ["a", "b"])
+        XCTAssertEqual(fixture.batch.preflightNotice,
+                       "You left BatchShrink while it was checking the videos you picked, so the run stopped before it began. Nothing was changed; tap Shrink to start again.")
+        // The notice belongs to that stop alone: a fresh start clears it.
+        probe.hold = false
+        fixture.batch.start()
+        XCTAssertNil(fixture.batch.preflightNotice)
+        await eventually { fixture.batch.phase == .finished }
     }
 
     /// Limited access is readable, so the same first foreground keeps the flow where it is and
@@ -1170,6 +1286,59 @@ import Photos
         XCTAssertTrue(fixture.batch.limitedAccess)
         XCTAssertEqual(fixture.batch.phase, .start)
         XCTAssertNil(fixture.batch.message)
+    }
+
+    /// A library with no videos was told that every video it could see had been refused, right
+    /// beside the line saying there were none.
+    func testAnEmptyLibraryDoesNotClaimVideosWereRefused() {
+        let empty = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0, unknownSizeCount: 0,
+                                      sizeSource: .reportedByPhotos, measuredOnDeviceCount: 0)
+        let nothing = BatchEmptyNotice(result: empty, limitedAccess: false)
+        XCTAssertEqual(nothing.title, "Nothing to shrink yet")
+        XCTAssertTrue(nothing.detail.contains("no videos"))
+        XCTAssertFalse(nothing.detail.lowercased().contains("refused"))
+        XCTAssertFalse(nothing.detail.lowercased().contains("unsupported"))
+
+        // Nothing visible under limited access is a different fact about the library, so it says so
+        // rather than claiming Photos holds no videos at all.
+        let limited = BatchEmptyNotice(result: empty, limitedAccess: true)
+        XCTAssertTrue(limited.detail.contains("allowed"))
+        XCTAssertFalse(limited.detail.lowercased().contains("refused"))
+
+        // The case the sentence was written for is untouched: a library whose videos this app cannot
+        // use still says exactly that.
+        let allRefused = LibraryScanResult(assets: [], videoCount: 3, unsupportedCount: 3,
+                                           unknownSizeCount: 0, sizeSource: .reportedByPhotos,
+                                           measuredOnDeviceCount: 0)
+        XCTAssertEqual(BatchEmptyNotice(result: allRefused, limitedAccess: false).detail,
+                       "Every video BatchShrink can see is unsupported or outside your Photos access.")
+    }
+
+    /// The batch flow has no single video to test, and two of the sentences a batch user reads were
+    /// written as if it had. A restriction is never answered with a route to a switch a restricted
+    /// device does not show.
+    func testTheAccessSentencesFitABatchAndARestrictionIsNotSentToSettings() {
+        let refused = PipelineError.permissionDenied.localizedDescription
+        XCTAssertEqual(refused, PipelineError.refusedAccess)
+        XCTAssertFalse(refused.lowercased().contains("test"),
+                       "a batch of twenty videos is not one video being tested")
+        XCTAssertTrue(refused.contains("your videos"))
+        XCTAssertTrue(refused.contains("Settings"))
+
+        // The same failure on a device Screen Time or a device manager holds back. Naming Settings
+        // there would send the user to a Photos switch that does not exist, so the sentence names
+        // what is really holding access back instead.
+        let restricted = PipelineError.accessSentence(restricted: true)
+        XCTAssertEqual(restricted, PipelineError.restrictedAccess)
+        XCTAssertFalse(restricted.lowercased().contains("settings"))
+        XCTAssertNotEqual(restricted, refused)
+
+        // The third sentence that reaches batch rows carried the one-video flow's machinery into
+        // them. It reads as this app's own access rule now.
+        let unavailable = PipelineError.assetUnavailable.localizedDescription
+        XCTAssertFalse(unavailable.contains("system picker"))
+        XCTAssertFalse(unavailable.contains("select it again"))
+        XCTAssertTrue(unavailable.contains("Settings"))
     }
 
     // MARK: - Helpers
@@ -1242,16 +1411,28 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     /// The model watches the real Photos library unless a test hands it a monitor that reports a
     /// change without one.
     let monitor: LibraryChangeMonitor
+    /// The chosen-video read, when a test wants one. Without it the fixture's scanner is not a
+    /// format probe, so a run starts the way it did before the pre-flight existed.
+    private let formatProbe: (any OriginalFormatProbing)?
+    /// The Photos status the model reads for the one question the monitor cannot answer: refused,
+    /// or restricted by something outside the app. The app reads Photos' own; a test says which.
+    private let authorizationStatus: () -> PHAuthorizationStatus
     let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
                                   ?? .standard)
     lazy var batch = BatchViewModel(photos: photos, scanner: scanner, transcoder: transcoder,
                                     verifier: verifier, temporary: files, history: history,
                                     queueStore: queue, screenAwake: screenAwake,
-                                    libraryChanges: monitor, settings: settings)
+                                    libraryChanges: monitor, settings: settings,
+                                    formatProbe: formatProbe,
+                                    authorizationStatus: authorizationStatus)
 
-    init(assets: [LibraryAsset], monitor: LibraryChangeMonitor? = nil) {
+    init(assets: [LibraryAsset], monitor: LibraryChangeMonitor? = nil,
+         formatProbe: (any OriginalFormatProbing)? = nil,
+         authorizationStatus: (() -> PHAuthorizationStatus)? = nil) {
         self.assets = assets
         self.monitor = monitor ?? LibraryChangeMonitor(authorizationStatus: { .authorized })
+        self.formatProbe = formatProbe
+        self.authorizationStatus = authorizationStatus ?? { PHPhotoLibrary.authorizationStatus(for: .readWrite) }
     }
 }
 
@@ -1408,6 +1589,33 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     func cancel() {
         cancelled = true
         gate?.resume(throwing: PipelineError.cancelled)
+        gate = nil
+    }
+}
+
+/// The chosen-video read: the one call the batch flow makes between the tap on Shrink and the
+/// first export. It can be held open so a test can leave the app while it is running, which is what
+/// the real service does between the videos it reads.
+@MainActor private final class BatchMockFormatProbe: OriginalFormatProbing {
+    /// What the media refuses, by identifier. A video absent from here could not be read, which is
+    /// not a refusal and leaves it in the run.
+    var refusals: [String: String] = [:]
+    var hold = false
+    var gate: CheckedContinuation<Void, Error>?
+    var read: [String] = []
+
+    func refusedByFormat(among assets: [LibraryAsset],
+                         progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> [LibraryAsset] {
+        progress(LibraryScanProgress(phase: .inspectingFormats, scanned: 0, total: assets.count))
+        if hold { try await withCheckedThrowingContinuation { gate = $0 } }
+        read = assets.map(\.id)
+        return assets.compactMap { asset in refusals[asset.id].map { asset.refusing($0) } }
+    }
+
+    /// Lets a held read answer, which is what happens on a device when a read the app stopped
+    /// finishes the video it was on.
+    func release() {
+        gate?.resume(returning: ())
         gate = nil
     }
 }

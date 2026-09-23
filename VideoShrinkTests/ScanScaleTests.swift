@@ -511,6 +511,107 @@ import Photos
         XCTAssertTrue(fixture.queue.saved.isEmpty)
     }
 
+    // MARK: - A format read that never answers
+
+    // Reading one video's format asks PhotoKit for the original with the network switched off and
+    // waits for one callback. PhotoKit documents that the callback arrives exactly once, and
+    // nothing here can prove that a device always does. What these cover is the failure the pass
+    // had no answer for: the wait used to be unbounded, so a read that never answered left the
+    // pass suspended for good - the screen stayed on the reading step and the Stop button had
+    // nothing behind it, because the pass only ever checked the stop between videos. The wait is
+    // now bounded, the stop reaches a read that is in flight, and the three ways a read can end
+    // all go through one claim, so a handler that arrives late, or twice, cannot resume the same
+    // continuation a second time.
+
+    func testTheFormatReadBoundIsTheNumberTheDevicePlanNames() {
+        // The bound is the only thing between a PhotoKit read that never answers and a screen that
+        // never moves, so the number itself is pinned here as well as in the device plan.
+        XCTAssertEqual(PhotoLibraryScanService.onDeviceRequestTimeout, Duration.seconds(10))
+    }
+
+    func testAFormatReadThatNeverAnswersGivesUpAtItsBound() async {
+        let started = Date()
+        let handed: NSObject? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: .milliseconds(40),
+            start: { _ in
+                let nothingToCancel: () -> Void = {}
+                return nothingToCancel
+            })
+        let waited = Date().timeIntervalSince(started)
+
+        // Nothing measured, and nothing refused: the pass leaves a video it could not read exactly
+        // as the listing described it.
+        XCTAssertNil(handed)
+        // It waited for the bound rather than giving up at once...
+        XCTAssertGreaterThanOrEqual(waited, 0.02)
+        // ...and the bound is what ended the wait.
+        XCTAssertLessThan(waited, 5)
+    }
+
+    func testAFormatReadIsGivenUpAtOnceWhenThePassIsStopped() async {
+        let stops = ScanScaleCountBox()
+        let started = Date()
+        let read = Task { () -> Bool in
+            let handed: NSObject? = await PhotoLibraryScanService.boundedAnswer(
+                timeout: .seconds(30),
+                start: { _ in
+                    let cancelRequest: () -> Void = { stops.count += 1 }
+                    return cancelRequest
+                })
+            return handed == nil
+        }
+
+        // The user taps Stop while that read is still waiting.
+        read.cancel()
+        let gaveUp = await read.value
+        let waited = Date().timeIntervalSince(started)
+
+        XCTAssertTrue(gaveUp)
+        // The stop reaches a read that is in flight instead of the pass sitting out the bound.
+        XCTAssertLessThan(waited, 5)
+        // And giving up cancels the request PhotoKit is working on rather than leaving it running
+        // for a video nothing is waiting for any more.
+        XCTAssertEqual(stops.count, 1)
+    }
+
+    func testAFormatReadThatAnswersTwiceKeepsTheFirstAnswerAndDoesNotTrap() async {
+        // Resuming a checked continuation twice traps, which is why the guard is a single claim
+        // rather than a flag. This is what happens to the run if a device ever calls the handler
+        // more than once.
+        let first = NSObject()
+        let second = NSObject()
+        let handed: NSObject? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: .seconds(30),
+            start: { reply in
+                reply(first)
+                reply(second)
+                let nothingToCancel: () -> Void = {}
+                return nothingToCancel
+            })
+
+        XCTAssertTrue(handed === first)
+    }
+
+    func testAFormatReadAnsweredAfterItsBoundChangesNothing() async {
+        // A handler that arrives late has to be exactly as harmless as one that never arrives:
+        // the read was given up, and the video stays unread rather than being refused. A version
+        // of this that resumed the continuation again would trap here rather than fail an
+        // assertion, which is the failure this test exists to catch.
+        let late = NSObject()
+        let held = ScanScaleReplyBox()
+        let handed: NSObject? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: .milliseconds(40),
+            start: { reply in
+                held.reply = reply
+                let nothingToCancel: () -> Void = {}
+                return nothingToCancel
+            })
+
+        XCTAssertNil(handed)
+        held.reply?(late)
+        XCTAssertNotNil(held.reply)
+    }
+
     // MARK: - A format read on the device survives a refresh
 
     func testARefreshKeepsAFormatThisAppReadOnTheDevice() {
@@ -704,6 +805,18 @@ private func scanScaleEventually(_ predicate: () -> Bool, file: StaticString = #
 private final class ScanScaleAccessBox {
     var value: PHAuthorizationStatus
     init(_ value: PHAuthorizationStatus) { self.value = value }
+}
+
+/// Counts how many times a closure a read hands back was called, so a test can see that giving up
+/// cancels the request rather than only stopping the wait.
+private final class ScanScaleCountBox {
+    var count = 0
+}
+
+/// Holds the callback one read may finish through, so a test can call it after the read has
+/// already been given up - which is the late handler the bound has to survive.
+private final class ScanScaleReplyBox {
+    var reply: ((NSObject?) -> Void)?
 }
 
 @MainActor private final class ScanScaleFixture {

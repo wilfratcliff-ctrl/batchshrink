@@ -388,6 +388,112 @@ import AVFoundation
                        Savings(originalBytes: 1_000, compressedBytes: 600))
     }
 
+    // MARK: - The videos the run began without
+
+    func testARestoredRunStillNamesTheVideosThePreflightTookOut() async throws {
+        // A run that began without a video, paused, and was left for the app to be closed on: one
+        // item still waiting, with the refusal the chosen-video read took out beside it.
+        let fixture = QueueFixture(assets: [])
+        let hdr = queueAsset("hdr").refusing(preflightHDRReason)
+        var stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("ordinary", .pending)])
+        let refusal = try XCTUnwrap(BatchQueueRecord.Refusal(asset: hdr))
+        stored.refusals = [refusal]
+        // Put away the way a phone holds it, through the project's own encoder and decoder, so the
+        // restore below reads a record that has been to a file and back rather than this value.
+        fixture.store.stored = try JSONDecoder().decode(BatchQueueRecord.self,
+                                                        from: JSONEncoder().encode(stored))
+
+        // The relaunch. The queue comes back as the run it was, and the video that was taken out
+        // before the first export is named again - which is what the paused and finished screens
+        // draw, and what makes the count under them add up.
+        let batch = fixture.makeBatch()
+        XCTAssertEqual(batch.phase, .paused)
+        XCTAssertEqual(batch.items.map(\.id), ["ordinary"])
+        XCTAssertEqual(batch.preflightRefusals.map(\.id), ["hdr"])
+        XCTAssertEqual(batch.preflightRefusals.first?.unsupportedReason, preflightHDRReason)
+
+        // Finishing the run writes the refusal down again, because the run is not finished with
+        // saying what it began without.
+        batch.resume()
+        await eventually { !batch.isRunning }
+        XCTAssertEqual(batch.phase, .finished)
+        XCTAssertEqual(batch.preflightRefusals.map(\.id), ["hdr"])
+        XCTAssertEqual(fixture.store.stored?.refusals?.map(\.identifier), ["hdr"])
+
+        // And the screen the user reads at the end is the one that has to account for the drop,
+        // even when it is a second relaunch that draws it.
+        let relaunched = fixture.makeBatch()
+        XCTAssertEqual(relaunched.phase, .finished)
+        XCTAssertEqual(relaunched.preflightRefusals.map(\.id), ["hdr"])
+        XCTAssertEqual(relaunched.preflightRefusals.first?.unsupportedReason, preflightHDRReason)
+    }
+
+    func testTheRefusalTravelsAsItsKindAndNotItsSentence() throws {
+        let reason = try XCTUnwrap(AssetRules.unsupportedFormatReason(isHDR: false, isProRes: true))
+        let proRes = queueAsset("prores").refusing(reason)
+        var record = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("ordinary", .pending)])
+        let refusal = try XCTUnwrap(BatchQueueRecord.Refusal(asset: proRes))
+        record.refusals = [refusal]
+
+        // What reaches a file: the video's own identity and the stable kind of its refusal.
+        let data = try JSONEncoder().encode(record)
+        let text = String(decoding: data, as: UTF8.self)
+        XCTAssertTrue(text.contains("proRes"))
+        XCTAssertFalse(text.contains(reason),
+                       "The queue must not pin the wording one build happened to use")
+
+        // What comes back: the same video, and the reason read from `AssetRules` rather than from
+        // the file. This is the whole trade - one owner of the words, and a code that survives it.
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileBatchQueueStore(directory: directory)
+        try store.save(record)
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded.refusals?.map(\.kind), [.proRes])
+        XCTAssertEqual(loaded.refusals?.map(\.asset), [proRes])
+        XCTAssertEqual(loaded.refusals?.first?.asset.unsupportedReason, reason)
+
+        // A video refused for something that is not this file's two kinds is not written down at
+        // all, rather than being written down in words of this file's own.
+        var traits = AssetRules.Traits()
+        traits.isSpatial = true
+        let spatial = try XCTUnwrap(AssetRules.unsupportedReason(traits))
+        XCTAssertNil(BatchQueueRecord.Refusal(asset: queueAsset("spatial").refusing(spatial)))
+    }
+
+    func testAQueueFromBeforeTheRefusalsWereKeptStillDecodes() throws {
+        // The file shape a shipped build leaves: every field the record writes today, the measured
+        // sizes included, and no `refusals` key at all. Encoded through the project's own encoder,
+        // which is what makes this a queue a user's phone could actually be holding.
+        let legacy = LegacyQueueBeforeRefusals(
+            settings: .init(resolution: "hd1080", frameRate: "original", deletion: "afterRun"),
+            items: [LegacyQueueBeforeRefusals.Item(identifier: "a", creationDate: nil, duration: 120,
+                                                   pixelWidth: 3840, pixelHeight: 2160,
+                                                   bytes: 3_000_000_000, state: .pending,
+                                                   readBack: nil, deletion: nil, copyEvidence: nil,
+                                                   attemptedSave: nil)])
+        let data = try JSONEncoder().encode(legacy)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("refusals"),
+                       "The fixture must not carry the field this change adds")
+
+        // It still decodes, so a run in progress on a user's phone is not thrown away.
+        let record = try JSONDecoder().decode(BatchQueueRecord.self, from: data)
+        XCTAssertEqual(record.version, BatchQueueRecord.currentVersion)
+        XCTAssertEqual(record.items.map(\.identifier), ["a"])
+        XCTAssertEqual(record.items[0].state, .pending)
+        // The list such a record never held reads as a run that refused nothing, which is exactly
+        // what those screens said before this was kept.
+        XCTAssertNil(record.refusals)
+    }
+
     // MARK: - Durable evidence before Photos mutations, continued
 
     func testAQueueThatCannotBeWrittenStopsBeforePhotosIsAskedToDelete() async throws {
@@ -619,6 +725,42 @@ private struct LegacyMidSaveQueue: Encodable {
     var version = 1
     var settings: Settings
     var items: [Item]
+}
+
+/// The queue file shape from before the run's refusals were kept: every field the record writes
+/// today, the measured sizes included, and no `refusals` key. Encoding this produces a file exactly
+/// like one a shipped build left on a phone, which is what makes the test beside it a statement
+/// about a user's queue rather than about this file.
+private struct LegacyQueueBeforeRefusals: Encodable {
+    struct Settings: Encodable {
+        var resolution: String
+        var frameRate: String
+        var deletion: String?
+    }
+
+    struct Item: Encodable {
+        var identifier: String
+        var creationDate: Date?
+        var duration: Double
+        var pixelWidth: Int
+        var pixelHeight: Int
+        var bytes: Int64?
+        var state: BatchQueueRecord.State
+        var readBack: CopyReadBack?
+        var deletion: DeletionOutcome?
+        var copyEvidence: DeletionEvidence?
+        var attemptedSave: AttemptedSave?
+    }
+
+    var version = 1
+    var settings: Settings
+    var items: [Item]
+}
+
+/// The sentence `AssetRules` writes for an HDR video, read from the rule rather than written down a
+/// second time. A test that needs to be sure of the sentence it holds unwraps it for itself.
+private var preflightHDRReason: String {
+    AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false) ?? ""
 }
 
 /// A queue store that can fail one chosen write, so a test can break exactly one checkpoint.

@@ -12,10 +12,6 @@ import AVFoundation
     /// A player item for looking at an original before deciding. Playback may stream or fetch from
     /// iCloud, which is the point: you cannot judge a video you cannot see.
     func playerItem(identifier: String) async throws -> AVPlayerItem
-    /// Deletes originals in a single Photos transaction, because that is what Photos confirms
-    /// once. Returns the identifiers it found and included; anything else was already gone.
-    /// Only ever called behind `DeletionPolicy`.
-    func deleteOriginals(identifiers: [String]) async throws -> [String]
     /// The receipt to store next to a copy Photos just handed back, or nil unless both the copy
     /// and the original can be looked up right now. A receipt is only ever written from a real
     /// read-back, and it is the only thing that can later justify a delete.
@@ -25,6 +21,11 @@ import AVFoundation
     /// The one deletion path new code should use: every candidate is looked up again first, and
     /// anything missing, changed or unreadable is left alone. Still one Photos transaction, so
     /// Photos still asks once.
+    ///
+    /// The raw transaction underneath it is deliberately not a requirement here. It needs no
+    /// revalidation of its own because it is only reachable from this method, so it lives on
+    /// `PhotoLibraryService` alone: a caller holding this protocol cannot submit a Photos delete
+    /// that skipped the gate.
     func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult
 }
 

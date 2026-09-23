@@ -214,6 +214,10 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
 | N20 | 0 | **7 of 162 tests failed.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | **done.** Fixed in `7c11f26`, proven green by CI from `5d72357` onward |
 | N21 | 0 | Prove the fixes turn the suite green | **done for the suite.** Green in CI since `5d72357`. The deletion path still needs a device run, which is N19 |
+| N22 | 2 | `PhotoLibraryService.localFileURL` and `playerItem` still use an unbounded `withCheckedContinuation` with no cancellation path, so a handler that never calls back would stall that step. The scan's format read was hardened with a single-resumption bound in round 15; these two were not | open |
+| N23 | 2 | A storage refusal does not say how much is needed or how much there is, and a batch repeats the same sentence per item until the run ends. The numbers are held at the moment of the decision | open |
+| N24 | 3 | The single-video flow still shows the refusal sentence on a restricted device, where it points at a Settings switch that does not exist for Photos. The batch flow distinguishes the two | open |
+| N25 | 2 | A restored run resumed with access revoked fails each item with the limited-access sentence, which is not what happened | open |
 
 ## Round log
 
@@ -233,6 +237,34 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 11 | `42d67f6` | HDR/ProRes refusal moved into the scan; every user-facing string audited | CI: **green** | 276 tests |
 | 12 | see below | Close round 11's seams: the new scan phase gets its own wording, refused videos are named, stale strings fixed | local gates PASS | 277 tests |
 | 13 | see below | A pre-run format check, first-run expectations, and a whole-app coherence review | local gates PASS | 286 tests |
+| 14 | `4d5da93` | Fix three tests that passed vacuously; correct the marketing again | CI: **green** | 289 tests |
+| 15 | see below | A first-sixty-seconds device audit and its findings | local gates PASS | 307 tests |
+
+### Round 15 — an audit aimed at the one thing that is actually blocked
+
+Everything now waits on a single device run, so this round aimed at that minute instead of at the
+code in general. A read-only audit traced cold launch, the permission prompt, the first scan, the
+first selection, the pre-flight and the first export as they will execute on a real iPhone. It
+found seven things; five are fixed here.
+
+The worst was a first-run dead end of the same shape as the one round 13 found, but reached by the
+most ordinary route there is: **deny the permission prompt, grant it in Settings, come back — and
+the app still said access was unavailable.** The grant was reported, but the pass the user had
+asked for was already failed and nothing recorded why, so nothing acted on the way back, and the
+"Try again" button could not prompt again. Regaining access now finishes the pass the user asked
+for.
+
+Also fixed: backgrounding during the pre-flight silently swallowed the tap; an empty library
+claimed videos had been seen and refused; the batch flow's permission sentence talked about "the
+video you want to test", a single-video idea in a batch context; and a restricted device (Screen
+Time or MDM) both hid onboarding and sent the user to a Settings switch that does not exist,
+because a restriction is not a refusal and cannot be lifted from this app's settings page.
+
+Two more came out of the same audit. The export's free-space gate demanded **two** copies of the
+original even though one file is about to be written and the original is already on the disk —
+which turned away phones that had room to finish, on the phones this app exists for. And the
+format read had no bound, so a PhotoKit handler that never called back would have left the user on
+a screen whose only control was Stop.
 
 ### Round 13 — the last mile of the refusal problem, and a review that paid for itself
 

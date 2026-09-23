@@ -4,7 +4,9 @@ import Foundation
 ///
 /// It holds identifiers, the sizes Photos reported, the settings the run used and what
 /// happened to each item, including the copy each item produced and what both assets looked
-/// like when that copy was checked. No media, filename, location or thumbnail is stored.
+/// like when that copy was checked. It also holds the videos the run began without, so a run
+/// picked up again can still account for them. No media, filename, location or thumbnail is
+/// stored.
 struct BatchQueueRecord: Codable, Equatable, Sendable {
     /// Deliberately still 1. A stored queue is dropped when its version is not this one, and
     /// discarding a user's in-progress queue is worse than any bug this file fixes. Every field
@@ -14,6 +16,14 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
     var version: Int = BatchQueueRecord.currentVersion
     var settings: Settings
     var items: [Item]
+    /// The videos the chosen-video read took out of this run before its first export.
+    ///
+    /// They are deliberately not `items`: an entry there is a video the run has a state for, and
+    /// nothing here was ever run. Keeping them beside the run is what lets a restored queue answer
+    /// the question the finished screen exists to answer - what happened to the videos the user
+    /// picked - long after the process that refused them is gone. A queue written before this
+    /// existed carries no list, and a restored run simply names none, exactly as it did before.
+    var refusals: [Refusal]? = nil
 
     struct Settings: Codable, Equatable, Sendable {
         var resolution: String
@@ -49,6 +59,95 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
             LibraryAsset(id: identifier, creationDate: creationDate, duration: duration,
                          pixelWidth: pixelWidth, pixelHeight: pixelHeight, bytes: bytes,
                          unsupportedReason: nil)
+        }
+    }
+
+    /// One video the chosen-video read refused, and the one thing about its reason a file may hold.
+    ///
+    /// The row a screen draws from one of these carries a date, a duration and a size beside the
+    /// reason, so the identity the run's own items keep travels here too. Without it a restored run
+    /// would draw a different row from the one the run itself drew, and that row could not be
+    /// recognised as the video the user picked.
+    ///
+    /// The sentence itself is deliberately absent. It belongs to `AssetRules`, which owns both of
+    /// the refusals this read can produce, so the record keeps the small stable distinction between
+    /// them and the words are asked for again on restore. That is the same trade `BatchFailureCode`
+    /// makes: a stored code changes when the set of kinds changes, and a stored sentence would
+    /// freeze one build's wording into every later one.
+    struct Refusal: Codable, Equatable, Sendable {
+        var identifier: String
+        var creationDate: Date?
+        var duration: Double
+        var pixelWidth: Int
+        var pixelHeight: Int
+        var bytes: Int64?
+        var kind: Kind
+
+        var asset: LibraryAsset {
+            LibraryAsset(id: identifier, creationDate: creationDate, duration: duration,
+                         pixelWidth: pixelWidth, pixelHeight: pixelHeight, bytes: bytes,
+                         unsupportedReason: kind.reason)
+        }
+
+        /// The refusal to write down for a video the chosen-video read just refused, or nil when
+        /// its reason is not one of the two this file can name again.
+        ///
+        /// A reason this file cannot name is not written down at all. That leaves a restored run
+        /// saying exactly what it said before this field existed, rather than putting a sentence of
+        /// this file's own into the record.
+        init?(asset: LibraryAsset) {
+            guard let reason = asset.unsupportedReason, let kind = Kind(reason: reason) else {
+                return nil
+            }
+            self.identifier = asset.id
+            self.creationDate = asset.creationDate
+            self.duration = asset.duration
+            self.pixelWidth = asset.pixelWidth
+            self.pixelHeight = asset.pixelHeight
+            self.bytes = asset.bytes
+            self.kind = kind
+        }
+
+        /// The refusals the media itself can earn, kept as a small stable set rather than a
+        /// sentence.
+        ///
+        /// Both are `AssetRules`' own question about an original - is it HDR, is it ProRes - and a
+        /// video that is both reads as ProRes, because that is the reason `AssetRules` gives it.
+        /// Asking that owner in the same order here keeps the two ends of the round trip saying the
+        /// same thing.
+        enum Kind: String, Codable, Equatable, Sendable {
+            case hdr
+            case proRes
+
+            /// The sentence `AssetRules` gives this refusal, asked for rather than written down, so
+            /// a wording change moves the writing and the reading together.
+            var reason: String {
+                switch self {
+                case .hdr:
+                    return AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false)
+                        ?? Kind.unnamedReason
+                case .proRes:
+                    return AssetRules.unsupportedFormatReason(isHDR: false, isProRes: true)
+                        ?? Kind.unnamedReason
+                }
+            }
+
+            /// The kind a sentence is, or nil when it is not one this file can name again.
+            init?(reason: String) {
+                if let proRes = AssetRules.unsupportedFormatReason(isHDR: false, isProRes: true),
+                   proRes == reason {
+                    self = .proRes
+                } else if let hdr = AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false),
+                          hdr == reason {
+                    self = .hdr
+                } else {
+                    return nil
+                }
+            }
+
+            /// The sentence the refused-video rows already fall back to for a refusal carrying no
+            /// reason of its own, so this file never holds a wording that is its own.
+            static let unnamedReason = "This video is not supported yet."
         }
     }
 

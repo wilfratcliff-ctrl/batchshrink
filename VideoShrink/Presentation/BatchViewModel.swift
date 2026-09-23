@@ -2,9 +2,22 @@ import Foundation
 import Combine
 import OSLog
 import AVFoundation
+import Photos
 
 enum BatchPhase: Equatable {
     case start, scanning, scanned, selecting, processing, paused, finished, failed
+}
+
+/// Photos access the flow cannot read past, with the reason, because the two reasons are not the
+/// same thing to the user.
+///
+/// A refusal is the user's own answer to the system prompt and Settings can undo it; the flow comes
+/// back by itself when it is undone. A restriction comes from Screen Time or a device management
+/// profile, this app cannot lift it, and Photos is not on this app's Settings page while it is on -
+/// so a restriction must never be answered with a route to a switch that is not there.
+enum PhotosAccessBlock: Equatable, Sendable {
+    case refused
+    case restricted
 }
 
 /// Drives the batch flow: scan the library, choose videos and quality, process them one at a
@@ -71,6 +84,16 @@ enum BatchPhase: Equatable {
     /// True when the pre-flight took every chosen video out, so no run started at all. The
     /// selection screen is where that user lands, and it is the one screen that has to say so.
     @Published private(set) var preflightLeftNothingToRun = false
+    /// What the chosen-video read has to say for itself when it stopped without running: today,
+    /// only the app going to the background under it. Nil whenever no such stop has happened.
+    @Published private(set) var preflightNotice: String?
+    /// Why the flow is resting on the recovery screen, when Photos access is the reason.
+    ///
+    /// It is the one thing that tells a refusal from a restriction, it is what the recovery screen
+    /// draws its route back from, and it is what the way back in watches for: access allowed in
+    /// Settings finishes the pass the user asked for instead of leaving a sentence that is no
+    /// longer true.
+    @Published private(set) var accessBlock: PhotosAccessBlock?
 
     let settings: ShrinkSettings
 
@@ -93,6 +116,10 @@ enum BatchPhase: Equatable {
     private let libraryChanges: LibraryChangeMonitor
     /// The refresh in flight, so a newer report replaces an older listing instead of racing it.
     private var libraryRefresh: Task<Void, Never>?
+    /// Photos' own authorization status, read for the one question the monitor's answer cannot
+    /// answer: whether access is missing because the user refused it or because something outside
+    /// the app restricts it. Those two need different words and different routes back.
+    private let authorizationStatus: () -> PHAuthorizationStatus
     /// Set when Photos reported a change while a scan was reading the library.
     ///
     /// That pass began before the change, so its listing cannot be trusted to describe one
@@ -103,6 +130,10 @@ enum BatchPhase: Equatable {
     private var runTask: Task<Void, Never>?
     private var stopRequested = false
     private var finishRequested = false
+    /// Set when the app left the foreground while the chosen-video read was running, so the pass
+    /// that read was part of can say why it stopped rather than leaving the selection screen
+    /// looking exactly as it did before the user tapped Shrink.
+    private var preflightLeftApp = false
     private var activeStartedAt: Date?
     /// Snapshot taken when a run starts, so changing quality never affects work in flight.
     private var activeSettings = TranscodeSettings.standard
@@ -139,7 +170,14 @@ enum BatchPhase: Equatable {
          // Omitted everywhere in the app: the scanner that can read a video's own format is the
          // one passed above, and this is only here for a test that wants to watch the pre-flight
          // without a Photos library.
-         formatProbe: (any OriginalFormatProbing)? = nil) {
+         formatProbe: (any OriginalFormatProbing)? = nil,
+         // Omitted everywhere in the app: the status the app reads is Photos' own. It is named here
+         // so a test can drive a device whose Photos access is restricted, which is a state a
+         // simulator cannot be put in and which the monitor's own answer cannot tell apart from a
+         // refusal.
+         authorizationStatus: @escaping () -> PHAuthorizationStatus = {
+             PHPhotoLibrary.authorizationStatus(for: .readWrite)
+         }) {
         self.photos = photos
         self.scanner = scanner
         // The one thing in the app that can read a video's own format is the scanner. A local
@@ -152,6 +190,7 @@ enum BatchPhase: Equatable {
         self.history = history
         self.queueStore = queueStore
         self.screenAwake = screenAwake
+        self.authorizationStatus = authorizationStatus
         // A local name, so the rest of the initialiser cannot accidentally reach for the optional
         // parameter: `libraryChanges` inside `init` means the argument, not the stored property.
         let monitor = libraryChanges ?? LibraryChangeMonitor()
@@ -364,6 +403,10 @@ enum BatchPhase: Equatable {
         // about the videos it left out is superseded by what this pass finds.
         preflightRefusals = []
         preflightLeftNothingToRun = false
+        preflightNotice = nil
+        preflightLeftApp = false
+        // A fresh pass supersedes whatever the last failure had to say about Photos access.
+        accessBlock = nil
         phase = .scanning
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
@@ -403,7 +446,18 @@ enum BatchPhase: Equatable {
                     self.reconcileAfterScan()
                 } else {
                     self.phase = .failed
-                    self.message = normalized.localizedDescription
+                    // A Photos failure says which of the two it is: the user's own refusal, which
+                    // Settings can undo, or a restriction this app cannot lift. Remembering which
+                    // one lets the way back in finish the pass the user asked for, and keeps a
+                    // restriction from being answered with a route to a switch that is not there.
+                    if normalized == .permissionDenied {
+                        let restricted = self.isRestrictedByTheSystem
+                        self.accessBlock = restricted ? .restricted : .refused
+                        self.message = PipelineError.accessSentence(restricted: restricted)
+                    } else {
+                        self.accessBlock = nil
+                        self.message = normalized.localizedDescription
+                    }
                     self.log.error("Library scan failed")
                 }
             }
@@ -430,6 +484,13 @@ enum BatchPhase: Equatable {
     /// refused anything, the app itself is what asks for Photos on the first scan - and reading
     /// that as a refusal is what put a recovery screen and its scan button in front of a new user
     /// before the app had asked for anything at all.
+    ///
+    /// `.denied` covers two different things for the same reason. A refusal is the user's own
+    /// answer, undone in Settings, and the flow stops for it wherever it is. A restriction comes
+    /// from outside the app and cannot be undone there at all, so it stops a flow that has a
+    /// library or a run in hand - and leaves a fresh install alone, because nothing has been lost
+    /// and there is nothing to re-list: the introduction still shows, and the first look through
+    /// the library says what is wrong when the user asks for it.
     private func libraryChanged(_ reason: LibraryChangeReason) {
         limitedAccess = libraryChanges.isLimited
         // Written as a switch over every state so a state added later has to be given an answer
@@ -440,13 +501,31 @@ enum BatchPhase: Equatable {
             // here and the start screen or the onboarding stays exactly as it was.
             return
         case .denied:
-            // Refused or restricted: this really is access lost, and the flow says so.
-            libraryAccessLost()
+            // Refused or restricted: either way this app cannot read the library, so a flow that
+            // has one in hand stops and says so.
+            let restricted = isRestrictedByTheSystem
+            if restricted && scanResult == nil && items.isEmpty {
+                // Nothing in hand and nothing the user can do about it. Calling this "access lost"
+                // would replace a new user's introduction with a recovery screen they have no way
+                // out of, so the flow is left where it is.
+                return
+            }
+            libraryAccessLost(reason: restricted ? .restricted : .refused)
             return
         case .full, .limited:
             break
         }
         log.info("Photos reported a change (\(String(describing: reason), privacy: .public))")
+        // Access is readable again. If that is the very thing the flow is waiting on - the user
+        // refused the prompt, allowed access in Settings and came back - the pass they asked for is
+        // finished here rather than left to a failure screen whose sentence is no longer true and a
+        // tap that cannot change it. Nothing else takes this path, so an ordinary Photos change
+        // still only refreshes the listing.
+        if accessBlock != nil {
+            log.info("Photos access is back; looking at the library again")
+            scan()
+            return
+        }
         refreshLibrary()
     }
 
@@ -524,18 +603,25 @@ enum BatchPhase: Equatable {
         }
     }
 
+    /// True while Photos is blocked by Screen Time or a device management profile rather than by
+    /// the user's own answer to the system prompt.
+    private var isRestrictedByTheSystem: Bool { authorizationStatus() == .restricted }
+
     /// Photos access is gone.
     ///
-    /// This is the path `scan()` takes when Photos refuses it: the flow says so rather than
-    /// holding a library it can no longer read, and it is taken only from the phases a scan
-    /// itself may start in. A run in flight, or one paused with work left, keeps the screen and
-    /// its own record of what happened to each video.
+    /// The companion of `scan()`'s own Photos failure: the flow says so rather than holding a
+    /// library it can no longer read, and it is taken only from the phases a scan itself may start
+    /// in. A run in flight, or one paused with work left, keeps the screen and its own record of
+    /// what happened to each video.
     ///
     /// A scan that is reading the library when access goes is stopped rather than left to run:
     /// what it would produce is a library this app may no longer read, and the flow says so
     /// instead. The scan's own cancel path leaves a phase it no longer owns alone, so this
     /// decision survives the cancellation landing.
-    private func libraryAccessLost() {
+    ///
+    /// `reason` is kept rather than folded away, because the recovery screen reads it: a refusal
+    /// gets the route to Settings, and a restriction gets the truth that this app cannot lift it.
+    private func libraryAccessLost(reason: PhotosAccessBlock) {
         if phase == .scanning {
             scanner.cancel()
             runTask?.cancel()
@@ -544,7 +630,8 @@ enum BatchPhase: Equatable {
                   [BatchPhase.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
         }
         phase = .failed
-        message = PipelineError.permissionDenied.localizedDescription
+        accessBlock = reason
+        message = PipelineError.accessSentence(restricted: reason == .restricted)
         log.error("Photos access was withdrawn")
     }
 
@@ -603,6 +690,8 @@ enum BatchPhase: Equatable {
         // A fresh start clears what the last one had to say about the videos it could not run.
         preflightRefusals = []
         preflightLeftNothingToRun = false
+        preflightNotice = nil
+        preflightLeftApp = false
         guard formatProbe != nil else {
             // Nothing here can read a video's own format, so the run starts exactly as it always
             // did. The real app always has the service that can.
@@ -633,9 +722,16 @@ enum BatchPhase: Equatable {
             }
             self.preflight = nil
             guard !Task.isCancelled, let refused else {
-                // The Stop button, or access going while the read was in flight: nothing was
-                // refused and nothing started, so the flow goes back to the choice being made.
+                // The Stop button, the app leaving the foreground, or access going while the read
+                // was in flight: nothing was refused and nothing started, so the flow goes back to
+                // the choice being made. The Stop button is the user's own tap and needs no
+                // explaining; the app going to the background is not, so that one says why the
+                // check stopped instead of leaving a selection screen that looks untouched.
                 if self.phase == .scanning { self.phase = .selecting }
+                if self.phase == .selecting, self.preflightLeftApp {
+                    self.preflightNotice = "You left BatchShrink while it was checking the videos you picked, so the run stopped before it began. Nothing was changed; tap Shrink to start again."
+                }
+                self.preflightLeftApp = false
                 self.runTask = nil
                 self.reconcileAfterScan()
                 return
@@ -766,7 +862,10 @@ enum BatchPhase: Equatable {
         restoredRun = false
         preflightRefusals = []
         preflightLeftNothingToRun = false
+        preflightNotice = nil
+        preflightLeftApp = false
         pauseReason = nil
+        accessBlock = nil
         readBackOutcomes = [:]
         copyEvidence = [:]
         revalidationOutcomes = [:]
@@ -815,7 +914,15 @@ enum BatchPhase: Equatable {
 
     func enteredBackground() {
         switch phase {
-        case .scanning: cancelScan()
+        case .scanning:
+            // Both stops go back to where the flow was, and only one of them needs saying. A
+            // chosen-video read is the moment between the user's tap and any work at all, so
+            // returning to the unchanged selection screen in silence reads as a tap that did
+            // nothing - the pass that stopped says why it stopped. A library scan stopped the same
+            // way stays silent: it was a look, the user asked for nothing to be made, and the
+            // screen it returns to offers to look again.
+            if preflight != nil { preflightLeftApp = true }
+            cancelScan()
         case .processing: pause(reason: .leftApp)
         default: break
         }
@@ -886,7 +993,7 @@ enum BatchPhase: Equatable {
         var workingIdentity = AssetIdentity.unknown
         do {
             try temporary.ensureWorkspace()
-            try temporary.requireCapacity(for: DiskHeadroom.reserve)
+            try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(nil))
             let retrieved = try await photos.retrieve(identifier: id) { [weak self] value in
                 guard let self, self.currentID == id else { return }
                 self.currentProgress = value
@@ -899,7 +1006,10 @@ enum BatchPhase: Equatable {
             currentProgress = nil
             let original = try await verifier.inspect(retrieved.asset.url)
             try checkStop()
-            try temporary.requireCapacity(for: DiskHeadroom.bytes(original.bytes, copies: 2))
+            // One file is about to be written, not two: the original is already on the disk and
+            // was just measured, so its bytes are already spent. Demanding a second copy of it
+            // turned away phones that had room to finish the export.
+            try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(original.bytes))
             setState(.transcoding(nil), for: id)
             currentStage = .transcoding
             let started = Date()
@@ -920,7 +1030,7 @@ enum BatchPhase: Equatable {
             try checkStop()
             let saving = Savings(originalBytes: original.bytes, compressedBytes: output.bytes)
             if saving.isSmaller {
-                try temporary.requireCapacity(for: DiskHeadroom.bytes(output.bytes, copies: 1))
+                try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(output.bytes))
                 // The sizes this run measured go down with the intent, so a launch that finds the
                 // copy in Photos afterwards can say what was saved instead of asking the user to
                 // work it out.
@@ -1222,7 +1332,11 @@ enum BatchPhase: Equatable {
                                       deletion: deletionOutcomes[item.asset.id],
                                       copyEvidence: copyEvidence[item.asset.id],
                                       attemptedSave: attemptedSaves[item.asset.id].map { AttemptedSave($0) })
-            })
+            },
+            // The videos this run began without, so a run that is picked up again can still
+            // account for them wherever it ends. The record holds the identity the screens draw
+            // and `AssetRules`' own stable kind, never the sentence itself.
+            refusals: preflightRefusals.compactMap { BatchQueueRecord.Refusal(asset: $0) })
         do {
             try queueStore.save(record)
             // A notice is only dropped once the run has a written record to put in its place.
@@ -1269,6 +1383,13 @@ enum BatchPhase: Equatable {
         items = reconciled.items.map { item in
             BatchItem(asset: item.asset, state: BatchQueueReconciliation.live(item.state))
         }
+        // The videos this run began without, so every screen that names them keeps naming them -
+        // the finished one most of all, because it is the screen that has to account for the
+        // difference between what the user picked and what this run actually took. The record
+        // carries the identity alone, and the reason comes back from `AssetRules` through it. A
+        // queue written before this was kept carries no list, which is exactly what a run that
+        // refused nothing looked like.
+        preflightRefusals = reconciled.refusals?.map(\.asset) ?? []
         readBackOutcomes = Dictionary(uniqueKeysWithValues: reconciled.items.compactMap { item in
             item.readBack.map { (item.identifier, $0) }
         })

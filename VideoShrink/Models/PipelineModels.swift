@@ -22,10 +22,21 @@ enum PipelineStage: String, CaseIterable {
         }
     }
 
+    /// The stages a run can still be stopped from.
+    ///
+    /// `.saving` is deliberately absent. Photos has accepted the save by then and there is no
+    /// supported way to take it back, so the run waits for Photos to answer and can only end in
+    /// `.saved` or `.failed`. That is why `allows` refuses `.saving -> .cancelled`, and why
+    /// nothing should ever try to make that move.
     var canCancel: Bool {
         [.waitingForPermission, .retrieving, .preparing, .transcoding, .verifying, .readyToSave].contains(self)
     }
 
+    /// Whether a run may move straight from `self` to `next`.
+    ///
+    /// A refusal is silent at the call site: the run stays exactly where it is. So every stage a
+    /// failure can start from has to have a move that failure may take, and that is `.failed` for
+    /// all of them. This refuses more moves than it allows on purpose.
     func allows(_ next: PipelineStage) -> Bool {
         if next == .cancelled { return canCancel || self == .choosing }
         if next == .failed { return ![.idle, .saved, .cancelled].contains(self) }
@@ -80,7 +91,6 @@ struct VideoMetadata: Equatable, Sendable {
     /// as above.
     var isProRes: Bool = false
 
-    var isHEVC: Bool { codec == .hevc }
     /// True when the media declares one of the two ITU-R BT.2100 curves.
     var isHDR: Bool { transferFunction.isHDR }
     var longEdge: Int { max(width, height) }

@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // MARK: - Start
 
@@ -193,6 +194,35 @@ struct BatchScanningScreen: View {
 
 // MARK: - Summary
 
+/// What the summary says when the scan found nothing it can work on.
+///
+/// The two cases are different findings and used to read as one. A library with videos the app
+/// cannot use is a refusal of each of them; a library with no videos at all was told the same
+/// thing, which cannot be true of nothing. The empty case says there were none, and says it about
+/// Photos as this app is allowed to see it, because limited access can make that a different
+/// statement about the same library.
+struct BatchEmptyNotice: View {
+    let result: LibraryScanResult
+    /// True when Photos lets the app see part of the library only, so "no videos" means none of
+    /// the ones it is allowed rather than none at all.
+    let limitedAccess: Bool
+
+    var title: String { "Nothing to shrink yet" }
+
+    var detail: String {
+        guard result.videoCount == 0 else {
+            return "Every video BatchShrink can see is unsupported or outside your Photos access."
+        }
+        return limitedAccess
+            ? "BatchShrink is allowed to see only some of your Photos library, and there are no videos in that part of it."
+            : "There are no videos in your Photos library yet."
+    }
+
+    var body: some View {
+        ShrinkNotice(symbol: "video.slash", title: title, detail: detail)
+    }
+}
+
 struct BatchSummaryScreen: View {
     @ObservedObject var batch: BatchViewModel
     let openQuality: () -> Void
@@ -212,8 +242,7 @@ struct BatchSummaryScreen: View {
                 }
                 if let result = batch.scanResult, let estimate = batch.scanEstimate {
                     if result.assets.isEmpty {
-                        ShrinkNotice(symbol: "video.slash", title: "Nothing to shrink yet",
-                                     detail: "Every video BatchShrink can see is unsupported or outside your Photos access.")
+                        BatchEmptyNotice(result: result, limitedAccess: batch.limitedAccess)
                         // Nothing here can be chosen, so the selection screen is not reachable. This
                         // is the one place the refused videos can still be named.
                         RefusedVideoList(assets: result.refusedAssets)
@@ -386,6 +415,12 @@ struct BatchSelectionScreen: View {
                 if batch.preflightLeftNothingToRun {
                     ShrinkNotice(symbol: "nosign", title: "Nothing was exported.",
                                  detail: "Every video you picked is one BatchShrink read and cannot shrink, so no run started. They are listed below with the reason, and they are untouched in Photos.")
+                }
+                // A check that stopped because the app went to the background. The user is back on
+                // the screen they tapped from, so without this the tap reads as one that did
+                // nothing at all. The Stop button needs no line of its own: that was their tap.
+                if let notice = batch.preflightNotice {
+                    ShrinkNotice(symbol: "pause.circle", title: "That check stopped.", detail: notice)
                 }
                 RefusedVideoList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
@@ -1262,6 +1297,7 @@ struct BatchFinishedScreen: View {
 struct BatchRecoveryScreen: View {
     @ObservedObject var batch: BatchViewModel
     let useSingleVideo: () -> Void
+    @Environment(\.openURL) private var openURL
 
     var body: some View {
         ScrollView {
@@ -1277,6 +1313,14 @@ struct BatchRecoveryScreen: View {
                 Text(batch.message ?? "BatchShrink couldn’t look through your library just now.")
                     .font(.body).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                // Only for access the user themselves refused. Naming Settings here would be the
+                // wrong route for a restriction, where Photos is not on this app's Settings page
+                // at all - that case carries its own sentence above and no way out but the truth.
+                if batch.accessBlock == .refused {
+                    Text("Photos access is allowed outside BatchShrink. Allow it there and come back: BatchShrink looks at your library again by itself.")
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 Text("Nothing was changed. Looking through your library reads details and sizes; your videos are left alone.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1292,6 +1336,12 @@ struct BatchRecoveryScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ShrinkActionBar {
                 ShrinkPrimaryButton(title: "Try again", symbol: "arrow.clockwise") { batch.scan() }
+                if batch.accessBlock == .refused {
+                    Button("Open Photos access settings") {
+                        if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
+                    }
+                    .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                }
                 Button("Shrink one video instead", action: useSingleVideo)
                     .font(.subheadline.weight(.medium)).frame(minHeight: 44)
             }

@@ -92,7 +92,7 @@ import OSLog
                 try temporary.cleanup()
                 try temporary.ensureWorkspace()
                 // Unknown original size before retrieval: a floor, not a download-space guarantee.
-                try temporary.requireCapacity(for: DiskHeadroom.reserve)
+                try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(nil))
                 let retrieved = try await photos.retrieve(identifier: identifier) { [weak self] value in
                     guard let self, self.stage == .retrieving, !self.cancelling else { return }
                     self.retrievingFromCloud = true
@@ -105,7 +105,8 @@ import OSLog
                 try Task.checkCancellation()
                 source = original
                 // Heuristic headroom for an output plus scratch space. Never a storage reservation.
-                try temporary.requireCapacity(for: DiskHeadroom.bytes(original.bytes, copies: 2))
+                // One file is about to be written, not two; see the batch flow's note.
+                try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(original.bytes))
                 move(to: .transcoding)
                 let written = try await transcoder.transcode(retrieved, metadata: original,
                                                              settings: activeSettings) { [weak self] value in
@@ -145,7 +146,7 @@ import OSLog
                 let checked = try await verifier.verify(url, source: original, expecting: activeSettings.codec)
                 guard Savings(originalBytes: original.bytes, compressedBytes: checked.bytes).isSmaller
                 else { throw PipelineError.verification }
-                try temporary.requireCapacity(for: DiskHeadroom.bytes(checked.bytes, copies: 1))
+                try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(checked.bytes))
                 _ = try await photos.save(videoAt: url, identity: identity)
                 output = checked
                 move(to: .saved)
@@ -187,8 +188,18 @@ import OSLog
         let normalized = Task.isCancelled ? PipelineError.cancelled : PipelineError.normalize(error, fallback: fallback)
         previewURL = nil
         cleanTemporaryFiles()
-        move(to: normalized == .cancelled ? .cancelled : .failed)
-        message = normalized.localizedDescription
+        // `.saving` is the one stage with no move to `.cancelled`: Photos holds the save and there
+        // is no supported way to take it back, so the run waits for Photos to answer. A
+        // cancellation surfacing from there is reported as a save that did not confirm, because
+        // `move` would otherwise refuse `.cancelled` and leave the screen resting on "Saving to
+        // Photos" with a message and nothing to press.
+        if normalized == .cancelled, !stage.allows(.cancelled) {
+            move(to: .failed)
+            message = PipelineError.save.localizedDescription
+        } else {
+            move(to: normalized == .cancelled ? .cancelled : .failed)
+            message = normalized.localizedDescription
+        }
         cancelling = false
     }
 
