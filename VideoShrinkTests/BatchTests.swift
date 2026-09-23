@@ -345,6 +345,81 @@ import SwiftUI
         XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.needsCheck)
     }
 
+    /// A video this app still has a question about is left out of Select all, and can still be
+    /// ticked by hand.
+    ///
+    /// The question is whether Photos already took a copy, and its answer decides whether running
+    /// the video again makes a second copy - the outcome this whole area exists to prevent. The
+    /// finding lived in `midSaveFindings`, which nothing consulted when the library was read again,
+    /// so the ordinary route "finish, shrink more videos, scan, Select all" put the video straight
+    /// back into a run. It is now left out of automatic selection exactly as a copy this app made
+    /// is, and it stays on screen and tickable, so the decision is the user's rather than the app's.
+    func testAVideoWithAnOpenQuestionIsLeftOutOfSelectAllAndStillTickable() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.photos.saveError = .save
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // Both copies are unanswered questions, and both are named as such.
+        XCTAssertEqual(fixture.batch.unaccountedIdentifiers, ["a", "b"])
+        XCTAssertEqual(fixture.batch.unaccountedAssets.map(\.id), ["a", "b"])
+
+        // A bulk selection leaves them alone...
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selectableCount, 0)
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+
+        // ...and reading the library again does not put them back in reach, which is the step that
+        // used to: a scan answers what is in the library, not what Photos did with a copy.
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+
+        // The user can still choose one deliberately, once they have looked in Photos.
+        fixture.batch.toggle("a")
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+        XCTAssertEqual(fixture.batch.selectedAssets.map(\.id), ["a"])
+    }
+
+    /// The deletion confirmation says what happens to its own count.
+    ///
+    /// The count comes from the last look this run took, and a copy edited in Photos since then
+    /// would make it wrong - the tap re-looks and can delete fewer, recording each refusal as kept
+    /// with its reason. The dialog now says so, which turns a surprise into a rule the user was
+    /// told, without weakening what "delete" means.
+    func testTheDeletionPromptSaysWhatHappensToItsOwnCount() {
+        let one = BatchFinishedScreen.deletionPrompt(count: 1)
+        XCTAssertEqual(one.title, "Delete 1 original?")
+        XCTAssertEqual(one.button, "Delete 1 original")
+        XCTAssertTrue(one.message.contains("looked at again before Photos is asked"))
+        XCTAssertTrue(one.message.contains("is kept instead"))
+        XCTAssertTrue(one.message.contains("Recently Deleted"))
+
+        let many = BatchFinishedScreen.deletionPrompt(count: 3)
+        XCTAssertEqual(many.title, "Delete 3 originals?")
+        XCTAssertEqual(many.button, "Delete 3 originals")
+        XCTAssertFalse(many.message.contains("3"), "the message counts nothing; the title does")
+    }
+
+    /// The selection screen's own words for the videos it leaves out.
+    func testTheSelectionScreenNamesTheVideosItLeavesOutOfSelectAll() {
+        XCTAssertEqual(BatchSelectionScreen.unaccountedHeading, "Left out of Select all")
+
+        let one = BatchSelectionScreen.unaccountedExplanation(1)
+        XCTAssertTrue(one.contains("cannot tell whether a copy already exists"))
+        XCTAssertTrue(one.contains("left out of Select all"))
+        XCTAssertTrue(one.contains("Tick it by hand"))
+
+        let many = BatchSelectionScreen.unaccountedExplanation(2)
+        XCTAssertTrue(many.contains("these videos"))
+        XCTAssertTrue(many.contains("Tick one by hand"))
+    }
+
     func testAnErrorPhotosReportsAfterASaveIsNotAFailureEither() async {
         // A change transaction that fails in Photos' own vocabulary is the error the app cannot
         // place, and it arrives after Photos was handed the copy: the copy may be in the library

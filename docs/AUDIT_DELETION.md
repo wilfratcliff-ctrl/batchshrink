@@ -52,9 +52,12 @@ away**: the stored sentence had no reader anywhere in the app. A copy that had c
 was gone, an original Photos could no longer find and a withdrawn permission all read the same.
 `docs/BATCH_PHASE.md` promises the opposite - "the reason appears in the run's list".
 
-**Fixed in round 20** for the reason, which is now rendered: `" · original kept. <reason>"`. The
-stale count is **open**: the dialog is a ceiling, not a promise, and it should either say so or be
-refreshed on returning to the foreground.
+**Fixed in round 20** for the reason, which is now rendered: `" · original kept. <reason>"`. **And in
+round 21** for the count, which the confirmation now qualifies in its own message: every candidate
+is looked at again before Photos is asked, so the number can only go down and any original whose copy
+has changed is kept with its reason on the row. The count is still not refreshed when the app
+returns to the foreground - the dialog states the rule instead of promising a number, which is the
+narrower of the two fixes.
 
 ### DEL3 — [P2] The paused screen said nothing about originals already deleted
 `VideoShrink/Presentation/BatchScreens.swift` (the paused screen)

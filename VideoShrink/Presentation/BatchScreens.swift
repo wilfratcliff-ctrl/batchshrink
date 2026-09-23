@@ -245,7 +245,7 @@ struct BatchSummaryScreen: View {
                         BatchEmptyNotice(result: result, limitedAccess: batch.limitedAccess)
                         // Nothing here can be chosen, so the selection screen is not reachable. This
                         // is the one place the refused videos can still be named.
-                        RefusedVideoList(assets: result.refusedAssets)
+                        VideoReasonList(assets: result.refusedAssets)
                     } else {
                         statsCard(result: result, estimate: estimate)
                         QualityRow(settings: batch.settings, open: openQuality)
@@ -464,7 +464,19 @@ struct BatchSelectionScreen: View {
                 if let notice = batch.preflightNotice {
                     ShrinkNotice(symbol: "pause.circle", title: "That check stopped.", detail: notice)
                 }
-                RefusedVideoList(assets: batch.refusedAssets)
+                // The videos a bulk selection deliberately leaves alone, named. Without this the
+                // only sign of them was a "Select all N" that came out lower than the user could
+                // account for, and the question about whether a copy already exists had no place on
+                // the screen where videos are chosen. The rows are what make the question
+                // answerable: the app cannot tell whether a copy exists, the user can look, and a
+                // video nobody can recognise is not something anyone can check in Photos.
+                if !batch.unaccountedAssets.isEmpty {
+                    VideoReasonList(assets: batch.unaccountedAssets,
+                                    heading: Self.unaccountedHeading,
+                                    explanation: (one: Self.unaccountedExplanation(1),
+                                                  many: Self.unaccountedExplanation(2)))
+                }
+                VideoReasonList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 QueueWarningNotice(warning: batch.queueWarning)
@@ -562,6 +574,26 @@ struct BatchSelectionScreen: View {
     /// can state the boundary rather than re-derive it.
     static func sortSitsBesideHeadline(at size: DynamicTypeSize) -> Bool {
         !size.isAccessibilitySize
+    }
+
+    /// The heading on the card of videos a bulk selection leaves alone.
+    ///
+    /// Static and internal so a case can state it, and the same two strings are the only place this
+    /// app explains why "Select all" can come out lower than the number of videos on screen.
+    static let unaccountedHeading = "Left out of Select all"
+
+    /// Why those videos are left out, and what the user can do about it.
+    ///
+    /// The app answered "did Photos already take a copy of this video?" for every video it could,
+    /// and this is the residue: a save it stopped in the middle of. Guessing either way is wrong -
+    /// running one again can make the second copy the whole area exists to prevent, and skipping it
+    /// silently can leave a video the user wanted untouched. So it is named, explained and left for
+    /// the user to tick by hand, which is the same arrangement a copy this app made has.
+    static func unaccountedExplanation(_ count: Int) -> String {
+        guard count > 1 else {
+            return "BatchShrink stopped while Photos was taking a copy of this video, so it cannot tell whether a copy already exists. Running it again could make a second copy, so it is left out of Select all. Tick it by hand if you have checked Photos."
+        }
+        return "BatchShrink stopped while Photos was taking copies of these videos, so it cannot tell whether a copy already exists for each one. Running them again could make a second copy, so they are left out of Select all. Tick one by hand if you have checked Photos."
     }
 
     private var footer: String {
@@ -724,19 +756,35 @@ private func rowLabel(_ asset: LibraryAsset) -> String {
 /// chosen, and the summary draws it when there is nothing eligible at all, which is the one case
 /// where the selection screen cannot be reached. Both exist because a count never says which video
 /// was refused or why.
-struct RefusedVideoList: View {
+/// A card of videos with one thing to say about them, each drawn with enough to be recognised in
+/// Photos: a thumbnail, its date, its length and its size.
+///
+/// It began as the list of videos the app read and refused, and it is named for the reason rather
+/// than for the refusal because there is now a second one. The scans refuse a video because it
+/// cannot be shrunk; the selection screen also lists the videos it has an open question about, and
+/// the two are not the same thing - so the heading and the sentence under it are the caller's, and
+/// the defaults are the refusal's own words.
+struct VideoReasonList: View {
     let assets: [LibraryAsset]
     /// A sentence for the screen this list is drawn on, when the screen has something to add about
     /// why these videos are here. The run screens say they came out before the first export; the
     /// library screens have nothing to add and pass nothing.
     var context: String? = nil
+    /// The card's heading.
+    var heading: String = "Not supported"
+    /// What the list itself is, in the two forms a count needs. One sentence each, in the words the
+    /// heading belongs to, so a list can never describe videos with another list's reason.
+    var explanation: (one: String, many: String) = (
+        one: "BatchShrink read this video and cannot shrink it. It stays in Photos untouched.",
+        many: "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched."
+    )
 
     var body: some View {
         if !assets.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
                 // Every other title on these screens is a VoiceOver header, so this card's heading
                 // and the two below it were the only ones the rotor could not reach.
-                Text("Not supported")
+                Text(heading)
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
                     .accessibilityAddTraits(.isHeader)
@@ -757,9 +805,7 @@ struct RefusedVideoList: View {
     }
 
     private var summary: String {
-        assets.count == 1
-            ? "BatchShrink read this video and cannot shrink it. It stays in Photos untouched."
-            : "BatchShrink read these videos and cannot shrink them. They stay in Photos untouched."
+        assets.count == 1 ? explanation.one : explanation.many
     }
 
     private func row(_ asset: LibraryAsset) -> some View {
@@ -846,7 +892,7 @@ struct BatchProcessingScreen: View {
                 // The videos the chosen-video read refused, named with the reason the media itself
                 // gave. They are here rather than in the run, so the count under this heading is
                 // the count the user was promised minus exactly these.
-                RefusedVideoList(assets: batch.preflightRefusals,
+                VideoReasonList(assets: batch.preflightRefusals,
                                  context: "Taken out of this run before it started.")
                 currentCard
                 estimateCard
@@ -1345,7 +1391,7 @@ struct BatchPausedScreen: View {
                 }
                 // The same list the working screen carries: a run that was stopped still has to
                 // account for the videos it never took.
-                RefusedVideoList(assets: batch.preflightRefusals,
+                VideoReasonList(assets: batch.preflightRefusals,
                                  context: "Taken out of this run before it started.")
             }
             .frame(maxWidth: 540)
@@ -1398,7 +1444,7 @@ struct BatchFinishedScreen: View {
                 // videos the chosen-video read took out before the run began. They are not in
                 // `items`, so without this the counts above cannot be reconciled with what was
                 // picked, and they are named as unsupported rather than as anything that failed.
-                RefusedVideoList(assets: batch.preflightRefusals,
+                VideoReasonList(assets: batch.preflightRefusals,
                                  context: "Taken out of this run before it started.")
                 failures
                 if let note = Self.deletionNote(batch) {
@@ -1421,14 +1467,15 @@ struct BatchFinishedScreen: View {
         .background(ShrinkStyle.canvas)
         .navigationTitle("Finished")
         .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Delete \(batch.deletableItemIDs.count) originals?",
+        .confirmationDialog(Self.deletionPrompt(count: batch.deletableItemIDs.count).title,
                             isPresented: $confirmDeletion, titleVisibility: .visible) {
-            Button("Delete \(batch.deletableItemIDs.count) originals", role: .destructive) {
+            Button(Self.deletionPrompt(count: batch.deletableItemIDs.count).button,
+                   role: .destructive) {
                 batch.deleteOriginalsNow()
             }
             Button("Keep them", role: .cancel) {}
         } message: {
-            Text("Each one has a smaller copy that Photos handed back. Deleted originals go to Recently Deleted and stay there for 30 days.")
+            Text(Self.deletionPrompt(count: batch.deletableItemIDs.count).message)
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ShrinkActionBar {
@@ -1557,6 +1604,23 @@ struct BatchFinishedScreen: View {
     /// run killed at Photos' own delete prompt comes back paused with an original *possibly*
     /// deleted, and this line was drawn only on the finished screen - one tap away from a screen
     /// whose headline said nothing was lost.
+    /// The confirmation that stands between the user and the only irreversible thing this app does.
+    ///
+    /// The count comes from the last look this run took at each copy, and a copy edited in Photos
+    /// since then would make it wrong - so the message says what happens to that number rather than
+    /// promising it. The tap re-looks at every original immediately before Photos is asked, and the
+    /// deletion service makes the same check again inside the transaction, so the number can only
+    /// go down; an original whose copy has changed is kept and its reason is recorded on the row.
+    /// Static and internal so a case can state the sentence.
+    static func deletionPrompt(count: Int) -> (title: String, button: String, message: String) {
+        let noun = count == 1 ? "1 original" : "\(count) originals"
+        return (
+            title: "Delete \(noun)?",
+            button: "Delete \(noun)",
+            message: "Each one has a smaller copy that Photos handed back to BatchShrink. Every one is looked at again before Photos is asked, so an original whose copy has changed since then is kept instead. Deleted originals go to Recently Deleted and stay there for 30 days."
+        )
+    }
+
     static func deletionNote(_ batch: BatchViewModel) -> String? {
         let report = batch.deletionReport
         let mode = batch.effectiveDeletionMode

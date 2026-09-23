@@ -43,9 +43,18 @@ which excludes completed originals and app-created copies - and the original rea
 it absent from that list and "Select all N" ticks it. That is the outcome the area's own comment
 says it exists to prevent.
 
-**Open, and the highest-value item either audit left behind.** It is a design change rather than a
-sentence: the question has to survive a scan and stay out of bulk selection while remaining
-re-runnable by hand, which is the same shape as the app-created-copy exclusion.
+**Half fixed in round 21.** The video is now kept out of automatic selection - for a question the
+app could not answer as much as for a copy it can see - and the selection screen names the videos it
+leaves out, with the sentence explaining why and the rows that make them recognisable in Photos. It
+stays tickable by hand, which is the same arrangement a copy this app made has. `beginRun` no longer
+clears `midSaveFindings`, so the exclusion survives a scan and a new run inside the session.
+
+**Still open: the record.** A relaunch after the next run's first checkpoint loses the question,
+because `persistQueue()` writes this run's items and the open question has no field in the record. So
+the protection lasts as long as the app does. Closing it means a field on `BatchQueueRecord` for
+outstanding questions (optional, so older records decode conservatively, like every field added
+since version 1) which the restore merges back into `midSaveFindings`. That is a queue-schema change
+and wants a round with a compile gate.
 
 ### RR3 — [P2] A restored run has lost why it stopped, including the two reasons about the device
 `BatchViewModel.swift` (`pauseReason`); `BatchQueueRecord`; the paused screen

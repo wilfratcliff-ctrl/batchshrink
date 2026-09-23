@@ -383,6 +383,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 18 | see below | Make the shipping target compile again, observe the first rendered screen, close the kept-copy flow and the seam it opened, move the local gates into CI, and two read-only audits | local gates PASS | 345 tests |
 | 19 | see below | The two audits' nineteen findings, an early permission prompt the launch job found, twenty-two documents corrected against the code, and an independent read of the Swift nobody could compile | local gates PASS; **CI blocked, runners not starting** | 364 tests, none executed |
 | 20 | see below | Prove the guardrails guard (and fix the one that could never fire), then a deletion-journey audit and a restored-run audit, and their screen-truthfulness fixes | local gates PASS; `prove:guardrails` 54/54; **CI blocked** | 372 tests, none executed |
+| 21 | see below | The highest-value open finding from round 20's audits: a video that may already have a copy was bulk-selectable again | local gates PASS; `prove:guardrails` 67/67; **CI blocked** | 375 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -762,14 +763,14 @@ the confidence and the list of what was checked and found correct. The table is 
 | ID | Priority | Item | Status |
 |----|----------|------|--------|
 | DEL1 | 1 | Every per-item deletion dictionary and the pending Photos transaction survived a run boundary, and the flush asked no question about the mode - so a later run could delete an original it never named, during a run whose own setting said deleting was off | **done, round 20**, unverified. `beginRun` clears the run's own facts and the batch; `reset` clears the batch; the flush refuses to run outside a run whose snapshot mode deletes originals |
-| DEL2 | 2 | The row said " · original kept" for every refusal and threw the stored reason away - the sentence had no reader in the app - against `docs/BATCH_PHASE.md`'s promise that the reason reaches the list | **half done, round 20.** The reason is rendered. The dialog's count is still the tap-time one: it should say it is a ceiling, or be refreshed when the app comes back to the foreground |
+| DEL2 | 2 | The row said " · original kept" for every refusal and threw the stored reason away - the sentence had no reader in the app - against `docs/BATCH_PHASE.md`'s promise that the reason reaches the list | **done, rounds 20 and 21**, unverified. The reason is rendered, and the confirmation now qualifies its own count: every candidate is looked at again before Photos is asked, so the number can only go down |
 | DEL3 | 2 | The paused screen said nothing about originals this run had already deleted, under a headline reading "Nothing was lost" | done, round 20, unverified |
 | DEL4 | 2 | In "delete at the end" the finished screen said nothing about the confirmation it was waiting for - and the real cause was worse: `finishNow()` from a paused run never took the look its offer depends on, so the control was never drawn and the originals were silently kept | done, round 20, unverified: `finishNow` takes the same one look per candidate the run's own tail takes |
 | DEL5 | 3 | A cancelled Photos confirmation is stored as a save failure, so cancelling reads as a failure with the wrong sentence behind it | open, and device-dependent: which error PhotoKit returns for a declined alert decides the shape of the fix |
 | DEL6 | 3 | The working screen's shield line read "Original protected" in the two modes that remove originals | done, round 20, unverified |
 | DEL7 | 3 | A deletion left "uncertain" is a dead end: the app advises checking Photos and no control can act on the answer | open |
 | RR1 | 2 | The restored pause asked the user to check Photos and never named the video | done, round 20, unverified |
-| RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **open, the highest-value item either audit left.** It is a design change: the question must survive a scan, stay out of bulk selection, and stay re-runnable by hand |
+| RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **half done, round 21**, unverified. The video is kept out of automatic selection (for a question the app could not answer as much as for a copy it can see), the finding survives a scan and a new run within the session, and the selection screen names the videos it leaves out with the sentence explaining why. **Still open: the record** - a relaunch after the next run's checkpoint loses the question, which needs an optional field on `BatchQueueRecord` and a restore that merges it back |
 | RR3 | 2 | A restored run has lost why it stopped, including the storage and thermal reasons | open: a `BatchQueueRecord` change |
 | RR4 | 2 | "Nothing was lost" on a paused screen that knew an original might already be deleted | done, round 20, unverified, with DEL3 |
 | RR5 | 3 | A queue that cannot be read is indistinguishable from no queue, and says nothing | open |
@@ -923,3 +924,45 @@ confirmation was silently never offered and the originals were quietly kept.
 **All of that Swift is unverified**, and the loop's rule stands: it was written because leaving a
 known safety defect in the tree for a week is worse than leaving it there unbuilt. `npm run
 validate:native`, `npm run prove:guardrails` and the mirror check all pass; nothing has compiled it.
+
+## Round 21 — the second copy, which is the one outcome that area exists to prevent
+
+Round 20's audits left one finding above all the others, and this round took it. A video the app
+stopped mid-save on may already have a copy - that is the whole question the flag asks - and the
+route "finish, shrink more videos, find my videos, Select all" put it straight back into a run.
+`selectableAssets` excluded originals this iPhone had shrunk, copies this app had made and originals
+it had deleted, and it knew nothing about the one category whose answer it could not give.
+
+The fix is the arrangement the project already had for its own copies, because the shape is the
+same: keep the video out of *automatic* selection, leave it on screen, and let it be ticked by hand.
+The predicate is deliberately the strictest of the three mid-save findings - only "the app looked at
+the whole library and found no copy of its own" leaves a video clear, because a copy the app *can*
+see and a question it could not answer are both cases where running the video again can make the
+second copy this area exists to prevent.
+
+Naming the videos is the other half, and it is not decoration: a question about whether a copy
+exists cannot be answered by a user who cannot recognise the video it is about, which is exactly what
+round 20's other audit found on the paused screen. So the selection screen draws them with the same
+thumbnail-and-details rows every other list uses, under a heading that says they are left out of
+Select all and a sentence that says why and what to do. That meant generalising `RefusedVideoList`,
+whose heading and summary were hardcoded to "the app read this and cannot shrink it" - reusing it as
+it stood would have told the user something false about videos that are neither read-and-refused nor
+unshrinkable. It is `VideoReasonList` now, with the refusal's own words as its defaults.
+
+One statement in round 20's own fix had to be revisited: `beginRun` cleared every per-item
+dictionary, and `midSaveFindings` is not one of them. The others are conclusions a run reached about
+videos it looked at; a finding is a question the user still has to answer, and it is what keeps the
+video out of bulk selection until they do. Clearing it would have restored the defect on the next
+run. How far that protection reaches is now stated exactly: it lasts as long as the app does. A
+relaunch after the next run's checkpoint loses the question, because the record has no field for it -
+that is RR2's remaining half in `docs/AUDIT_RESTORED_RUN.md`, and it needs a queue-schema change with
+a compile gate behind it.
+
+Also closed, from the other audit: the deletion confirmation now says what happens to its own count -
+every candidate is looked at again before Photos is asked, so the number can only go down and an
+original whose copy has changed is kept with its reason on the row. The count is still the one from
+the last look; the dialog states the rule rather than promising a number, which is the narrower of
+the two fixes the audit offered.
+
+**Unverified, again, and for the same reason.** The local gates pass and the proof harness is 67 of
+67, but nothing has compiled this since `31b6245`.

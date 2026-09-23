@@ -267,14 +267,41 @@ private enum RunAccess: Equatable, Sendable {
     /// out of `eligibleAssets`, so it stays on screen and can still be ticked by hand, which is
     /// how a copy is deliberately run through again. Deleting an original takes it out of later
     /// selections too, by the same rule.
+    ///
+    /// A video this app still has a question about is left out for the same reason and by the same
+    /// rule. That question is whether a copy of it already exists, and the answer decides whether
+    /// running it again makes a second copy - which is the outcome this whole area exists to
+    /// prevent. So a bulk selection does not get to guess: the video stays on screen and can still
+    /// be ticked by hand, which is the user deciding rather than the app assuming.
     var selectableAssets: [LibraryAsset] {
+        let unaccounted = unaccountedIdentifiers
         eligibleAssets.filter { asset in
             !completedIdentifiers.contains(asset.id)
                 && !createdCopyIdentifiers.contains(asset.id)
                 && deletionOutcomes[asset.id] != DeletionOutcome.deleted
+                && !unaccounted.contains(asset.id)
         }
     }
     var selectableCount: Int { selectableAssets.count }
+
+    /// Videos this app cannot vouch for: the ones a bulk selection must not pick.
+    ///
+    /// Only one of the three mid-save findings leaves a video clear, and it is deliberately the only
+    /// one that does: `noCopyInPhotos` means the app looked at the whole library and found no copy
+    /// of its own, so running the video again cannot make a second one. `copyInPhotos` means it
+    /// found that copy, and `unresolved` means it could not answer - and an unanswered question is
+    /// not an answer, so neither may be picked automatically.
+    var unaccountedIdentifiers: Set<String> {
+        Set(midSaveFindings.compactMap { identifier, finding in
+            finding == .noCopyInPhotos ? nil : identifier
+        })
+    }
+
+    /// The same videos, as the scanned assets a screen can name.
+    var unaccountedAssets: [LibraryAsset] {
+        let unaccounted = unaccountedIdentifiers
+        return eligibleAssets.filter { unaccounted.contains($0.id) }
+    }
     var isRunning: Bool { runTask != nil }
     var remainingCount: Int { items.filter { !$0.state.isFinished }.count }
     var finishedCount: Int { items.filter { $0.state.isFinished }.count }
@@ -855,10 +882,17 @@ private enum RunAccess: Equatable, Sendable {
         readBackOutcomes = [:]
         revalidationOutcomes = [:]
         deletionOutcomes = [:]
-        midSaveFindings = [:]
         storageDemands = [:]
         attemptedSaves = [:]
         deletionBatch.removeAll()
+        // `midSaveFindings` is deliberately NOT cleared here, and it is the one exception. The
+        // others are conclusions this run reached about videos it looked at; a finding is a
+        // *question the user still has to answer*, and it is what keeps that video out of a bulk
+        // selection until they do. Clearing it would put a video that may already have a copy back
+        // within reach of Select all on the next run, which is the second copy this area exists to
+        // prevent. What it cannot survive is a relaunch: the record written below describes this
+        // run's items and carries no open question, so the next launch would not know. That gap is
+        // recorded as RR2's remaining half in docs/AUDIT_RESTORED_RUN.md.
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
         estimator = ProcessingEstimator()
