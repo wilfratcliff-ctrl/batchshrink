@@ -288,6 +288,49 @@ function bootSimulator(udid) {
   }
 }
 
+// The app target's bundle identifier, read from the generated project rather than copied from
+// project.yml, so the two cannot drift. `xcodebuild -showBuildSettings` prints one `NAME = value`
+// line per setting; the app's own identifier is the one the VideoShrink target reports.
+function appBundleIdentifier() {
+  const stdout = runCaptured(
+    'xcodebuild',
+    ['-project', 'VideoShrink.xcodeproj', '-target', 'VideoShrink', '-showBuildSettings'],
+    'xcodebuild -showBuildSettings'
+  );
+  const match = /^\s*PRODUCT_BUNDLE_IDENTIFIER\s*=\s*(\S+)\s*$/m.exec(stdout);
+  if (!match) {
+    fail(
+      'xcodebuild -showBuildSettings reported no PRODUCT_BUNDLE_IDENTIFIER for the VideoShrink ' +
+        "target, so this script cannot clear the app's saved state before the test."
+    );
+  }
+  return match[1];
+}
+
+// The test opens on the introduction, which is chosen by a default the app stores in its own
+// container. A container left over from an earlier run on the same machine would start the test
+// somewhere else, so it is removed first. This is the only reason this step exists: the app is
+// installed afresh by the test run either way.
+//
+// `simctl uninstall` fails when the app is not installed, which is the honest state of a clean
+// simulator and not an error here, so that one outcome is tolerated and everything else is not.
+function clearStoredAppState(udid, identifier) {
+  const status = run(
+    'xcrun',
+    ['simctl', 'uninstall', udid, identifier],
+    'xcrun simctl uninstall'
+  );
+  if (status === 0) {
+    console.log(`[verify-app-launch] Removed ${identifier}'s saved state from the simulator.`);
+    return;
+  }
+  console.log(
+    `[verify-app-launch] \`simctl uninstall ${identifier}\` returned non-zero, which is what it ` +
+      'does when the app is not installed yet. That is the expected state of a clean simulator, ' +
+      'so this continues; the test run installs the app itself.'
+  );
+}
+
 // The UI test compiles the app and its own bundle and then runs them on the simulator. Signing is
 // off for the same reason it is off in the other two jobs: the destination is a simulator, so no
 // certificate, provisioning profile or registered device is involved and nothing is spent.
@@ -387,6 +430,7 @@ if (checkOnly) {
         `${simulator.udid}) from \`xcrun simctl list devices available\`.`
     );
     bootSimulator(simulator.udid);
+    clearStoredAppState(simulator.udid, appBundleIdentifier());
     runLaunchSmokeTest(simulator.udid);
 
     banner(`${BANNER} PASSED`);

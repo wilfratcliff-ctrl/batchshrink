@@ -119,7 +119,23 @@ jobs:
   # `pod install` and `xcodebuild -list` report rather than hardcoded.
   build-expo-app:
     name: Build the Expo iOS app for the simulator
-    runs-on: macos-15
+    # macos-26 is the image whose Xcode this job needs, and that is now known from a failure
+    # rather than assumed. The first attempt at this fix kept macos-15 and selected its newest
+    # Xcode 26, which is 26.3; that build got all the way into the Expo dependency tree and then
+    # died on a third-party C++ header:
+    #
+    #   node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI-Cxx/include/RuntimeScheduler.h:53:26:
+    #   error: 'RuntimeScheduler' cannot be annotated with either SWIFT_RETURNS_RETAINED or
+    #   SWIFT_RETURNS_UNRETURNED because it is not returning a SWIFT_SHARED_REFERENCE type
+    #
+    # That is not our code, it is a toolchain the dependency does not accept, and the same
+    # dependency compiles under the toolchain EAS uses. docs/VALIDATION.md records what that is:
+    # "the EAS image compiles with Xcode 26.6 (17F113) and iPhoneOS26.5.sdk". macos-26's default
+    # Xcode is 26.6, so the image is moved to the one whose default is the recorded toolchain,
+    # rather than pinning a patch version that the next image update would remove. Job 1 stays on
+    # macos-15 with its default Xcode 16.x: it compiles the standalone project through project.yml
+    # and has no Expo dependency tree, so it is green there and has no reason to move.
+    runs-on: macos-26
     # A full `expo prebuild`, a `pod install` and an unoptimised simulator build of the
     # entire React Native app is several times the cost of job 1's compile: minutes for the
     # prebuild, several more for the pods, and the app build dominates. 90 minutes is
@@ -146,30 +162,11 @@ jobs:
         # stale cache would make both a pass and a failure harder to trust.
         run: npm ci
 
-      - name: Select an Xcode that ships Swift 6.2 or newer
-        # Expo SDK 57's module tree resolves a Swift package that declares
-        # swift-tools-version 6.2, and this image's *default* Xcode is 16.4, whose Swift is
-        # 6.1. `xcodebuild` therefore refuses before it compiles a line of ours:
-        #
-        #   package 'apple' is using Swift tools version 6.2.0 but the installed version is 6.1.0
-        #
-        # That single line is the whole of run 35877195086's build-expo-app failure. The same
-        # image also installs Xcode 26.0.1 through 26.3, so the fix is to choose one of those
-        # rather than to move the job to a different runner image: job 1 compiles green on this
-        # image, and it should not have to move for a problem that belongs to job 2. The newest
-        # installed Xcode 26 is picked rather than a hardcoded patch version, so an image update
-        # that adds Xcode 26.4 keeps working and one that removes them all fails loudly here
-        # instead of quietly reverting to Swift 6.1 and failing again further down.
+      - name: Record the toolchain
+        # The Expo dependency tree is toolchain-sensitive - see the note on this job's image
+        # above - so what compiled it belongs in the log rather than in a second CI run spent
+        # finding out. This only prints; the image decides the version.
         run: |
-          set -euo pipefail
-          chosen="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
-          if [ -z "${chosen}" ] || [ ! -d "${chosen}" ]; then
-            echo "::error::No Xcode 26 image is installed on this runner, so the Swift 6.2 toolchain this build needs is not available. Installed Xcode images:"
-            ls -d /Applications/Xcode*.app || true
-            exit 1
-          fi
-          echo "Selecting ${chosen}"
-          sudo xcode-select --switch "${chosen}"
           xcodebuild -version
           swift --version
 

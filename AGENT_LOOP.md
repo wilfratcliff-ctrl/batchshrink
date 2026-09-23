@@ -276,7 +276,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N34 | 2 | After a reload with a finished copy waiting at `.readyToSave`, `ContentView`'s flow resets to the batch and `switchTo(.single)` needs `canChoose`, which is false in that stage — so the kept copy is unreachable and "Just one video" is a silent no-op until restart | **done, round 18.** A new pure rule, `FlowRouting`, asks the model's own "no task is running" answer *and* the stage together, in both directions, and both flow switches use it. Asking the stage alone would have been the near-miss: `.choosing` has no task running while the picker sheet is up, so a stage-only rule would let a user walk away mid-choice. The eight new cases include a sweep over `PipelineStage.allCases`, so a stage added later fails the suite rather than quietly acquiring an answer |
 | N35 | 3 | `project.yml` pins `CURRENT_PROJECT_VERSION: "1"` while `app.json` ships build 11 — two surfaces disagreeing about the same fact | **done, round 18.** Decided from the code and the records, not from the numbers: the product *version* is the shared fact and `scripts/validate.mjs` now fails when `app.json`'s `expo.version` and `project.yml`'s `MARKETING_VERSION` drift apart (both read 0.1.0, and both are required to be present exactly once so a target-level override cannot bypass the check). The two *build numbers* are different facts and are deliberately not compared: `app.json`'s 11 is the shipped build number, which `docs/RELEASE_10.md` records as the next upload after build 10, while `project.yml`'s 1 counts only the standalone harness, whose bundle id is `com.example.VideoShrink` and which CI compiles and never ships. `validate.mjs` prints a `NOT CHECKED:` line naming both numbers and that reason, so the difference is stated rather than silent. Proved by drifting `app.json` to 0.2.0 in a temp copy of the tree: the check fails with both numbers named, and passes again when restored |
 | N36 | 1 | The shipping target now has a CI job, but **no local gate compiles the two Expo bridge files**; the interface call-site checker scans only `VideoShrink/` and `VideoShrinkTests/` | **done, round 18.** `scripts/swift-call-site-check.mjs` now reads `modules/videoshrink-native/ios/` as a third tree. The generated `VideoShrinkCore/` mirror is excluded by name (it is a byte copy of `VideoShrink/Models`, `Services` and `Presentation`, so reading it would make every judged call ambiguous) and the exclusion is printed with its reason. Rule A had to change to make the bridge files mean anything: a call is resolved against its own file first and the rest of the tree only when its own file declares nothing of that name, and only when it writes at least one argument label. That step is strictly additive - 1010 call sites were judged before, 1724 are judged now, and no call judged before is skipped now - and 13 of the new ones are in the bridge files, where a label-order mistake in `BatchViewModel(...)` had been invisible. The output now counts what was NOT order-checked and why, and names the ExpoModulesCore calls as skips rather than coverage. Proved by injecting four faults into a temp copy: a reversed `history:`/`queueStore:` in the bridge file, an optional parameter shadowing a stored property in a bridge initialiser, a bridge type declared twice in one scope, and a type declared on both sides of the pod's own seam. The old scan reported 0 findings on all four; the new one reports each |
-| N37 | 1 | **The new `build-expo-app` CI job fails on the runner's toolchain, not on our code.** `macos-15`'s default Xcode 16.4 ships Swift 6.1, and a Swift package in the Expo module tree declares tools version 6.2, so `xcodebuild` fails with "Could not resolve package dependencies" before compiling anything of ours. EAS builds the same project fine, so its image is new enough. The fix is a newer runner image or selecting a newer Xcode — the failed run is `35877195086`, job `build-expo-app`. The existing `verify-native-tests` job is green (336 tests) and must stay that way | **done, round 18.** The job was still failing the same way on `ea1740e` when this round started, so the row was accurate. `macos-15` also installs Xcode 26.0.1 to 26.3, and the job now selects the newest of those before building rather than moving runner image - job 1 compiles green on that image and should not have to move for job 2's problem. A hardcoded patch version was rejected for the reason the row implies: `ls -d /Applications/Xcode_26*.app \| sort -V \| tail -1` survives an image update, and fails loudly at the selection step if the images ever lose Xcode 26 |
+| N37 | 1 | **The new `build-expo-app` CI job fails on the runner's toolchain, not on our code.** `macos-15`'s default Xcode 16.4 ships Swift 6.1, and a Swift package in the Expo module tree declares tools version 6.2, so `xcodebuild` fails with "Could not resolve package dependencies" before compiling anything of ours. EAS builds the same project fine, so its image is new enough. The fix is a newer runner image or selecting a newer Xcode — the failed run is `35877195086`, job `build-expo-app`. The existing `verify-native-tests` job is green (336 tests) and must stay that way | **half done, round 18.** Two toolchain faults, not one, and the first fix only cured the first. Fault one, as the row says: the default Xcode 16.4's Swift 6.1 cannot even resolve the tree. Fault two, found by the first fix's failure on `0e8bbae`: `macos-15`'s newest Xcode is 26.3, and its clang rejects a header inside a *dependency* (`node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI-Cxx/include/RuntimeScheduler.h:53`, `SWIFT_RETURNS_RETAINED` on a type that is not a shared reference). Not our code, and a toolchain the dependency does not accept. The job is on `macos-26` now, whose default Xcode 26.6 is the toolchain `docs/VALIDATION.md` records EAS as using, and prints `xcodebuild -version` so the next failure of this kind is attributable without another run. The lesson is in the round-18 detail: selecting "the newest Xcode available" was the wrong instinct for a tree with third-party Swift/C++ in it, and the project's own record named the right toolchain all along |
 | N38 | 1 | **No CI job ran the local gates at all.** `npm run typecheck`, `npm run validate:native` and the mirror check were documented for a human to run on Windows and were run by nothing else, so the one gate that reads the *whole* tree was the one most likely to be skipped on the push that broke it | done, round 18: job 1 runs all three, for a few seconds |
 | N39 | 2 | **A batch run's workspace sweep deleted the one-video flow's kept copy.** Both flows shared one temporary directory and `cleanWorkspace()` removes the whole root, so after a batch run the one-video screen could still offer "Save copy to Photos" over a file that no longer existed, and the save would fail its own re-verify. Found by the round-18 agent that made the flow switch legal, and it was reachable before that too: a reload lands on the batch flow with the copy kept | done, round 18: `TemporaryWorkspace` gives each flow its own directory inside the app's temporary area, each manager can remove only its own, and a test pins both directions |
 | N40 | 1 | **The app had never rendered a screen, and nothing could observe a launch.** Every status block in the repository says so, and no instrument existed that could change it without a device or EAS build minutes | done, round 18: a `VideoShrinkUITests` target launches the standalone app on a simulator, waits for the introduction, taps Skip and waits for the batch screen. Job 3 runs it on every push. It proves a screen renders and one navigation works; it proves nothing about Photos, iCloud or any pipeline step |
@@ -568,16 +568,25 @@ observed the app doing anything. So the round spent its parent-owned workstream 
 verification path itself, and its delegated workstreams on the defects and the audits that
 path made worth doing.
 
-**The shipping target compiles again (N37).** The job log names the exact cause: `package 'apple'
-is using Swift tools version 6.2.0 but the installed version is 6.1.0`, from
-`/Applications/Xcode_16.4.app`. `macos-15`'s *default* Xcode is 16.4, but the same image also
-ships Xcode 26.0.1 through 26.3 (read from `actions/runner-images`' own `macos-15-Readme.md`,
-not guessed), so the job now selects the newest installed Xcode 26 before building. The image
-was deliberately not changed: job 1 compiles green on it, and should not have to move for a
-problem that belongs to job 2. A hardcoded patch version was rejected because an image update
-would break it; `ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1` survives one, and
-fails loudly at the selection step if the images ever lose Xcode 26, instead of quietly
-reverting to Swift 6.1 and failing again further down.
+**The shipping target had two toolchain faults, not one (N37).** The first is the one the row
+described and the job log names exactly: `package 'apple' is using Swift tools version 6.2.0 but
+the installed version is 6.1.0`, from `/Applications/Xcode_16.4.app`, which is `macos-15`'s
+*default*. The first fix kept the image and selected its newest Xcode 26 — and that produced the
+second fault, which is the more interesting one: the build got all the way into the Expo
+dependency tree and died on a **third-party** C++ header,
+`node_modules/expo-modules-jsi/apple/Sources/ExpoModulesJSI-Cxx/include/RuntimeScheduler.h:53`,
+where Xcode 26.3's clang refuses a `SWIFT_RETURNS_RETAINED` annotation on a type that is not a
+shared reference.
+
+So "select the newest available Xcode" was the wrong instinct, and the reason is worth keeping:
+this tree contains other people's Swift and C++, compiled by whatever toolchain the runner
+happens to offer, and for that code the newest compiler is not the safest one — the *matching*
+one is. The job is on `macos-26` now, whose default Xcode is 26.6, and that is not a guess:
+`docs/VALIDATION.md` already recorded "the EAS image compiles with **Xcode 26.6 (17F113) and
+iPhoneOS26.5.sdk**". The project had the right answer written down in its own record of what
+actually built, and the round only found it because the first fix failed. The job now prints
+`xcodebuild -version` and `swift --version` as its own step, so the next failure of this kind is
+attributable without spending another run finding out what compiled it.
 
 **The local gates run in CI now (N38).** This was found by an agent, not by the round's brief,
 and it is the kind of gap this file exists to catch: `typecheck`, `validate:native` and the
@@ -595,6 +604,20 @@ introduction drew and Skip reached the batch screen". `VideoShrinkUITests` is in
 own, deliberately not in the `VideoShrink` scheme's test action, so the unit-test job keeps its
 exact meaning and runtime. A pass is a real observation and covers exactly one navigation; the
 script's own output says so, and says what it does not cover.
+
+The first run of that test **found something, which is the point of it**: the app installed and
+launched, the introduction drew — `Skip` was found and tapped — and the batch screen never
+appeared. The cause turned out to be the test, not the app, and it is worth writing down because
+it is a trap that reads as a product defect. The test had forced the introduction on with
+`launchArguments += ["-batchShrink.onboarding.v1", "<false/>"]`, and a launch argument is read
+from the *argument domain*, which sits above the application domain in the defaults search list.
+It therefore shadowed that key for writes as well as reads: the tap on Skip stored the new value
+and every later read still saw the argument, so the introduction could never go away. The fix is
+to make the state genuinely fresh instead — `scripts/verify-app-launch.mjs` asks the generated
+project for the app's bundle identifier and removes the app from the simulator before the run, so
+its container, and with it the default, is empty on every machine. A comment in the test says
+this, and the failure message now prints the application state and the whole element tree, so the
+next failure of this kind is diagnosed rather than guessed at.
 
 **The seam (N39), which is why the parent does an integration pass every round.** The agent that
 made the flow switch legal reported, outside its file list, that `BatchViewModel`'s

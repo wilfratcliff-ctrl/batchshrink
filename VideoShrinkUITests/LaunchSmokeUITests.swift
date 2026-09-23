@@ -30,13 +30,15 @@ final class LaunchSmokeUITests: XCTestCase {
     func testTheIntroductionDrawsAndSkipReachesTheBatchScreen() {
         let app = XCUIApplication()
 
-        // Whether the introduction appears is decided by one persisted default, and a developer
-        // who has run this test once on their own simulator would otherwise see a different
-        // screen from the one CI sees. Setting it in the argument domain pins the state the test
-        // is about, without deleting anything the app owns. The value is spelled as a property
-        // list fragment because that is what the argument domain parses; a plain "YES" would be
-        // read as a string and silently ignored by the Boolean property wrapper.
-        app.launchArguments += ["-batchShrink.onboarding.v1", "<false/>"]
+        // Whether the introduction appears is decided by one persisted default, so this test
+        // needs it to be false. It is deliberately NOT forced with a launch argument, which was
+        // the first thing tried and was wrong: a launch argument is read from the argument domain,
+        // which sits above the application domain in the defaults search list, so it shadows the
+        // key for reads *and* writes. The tap on Skip would have set the stored value while every
+        // later read still saw the argument - the introduction would never have gone away, and
+        // the test would have reported a broken app rather than a broken test. scripts/
+        // verify-app-launch.mjs uninstalls the app before running this, so the container, and with
+        // it this default, is empty on every run.
         app.launch()
 
         XCTAssertEqual(
@@ -59,11 +61,34 @@ final class LaunchSmokeUITests: XCTestCase {
         // One tap, one navigation. This is the smallest end-to-end claim the app can make about
         // itself without a Photos library: the introduction is gone and the batch screen is up,
         // with the control that starts a scan and the control that offers the one-video flow.
+        //
+        // The control is looked for by its identifier first and by the words on it second, so
+        // that a missing identifier is reported as a missing identifier rather than as a missing
+        // screen; both are defects, but only one of them means the flow never drew.
         let scan = app.buttons["scanLibrary"]
+        let scanByTitle = app.buttons["Find my videos"]
+        let reachedBatch = scan.waitForExistence(timeout: 30) || scanByTitle.exists
+        if !reachedBatch {
+            // The whole element tree, because a failure here has three very different causes and
+            // the tree names which: the introduction never dismissed, the app died on the way to
+            // the batch screen, or the screen drew without the control this test anchors on.
+            XCTFail(
+                """
+                Tapping Skip did not reach the batch screen within 30 seconds.
+                Application state: \(app.state.rawValue) (3 is running foreground).
+                The introduction is \(app.buttons["Skip"].exists ? "STILL on screen" : "gone"), \
+                so the tap \(app.buttons["Skip"].exists ? "did not take effect" : "took effect").
+                The elements on screen were:
+                \(app.debugDescription)
+                """
+            )
+            return
+        }
         XCTAssertTrue(
-            scan.waitForExistence(timeout: 30),
-            "Tapping Skip did not reach the batch screen. The introduction dismissed but the flow "
-                + "behind it never drew."
+            scan.exists,
+            "The batch screen drew, but its primary control answers to \"Find my videos\" and not "
+                + "to the \"scanLibrary\" identifier the rest of this project's automation uses. "
+                + "The screen is right and the anchor for it is missing."
         )
         XCTAssertTrue(
             app.buttons["useSingleVideo"].exists,
