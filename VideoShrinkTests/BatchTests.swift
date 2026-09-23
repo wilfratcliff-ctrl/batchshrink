@@ -191,6 +191,9 @@ import Photos
         // 250 kbps, so a toy 600-byte "video" over 120 seconds would be refused as nonsense and
         // the history assertion below would be testing the guard rather than the recording.
         let fixture = BatchFixture(assets: [asset("a", bytes: 20_000_000), asset("b", bytes: 20_000_000)])
+        // The pipeline measures the original through the verifier, not from the library listing,
+        // so both numbers have to agree or every copy looks bigger than the original it replaced.
+        fixture.verifier.inspectBytes = 20_000_000
         fixture.verifier.outputs = [10_000_000, 30_000_000]
         await scan(fixture)
         fixture.batch.beginSelecting()
@@ -915,9 +918,9 @@ import Photos
         XCTAssertEqual(reconciliation.result.assets.last?.bytes, 20)
         XCTAssertEqual(reconciliation.selection, ["a", "b"])
         XCTAssertEqual(reconciliation.vanishedRunningIdentifiers, ["b"])
-        // There was no earlier listing for anything to leave, but the selection named a video
-        // Photos no longer lists, so that one is still reported as gone.
-        XCTAssertEqual(reconciliation.removedIdentifiers, ["gone"])
+        // Nothing left the library: "b" is gone from Photos but is carried as the running job, so
+        // it is still present in the result and is not reported as removed.
+        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
     }
 
     func testARefreshTakesTheNewMetadataForAVideoThatChangedInPhotos() {
@@ -953,7 +956,9 @@ import Photos
 
         XCTAssertEqual(reconciliation.result.assets, fresh.assets)
         XCTAssertEqual(reconciliation.selection, ["a"])
-        XCTAssertTrue(reconciliation.removedIdentifiers.isEmpty)
+        // There was no earlier listing for anything to leave, but the selection named a video
+        // Photos no longer lists, so that one is still reported as gone.
+        XCTAssertEqual(reconciliation.removedIdentifiers, ["gone"])
         XCTAssertTrue(reconciliation.vanishedRunningIdentifiers.isEmpty)
     }
 
