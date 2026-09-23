@@ -32,6 +32,11 @@ route that does exist is an EAS cloud build, which runs on Apple hardware with X
 npx eas-cli build --platform ios --profile verify-tests
 ```
 
+That profile compiles the test target and then runs it on a simulator, printing two separate
+banners in the log: `VIDEOSHRINK TEST TARGET COMPILE` and `VIDEOSHRINK TEST RUN`. **Read both.**
+A green run banner is the only evidence in this project that a change is actually correct;
+every gate above it is a pattern scan.
+
 An EAS build compiles everything under `modules/videoshrink-native/ios/`, which includes
 `VideoShrinkCore/` — the mirror of `VideoShrink/{Models,Services,Presentation}` produced by
 `npm run sync:native`. That is the Swift this loop keeps changing, so **a round is not finished
@@ -39,8 +44,9 @@ until a cloud build has compiled it.** See `docs/VERIFICATION_HANDOFF.md`.
 
 What a cloud build still does not do:
 
-- compile or run `VideoShrinkTests/` unless the `verify-tests` profile is used, and that profile
-  compiles them without running them;
+- it does not run the tests unless the `verify-tests` profile is used. Ordinary development and
+  release profiles compile the app and nothing else, so a round that only ran the default profile
+  has proved the app compiles and nothing more;
 - prove any device behaviour. Actual deletion, audio sync, HDR appearance, interruption windows
   and iCloud retrieval need a real iPhone and `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
 
@@ -52,6 +58,7 @@ What a cloud build still does not do:
 | 2026-09-23 | `9f83392c` | `082537a` | development-simulator | FINISHED, artifact produced |
 | 2026-09-23 | `eb69125a` | `df6f128` | verify-tests | ERRORED, first compile of the 162-case test target |
 | 2026-09-23 | `f4b4bcf6` | `1e6c6ba` | verify-tests | FINISHED, `** TEST BUILD SUCCEEDED **` |
+| 2026-09-23 | `5b7bd87f` | `7ec2d40` | verify-tests | ERRORED, **tests ran for the first time**: 162 executed, 7 failed |
 
 The first build's two errors, both in `BatchViewModel`'s initialiser: the init assigned the
 stored monitor but then used the optional *parameter* for `onChange` and `start()`. Everything
@@ -63,6 +70,37 @@ allow. Two errors across 162 cases, and only in the test target.
 
 After that fix, `xcodebuild build-for-testing` reported `** TEST BUILD SUCCEEDED **`. **The whole
 app and all 162 test cases now compile.** They have still never been run.
+
+### First test run — 2026-09-23, build `5b7bd87f`
+
+162 cases executed in 6.7 seconds on a simulator. **155 passed, 7 failed.**
+
+| Suite | Tests | Failures |
+|-------|-------|----------|
+| BatchQueueTests | 12 | 0 |
+| BatchTests | 70 | **7** |
+| DeletionPolicyTests | 26 | 0 |
+| DeviceConditionsTests | 2 | 0 |
+| EligibilityTests | 12 | 0 |
+| PipelineTests | 23 | 0 |
+| RulesTests | 17 | 0 |
+
+The seven failures, all in `VideoShrinkTests/BatchTests.swift`, recorded verbatim because they are
+the next round's work:
+
+1. `testACopyEditedInPhotosAfterTheRunKeepsItsOriginal` (lines 829, 831): the deletion outcome is
+   `nil` where `Optional(.skipped("The copy changed after it was checked..."))` was expected, and a
+   count is 0 where 1 was expected. The refusal is not being recorded.
+2. `testARefreshDuringARunKeepsTheJobAndTheIdentityItStartedWith` (lines 1007, 1016, 1017): the
+   reconciled listing came back `["a", "b"]` instead of `["a"]`, the batch timed out, and a
+   completed count was 1 instead of 2. The running job was not carried as the test expects.
+3. `testARefreshWithoutAnEarlierLibraryJustTakesTheNewListing` (line 951): one assertion is false.
+4. `testBatchSavesSmallerCopiesAndSkipsOnesThatGrew` (line 207): a count is 0 where 1 was
+   expected.
+
+These are test failures against freshly written code, so the fault may be in either the test or
+the code. Do not assume the test is right because an agent wrote it, and do not assume the code is
+right because it compiles. Read both and decide from the behaviour that is actually intended.
 
 ## Ownership rule
 
@@ -93,15 +131,16 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N8 | 1 | No test covered the reconciliation wiring | done, round 3 |
 | N9 | 2 | `ThumbnailService` key index grew unbounded | done, round 3 |
 | N10 | 2 | `LibraryChangeMonitor.stop()` is never called | documented as deliberate, round 3 |
-| N11 | 1 | 162 XCTest cases had never been compiled or run | compile done, round 4 (`f4b4bcf6`); running them is still open |
+| N11 | 1 | 162 XCTest cases had never been compiled or run | done, round 5: 162 compiled and executed, 155 pass |
 | N12 | 1 | `AssetRules` refuses HDR and ProRes but nothing can ever set either trait, so both rules are dead and an HDR original is still processed. `NEXT_PHASE.md` requires HDR exclusion. Needs codec/colour-tag detection where the media is readable, applied to both `Traits` call sites in the same round | open |
 | N13 | 2 | `PhotoLibraryScanService.cancelled` is shared between `scan()` and `refreshListing()`, so a refresh can clear a cancel that just landed. Not user-visible today because the scan task is cancelled too | open |
 | N14 | 3 | `BatchSelectionScreen.detail(_:)` has no caller. Pre-existing dead code | open |
 | N15 | 3 | `withTaskCancellationHandler(operation:onCancel:)` is the pre-`isolation:` overload, deprecated in the iOS 18 SDK | open |
 | N16 | 1 | Exactly-once save reconciliation (NEXT_PHASE): a save receipt is evidence, not proof the copy completed | open |
-| N17 | 1 | The 162 cases compile but have never executed. `xcodebuild test` with a simulator destination on the EAS builder is the one remaining route to actually running them without a Mac | open |
+| N17 | 1 | The 162 cases compiled but had never executed | done, round 5: the `verify-tests` profile runs them on a simulator |
 | N18 | 2 | `expo doctor` reports 1 failed check during every EAS setup. The build continues, so it is a warning, but a release should not ship past it unnoticed | open |
 | N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
+| N20 | 0 | **7 of 162 tests fail.** All in `BatchTests.swift`: `testACopyEditedInPhotosAfterTheRunKeepsItsOriginal`, `testARefreshDuringARunKeepsTheJobAndTheIdentityItStartedWith`, `testARefreshWithoutAnEarlierLibraryJustTakesTheNewListing`, `testBatchSavesSmallerCopiesAndSkipsOnesThatGrew` (four cases, seven assertions). Diagnose against intended behaviour, not against whichever side an agent wrote | open |
 
 ## Round log
 
