@@ -2,7 +2,7 @@
 
 ## Visual direction
 
-A dark, quiet canvas with luminous mint actions and lilac comparison accents. Inspired by the supplied Cleanup screenshots: clear hierarchy, generous spacing, media-led selection, reachable bottom actions. Original layered video artwork and a compact inward-arrow brand mark give BatchShrink its own identity.
+A dark, quiet canvas with luminous mint actions and lilac comparison accents. Inspired by the supplied Cleanup screenshots: clear hierarchy, generous spacing, media-led selection, reachable bottom actions. Original layered video artwork gives BatchShrink its own identity inside the app. **The app icon is not part of that yet**: the mark in the tree is a placeholder - a white arrow on the brand blue, drawn deterministically by `scripts/generate-icon.mjs`, which calls itself a placeholder generator - and `docs/DEVELOPMENT_REVIEW.md` still records finishing it as outstanding. A mark worth shipping has to be drawn in that script or by replacing the convention that generates it rather than committing a binary.
 
 Native San Francisco typography uses system text styles for Dynamic Type. Large headings have restrained negative tracking; storage values use monospaced digits. Cards have continuous corners and subtle borders. Primary buttons have a 58-point minimum height, explicit disabled states, and a small press response that respects Reduce Motion. No new fonts, image downloads, or dependencies.
 

@@ -273,9 +273,11 @@ that has actually happened.
 
 `docs/DEVELOPMENT_REVIEW.md` records that privacy and support pages do not exist yet ("finish icon,
 store assets, privacy/support pages"). Both URLs are required fields in App Store Connect, and
-submission is blocked without them. Note also that the app icon does exist in the tree
-(`VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset`) and a privacy manifest already exists
-(`VideoShrink/Resources/PrivacyInfo.xcprivacy`); it is the hosted web pages that are missing.
+submission is blocked without them. Two other things are partly there rather than done: the app icon
+exists in the tree (`VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset`) but is a *placeholder*
+- `scripts/generate-icon.mjs` draws it and says so, and finishing it is one of the items that review
+records as owed - and a privacy manifest already exists
+(`VideoShrink/Resources/PrivacyInfo.xcprivacy`). The hosted web pages are missing entirely.
 
 **Privacy policy - what it must contain.** Every statement below is grounded in what the app
 actually does, so the page and the app agree:

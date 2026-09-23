@@ -21,6 +21,29 @@ struct BatchStartScreen: View {
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // The two notices about this launch's own state belong here, above the illustration
+                // and the card, and they used to sit at the very bottom of roughly 850 points of
+                // scroll - below the hero artwork, the aim card, the originals row and its footnote.
+                // A record this launch could not read tells the user to look in Photos *before*
+                // running the same videos again, which is the one moment this screen exists for, and
+                // a run whose bookkeeping could not be written says the next launch may offer it
+                // again. Neither is findable under a 300-point picture.
+                //
+                // One group, behind one test, rather than two children of this stack: a conditional
+                // group that draws nothing must also take no room, or every ordinary launch would
+                // gain a gap where the notices are not.
+                if batch.queueWarning != nil || batch.queueReadWarning != nil {
+                    VStack(alignment: .leading, spacing: 14) {
+                        QueueWarningNotice(warning: batch.queueWarning)
+                        // A record this launch could not read is not a write that failed, so it is not
+                        // drawn under that notice's heading. This is the only screen that can show it:
+                        // nothing was restored from that record, so no run's screen ever comes up.
+                        if let warning = batch.queueReadWarning {
+                            ShrinkNotice(symbol: "exclamationmark.triangle",
+                                         title: "A saved run couldn't be read", detail: warning)
+                        }
+                    }
+                }
                 ShrinkIllustration()
                 HStack(alignment: .top, spacing: 16) {
                     // Decorative: the heading beside it already names the card.
@@ -43,14 +66,6 @@ struct BatchStartScreen: View {
                      ? "Deleting is on. A copy is saved and checked first, then the original goes."
                      : "Nothing is deleted. You keep the original and the copy.")
                     .font(.footnote).foregroundStyle(.secondary)
-                QueueWarningNotice(warning: batch.queueWarning)
-                // A record this launch could not read is not a write that failed, so it is not drawn
-                // under that notice's heading. This is the only screen that can show it: nothing was
-                // restored from that record, so no run's screen ever comes up.
-                if let warning = batch.queueReadWarning {
-                    ShrinkNotice(symbol: "exclamationmark.triangle",
-                                 title: "A saved run couldn't be read", detail: warning)
-                }
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -466,6 +481,24 @@ struct BatchSelectionScreen: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 header
+                // Both notices about this launch's own state sit here, above the grid, rather than at
+                // the bottom of the page. Their advice - look in Photos before running the same
+                // videos again - is about the selection the user is making on this screen, and the
+                // control it warns about, Select all, is in the toolbar above. Below a grid that can
+                // run to hundreds of tiles they were, in practice, unread. One group behind one test,
+                // so an ordinary launch gains no gap where they are not.
+                if batch.queueWarning != nil || batch.queueReadWarning != nil {
+                    VStack(alignment: .leading, spacing: 14) {
+                        QueueWarningNotice(warning: batch.queueWarning)
+                        // The same notice the launch screen draws: a record nothing could be read from
+                        // may have named a video whose copy Photos already holds, and the automatic
+                        // selection is what would run that video again.
+                        if let warning = batch.queueReadWarning {
+                            ShrinkNotice(symbol: "exclamationmark.triangle",
+                                         title: "A saved run couldn't be read", detail: warning)
+                        }
+                    }
+                }
                 QualityRow(settings: batch.settings, open: openQuality)
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(assets) { asset in row(asset) }
@@ -504,14 +537,6 @@ struct BatchSelectionScreen: View {
                 VideoReasonList(assets: batch.refusedAssets)
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                QueueWarningNotice(warning: batch.queueWarning)
-                // The same notice the launch screen draws, on the screen where its advice is acted
-                // on: a record nothing could be read from may have named a video whose copy Photos
-                // already holds, and the automatic selection is what would run that video again.
-                if let warning = batch.queueReadWarning {
-                    ShrinkNotice(symbol: "exclamationmark.triangle",
-                                 title: "A saved run couldn't be read", detail: warning)
-                }
             }
             .frame(maxWidth: 700)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 24)

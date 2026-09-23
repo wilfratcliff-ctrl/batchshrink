@@ -1,4 +1,5 @@
 import ExpoModulesCore
+import OSLog
 import SwiftUI
 import UIKit
 
@@ -70,6 +71,31 @@ import UIKit
 
 final class VideoShrinkNativeView: ExpoView {
   private var host: UIHostingController<ContentView>?
+  /// How many times the attach has been retried before this view says so out loud.
+  private var attachAttempts = 0
+  /// Twenty tries at 50ms apart is one second, which is far longer than the hop that finds the
+  /// controller in an ordinary hierarchy and short enough that a user who is stuck is told soon.
+  private static let attachAttemptLimit = 20
+  private let log = Logger(subsystem: "VideoShrink", category: "Launch")
+
+  /// Words for the moment before this view's SwiftUI has drawn anything.
+  ///
+  /// The view is created by React Native, so it exists before the SwiftUI host can attach - and
+  /// attaching needs a parent view controller, which is not there on the first layout passes. Until
+  /// then the shell draws nothing of its own and the app is a flat dark rectangle with no words on
+  /// it. This label fills that, and it is also what a user sees if the controller is never found at
+  /// all: it says the app could not start rather than leaving a blank screen behind.
+  private lazy var placeholder: UILabel = {
+    let label = UILabel()
+    label.text = "Starting…"
+    label.font = .preferredFont(forTextStyle: .headline)
+    label.textColor = UIColor(white: 1, alpha: 0.72)
+    label.textAlignment = .center
+    label.numberOfLines = 0
+    label.isUserInteractionEnabled = false
+    label.backgroundColor = .clear
+    return label
+  }()
 
   required init(appContext: AppContext? = nil) {
     super.init(appContext: appContext)
@@ -91,10 +117,23 @@ final class VideoShrinkNativeView: ExpoView {
     super.layoutSubviews()
     attachHostIfNeeded()
     host?.view.frame = bounds
+    placeholder.frame = bounds
   }
 
   private func attachHostIfNeeded() {
-    guard window != nil, host == nil, let parent = containingController else { return }
+    guard window != nil, host == nil else { return }
+    guard let parent = containingController else {
+      // Nothing else in this view can draw, so say something rather than nothing - and keep trying,
+      // because the controller appears a hop or two after the first layout in every hierarchy this
+      // has been seen in.
+      showPlaceholder()
+      retryAttach()
+      return
+    }
+    placeholder.removeFromSuperview()
+    // A later detach and re-attach starts its own count: the retries are for finding the controller
+    // the first time, not a budget the view spends once for the life of the process.
+    attachAttempts = 0
     let controller = UIHostingController(rootView: ContentView(model: VideoShrinkNativeSession.model,
                                                               batch: VideoShrinkNativeSession.batch))
     host = controller
@@ -105,6 +144,33 @@ final class VideoShrinkNativeView: ExpoView {
     addSubview(controller.view)
     controller.didMove(toParent: parent)
   }
+
+  /// Looks again shortly, and gives up out loud rather than silently.
+  ///
+  /// The failures this exists for are the ones a screen cannot explain on its own: this view draws
+  /// nothing until the host attaches, so a hierarchy this app cannot walk to a controller leaves a
+  /// user looking at a rectangle with no way to tell a slow start from a broken one.
+  private func retryAttach() {
+    guard attachAttempts < Self.attachAttemptLimit else {
+      if placeholder.text != Self.couldNotStart {
+        placeholder.text = Self.couldNotStart
+        log.error("The SwiftUI host could not be attached: no parent view controller was found")
+      }
+      return
+    }
+    attachAttempts += 1
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+      self?.attachHostIfNeeded()
+    }
+  }
+
+  private func showPlaceholder() {
+    guard placeholder.superview == nil else { return }
+    placeholder.frame = bounds
+    addSubview(placeholder)
+  }
+
+  private static let couldNotStart = "BatchShrink could not start. Close the app and open it again."
 
   private var containingController: UIViewController? {
     var responder: UIResponder? = next

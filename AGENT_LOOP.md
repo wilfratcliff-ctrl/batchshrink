@@ -388,6 +388,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
 | 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 402 tests, none executed |
 | 25 | see below | The count, the menu hint and the two empty states say what they mean - and the physical-device plan is made to cover the deletion it never tested | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
+| 26 | see below | The Originals sheet checked against the code and found honest, and the first audit of the launch path: the advisories a user has to see are no longer buried, and the shell says something rather than nothing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -772,7 +773,7 @@ the confidence and the list of what was checked and found correct. The table is 
 | DEL4 | 2 | In "delete at the end" the finished screen said nothing about the confirmation it was waiting for - and the real cause was worse: `finishNow()` from a paused run never took the look its offer depends on, so the control was never drawn and the originals were silently kept | done, round 20, unverified: `finishNow` takes the same one look per candidate the run's own tail takes |
 | DEL5 | 3 | A cancelled Photos confirmation is stored as a save failure, so cancelling reads as a failure with the wrong sentence behind it | open, and device-dependent: which error PhotoKit returns for a declined alert decides the shape of the fix |
 | DEL6 | 3 | The working screen's shield line read "Original protected" in the two modes that remove originals | done, round 20, unverified |
-| DEL7 | 3 | A deletion left "uncertain" is a dead end: the app advises checking Photos and no control can act on the answer | open |
+| DEL7 | 3 | A deletion left "uncertain" is a dead end: the app advises checking Photos and no control can act on the answer | **open, and now for a reason rather than for want of time.** The obvious fix - have the app look up that original's identifier at launch and settle the question itself - is unsafe in exactly the window the journal exists for: PhotoKit may answer "gone" for a deletion still being applied, and an original read as "still here" would become deletable again, so the app could submit a second deletion for an asset the first one is still processing. The advisory is the safe behaviour until a device can say what PhotoKit answers in that window. See round 26's verification below |
 | RR1 | 2 | The restored pause asked the user to check Photos and never named the video | done, round 20, unverified |
 | RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **done, rounds 21 and 23**, unverified. Round 21 kept the video out of automatic selection, made the finding survive a scan and a new run inside the session, and named the videos on the selection screen. Round 23 closed the record with a **different shape from the one this row predicted**: not an item merged back, but `BatchQueueRecord.questions` - the identifier and the kind of question, written beside the run and *not* as an item, because a question outlives the run it came from and is a fact about the library rather than a piece of a run. Every checkpoint writes it, `reset()` ("Done") writes it on its own instead of clearing the queue, and a launch reads it back into `midSaveFindings`, where it keeps the video out of Select all and names it on the selection screen. A tick by hand is the answer and clears it |
 | RR3 | 2 | A restored run has lost why it stopped, including the storage and thermal reasons | **done, round 23**, unverified: `BatchQueueRecord.pause` holds `PauseKind` (the four reasons, by kind and not by sentence), a checkpoint writes it and a launch draws `BatchPauseReason.explanation` again |
@@ -861,9 +862,9 @@ person can read and check.
 | D6 | 2 | The "Save transaction" row named a Save control the batch flow does not have | done, round 25: split by flow |
 | D7 | 2 | No reset existed between cases, the kill-a-save case sat in the middle of the matrix, `Original safety` was one case near the end rather than a before-and-after on each case, and one row could remove originals while the preamble promised none would | done, round 25: a reset case, the irreversible cases last, and `Original safety` clauses on every case that saves or deletes |
 | D8 | 2 | One row asked for sandbox facts a phone cannot give, and another timed a single read where the step can be three bounded reads (about 31 s) | done, round 25: both rewritten to what a person can record |
-| D9 | 3 | The larger-copy row describes the one-video flow only, and does not ask whether an ordinary original ever produces a copy bigger in bytes - the device question `docs/AUDIT_SINGLE_VIDEO.md` names | **open**: the row wants original bytes, copy bytes and which of the two endings appeared, for each file, in both flows |
-| D10 | 3 | The "Failed queue write" step could not be performed on a phone (done: tied to the storage cases), and the *reachable* sibling - a record the app cannot read, with its notice - still has no row | **half done, round 25**; the notice row is open |
-| D11 | 3 | The build attribution names a build that has never existed: `app.json` is build 11 and `docs/RELEASE_10.md` records that the next upload should use 11 or later, so nobody has run build 11, and whoever runs this plan will install the first build carrying rounds 1 to 24 | **open**, and it is a commitment rather than a fact: it should read as `RELEASE_10.md` does |
+| D9 | 3 | The larger-copy row described the one-video flow only, and did not ask whether an ordinary original ever produces a copy bigger in bytes - the device question `docs/AUDIT_SINGLE_VIDEO.md` names | **done, round 26**: the row now takes the same file through both flows and asks for the original bytes, the copy bytes and which ending appeared, because that branch is only ever met or missed by a real file |
+| D10 | 3 | The "Failed queue write" step could not be performed on a phone, and the *reachable* sibling - a record the app cannot read, with its notice - had no place in the plan | **done, rounds 25 and 26**: the write row is tied to the storage cases that can actually make a write fail, and the notice has its own bullet in the change list, which is where a state a phone cannot create belongs - it says what the notice means and what to look through Photos for |
+| D11 | 3 | The build attribution named a build that has never existed: `app.json` is build 11 and `docs/RELEASE_10.md` records that the next upload should use 11 or later, so nobody has run build 11 | **done, round 26**: the preamble now says the build that carries this work has not been made, that the number is a commitment rather than a fact, and that every result below is evidence about one recorded build and no other |
 
 ## Round 19 — the numbers tell the truth, and the app stops asking too early
 
@@ -1363,3 +1364,59 @@ than patched: the overflow hint's `the originals` is a generic plural (`the orig
 for several, and the count is on the menu item right beside it), and `marketing/app-store-listing.md`
 now asks for a multi-copy run for the screenshot whose caption quotes the read-back line, because the
 one-copy screen no longer prints that line.
+
+### Round 26 - the Originals sheet checked, and what a launch shows before the app draws
+
+The app's riskiest setting is the one choice that decides whether an original is removed, and no round
+had ever read the *sheet that sets it* against the code that obeys it. Round 26 did, and it found
+nothing to change - which is worth recording, because "we checked and it holds" is the other half of
+the evidence a future round needs, and because two of the claims look wrong until the code is read.
+
+| What the sheet says | What the code does |
+| --- | --- |
+| "Photos asks you to confirm each batch of deletions, and no app can pre-authorise that." | True. One `PHPhotoLibrary` transaction is one confirmation. `Deletion as it goes` queues candidates and flushes a transaction every `deletionBatchSize` (5) plus a final one - pinned by a case asserting `[5, 2]` for a run of seven - and the comment beside the constant says batching is the only lever over how often iOS shows its confirmation. The word *batch* is doing real work in that sentence: a run of a hundred videos in `Delete as it goes` meets about twenty confirmations, and the mode's own description ("Each original goes as soon as its copy is saved and checked") is approximate for the four that wait for the fifth |
+| "Deleting at the end means one confirmation for the whole run." | True, and it is a different code path from the mode above: nothing is queued during the run at all, and the finished screen's offer submits every candidate in a single transaction. So "one confirmation" is exact for this mode however long the run was |
+| "A copy has to be saved, smaller and confirmed in Photos before an original is touched. Anything else is kept, and the run tells you why." | True. `DeletionPolicy.decision` requires the mode to delete, a smaller saving, a confirmed read-back, a recorded receipt and a matching fresh look. Kept candidates are recorded with the reason in the row, and the modes that keep everything say so collectively |
+| "This applies to batch runs. The one-video flow never deletes." | True: that flow's only PhotoKit calls are access, retrieve, save and cancel |
+| The tap on a deleting mode goes through one more hard confirmation | True: `.off` is set immediately, and either deleting mode raises a confirmation naming the mode before it is stored |
+
+**Two boundaries the same reading exposed**, recorded rather than fixed.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| Q4 | 3 | The history store holds **2,000** completed identifiers and 2,000 created-copy identifiers, oldest first, and evicts silently once full. The marks exist to keep Select all off a video this app has copied, so an evicted mark means the run re-ticks it: a second copy of an original that already has one, or - for an evicted *copy* - the app shrinking its own output. At the app's own pacing that needs about a thousand videos processed, and the store's own comment calls the bound deliberate, so the cliff is far away rather than absent | **open, and deliberately not patched with pruning.** Dropping marks for videos the library no longer lists sounds like the obvious relief, but for this app the steady state is the opposite: a user who deletes originals keeps the *copies*, whose marks are the ones that matter and which pruning cannot remove. What pruning would help is a user who has deleted both - real, but narrow, and it costs a new store requirement and a write on every scan. The honest next step is a decision about the bound itself: a file-backed store could hold an order of magnitude more than `UserDefaults` reasonably should, and that is a migration with a failure mode (losing the marks is the harm the marks exist to prevent) |
+| DEL7 | 3 | See the row in the round-20 table above; round 26 supplied the reason it stays open rather than a patch |
+
+**The same round audited the launch path for the first time**, from the Expo shell through the module
+to the SwiftUI root, because every earlier audit had looked at the Swift screens or the Swift pipeline
+and nobody had asked what a person meets in the seconds before the first screen exists. The audit is
+**[docs/AUDIT_LAUNCH_PATH.md](docs/AUDIT_LAUNCH_PATH.md)**; two of its findings are fixed here and the
+rest are recorded with what they need.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| LP1 | 1 | The shell draws no words of its own: `App.tsx` renders one native view, the view behind it is a flat colour, and the SwiftUI host attaches lazily - so until the first SwiftUI frame the app can be a wordless near-black rectangle, and if the host never attaches it stays one | **half done, round 26.** The native view now draws its own words while it is waiting (a centred "Starting…" in the app's near-black) and replaces them with "BatchShrink could not start. Close the app and open it again." if the controller is never found - see LP5. What is *not* done is the shell's own segment before the view exists (Expo's splash covers it) and a ready signal that would let JS draw something until the host reports itself; that needs a render to justify a new inter-layer contract |
+| LP2 | 1 | The interrupted-run restore runs on the main actor in front of the first frame: `cleanWorkspace`, the adopted save notes, the queue restore with one Photos revalidation per saved item, the mid-save resolution and the monitor's registration all happen when the view first touches the session | **open, and the obvious fix is blocked by something worth recording.** Deferring the per-item `refreshDeletionLook` to a task after the first frame would shorten the wait and is safe on its own (it only delays the delete offer), but `resolveMidSaveItems` *reads* those lookups to settle a mid-save record - so deferring the refresh would silently turn a video whose copy Photos still holds back into an open question. Splitting the two means the settle path needs its own bounded look, which is a change to the exactly-once work, not a launch tweak. The cost itself is a measurement: the restored-run audit already named it as device-only, and this makes it the *first* question for the 1 October session |
+| LP3 | 2 | The notice for a record that could not be read was the last item of about 850 points of scroll on the start screen, below a 300-point illustration, and its twin on the selection screen sat below the whole grid - while the advice it carries ("look in Photos before running the same videos again") is about the choice the user is making on that screen | **done, round 26.** Both notices are now drawn under the headline on the start screen and above the grid on the selection screen, with the reason written beside them |
+| LP4 | 2 | The app icon and splash are a generated placeholder, and two documents described it as the finished brand mark | **docs done, round 26**: `docs/DESIGN.md` no longer claims a brand mark it has not got and `marketing/app-store-listing.md` no longer counts the icon as existing rather than owed. **The mark itself is open and is a design decision**: `scripts/generate-icon.mjs` draws it deterministically, so a new mark either has to be drawn in that script or the convention that keeps binaries out of the repository has to change deliberately |
+| LP5 | 2 | If the host controller is never found, the view drew nothing, logged nothing and said nothing - indistinguishable from a slow start | **done, round 26**: the view retries twenty times at 50ms, then says "BatchShrink could not start. Close the app and open it again." and logs an error naming the reason. Reachability is low (an ordinary Expo hierarchy has the controller as an ancestor) but the failure mode was a silent black screen on the shipping path |
+| LP6 | 3 | The shell's only other state is developer copy ("Install the BatchShrink development build, then connect it to this development server"), which a user would meet only in a misconfigured build | open, and honest as it stands: that string is the missing-module fallback, and it is written for the person who can fix it |
+
+The audit's "checked and found sound" list is worth keeping: no path shows the introduction twice or
+skips it for a new user, a restored run deliberately takes precedence over it, the replay touches no
+stored key, there is no launch-time route to the Photos prompt (`requestAccess()` has exactly three
+callers and all are the user's own), the introduction's promise about when access is asked holds, all
+eight phases draw a screen, the shell and the app use the same near-black, and `app.json`'s version,
+permission, device and orientation facts match the code. The boundary worth stating plainly: **every
+rendered-screen observation in this project is the standalone harness; the Expo shell to module to
+SwiftUI transition has never been observed by anything.**
+
+**What could not be verified, said plainly.** Three of this round's changes are not behaviour a case
+can hold: where two notices sit in a scroll view, whether a conditional group adds a gap when it draws
+nothing, and a UIKit placeholder label in the module that no test target compiles. The gates pattern-
+scan all of it and the checker sees the new declarations, but nothing here reads a screen or runs the
+shell. Two things were therefore checked by hand and are worth the next reader's attention: the
+ViewBuilder child counts on both screens (seven and nine, under the ten-child limit a compiler
+enforces and no local gate can see), and that each notice group sits behind a single `if`, because a
+group that draws nothing must also take no room - otherwise every ordinary launch would gain a 24-point
+gap where the notices are not.
