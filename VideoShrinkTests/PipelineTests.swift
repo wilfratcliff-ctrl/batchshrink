@@ -277,7 +277,7 @@ import Combine
     /// Failures before this change: every one of them, because nothing could set either trait.
     /// `AssetRules` refusal is read out of the rules table rather than restated, so an HDR
     /// original reads the same here as it does on the screening screen.
-    func testAHDRTransferFunctionIsRefusedInTheRulesOwnWords() {
+    func testAHDRTransferFunctionIsRefusedInTheRulesOwnWords() throws {
         XCTAssertEqual(VideoVerificationService.transferFunction(
             declaredBy: kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String), .hlg)
         XCTAssertEqual(VideoVerificationService.transferFunction(
@@ -288,15 +288,15 @@ import Combine
         XCTAssertTrue(TransferFunction.hlg.isHDR)
         XCTAssertTrue(TransferFunction.pq.isHDR)
 
-        let wording = AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true))
-        let refusal = VideoVerificationService.unsupportedFormatRefusal(isHDR: true, isProRes: false)
-        XCTAssertNotNil(wording)
-        XCTAssertEqual(refusal?.reason, wording)
-        XCTAssertEqual(refusal?.errorDescription, wording,
+        let wording = try XCTUnwrap(AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true)))
+        let refusal = try XCTUnwrap(
+            VideoVerificationService.unsupportedFormatRefusal(isHDR: true, isProRes: false))
+        XCTAssertEqual(refusal, .unsupportedOriginal(reason: wording))
+        XCTAssertEqual(refusal.errorDescription, wording,
                        "An HDR original must be refused in the words the library already shows")
     }
 
-    func testAProResSubtypeIsRefusedInTheRulesOwnWords() {
+    func testAProResSubtypeIsRefusedInTheRulesOwnWords() throws {
         for subtype in [kCMVideoCodecType_AppleProRes422, kCMVideoCodecType_AppleProRes422HQ,
                         kCMVideoCodecType_AppleProRes422LT, kCMVideoCodecType_AppleProRes422Proxy,
                         kCMVideoCodecType_AppleProRes4444, kCMVideoCodecType_AppleProRes4444XQ,
@@ -305,10 +305,37 @@ import Combine
                           "Every ProRes subtype Apple declares must be refused")
         }
 
-        let refusal = VideoVerificationService.unsupportedFormatRefusal(isHDR: false, isProRes: true)
-        XCTAssertEqual(refusal?.errorDescription,
-                       AssetRules.unsupportedReason(AssetRules.Traits(isProRes: true)),
+        let refusal = try XCTUnwrap(
+            VideoVerificationService.unsupportedFormatRefusal(isHDR: false, isProRes: true))
+        let wording = try XCTUnwrap(AssetRules.unsupportedReason(AssetRules.Traits(isProRes: true)))
+        XCTAssertEqual(refusal, .unsupportedOriginal(reason: wording))
+        XCTAssertEqual(refusal.errorDescription, wording,
                        "A ProRes original must be refused in the words the library already shows")
+    }
+
+    /// The seam this round closed: the refusal was correct but reached the run as the caller's
+    /// fallback, so the batch row drew the HEVC export sentence and a persisted failure was
+    /// recorded as an export. Both halves are asserted here, because either one alone leaves the
+    /// user reading about a failure that did not happen.
+    func testAnUnsupportedOriginalRefusalReachesTheUserAsItself() throws {
+        let wording = try XCTUnwrap(AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true)))
+        let refusal = try XCTUnwrap(
+            VideoVerificationService.unsupportedFormatRefusal(isHDR: true, isProRes: false))
+        XCTAssertEqual(refusal, .unsupportedOriginal(reason: wording))
+
+        // A batch item normalises whatever a step threw with `.export` as its fallback. A refusal
+        // this app raised itself must survive that untouched.
+        let normalized = PipelineError.normalize(refusal, fallback: .export)
+        XCTAssertEqual(normalized, refusal)
+        XCTAssertNotEqual(normalized, .export, "The HEVC export sentence is not what happened")
+        // The row draws `localizedDescription`, so that is the string the user reads.
+        XCTAssertEqual(normalized.localizedDescription, wording)
+
+        // The queue file holds no sentence, so a restored run says the video is one the app does
+        // not support rather than that an export failed.
+        XCTAssertEqual(BatchFailureCode(normalized), .unsupported)
+        XCTAssertEqual(BatchFailureCode(normalized).error, .unsupported)
+        XCTAssertFalse(BatchFailureCode(normalized).error.localizedDescription.isEmpty)
     }
 
     func testAnOrdinarySDRVideoIsNotRefused() {
@@ -339,8 +366,9 @@ import Combine
                                         declaring: kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
         XCTAssertEqual(VideoVerificationService.transferFunction(of: [hdr]), .hlg,
                        "The reader must find the transfer function through Apple's documented key")
-        XCTAssertEqual(VideoVerificationService.unsupportedFormatRefusal(
-            isHDR: VideoVerificationService.transferFunction(of: [hdr]).isHDR, isProRes: false)?.reason,
+        let refusal = VideoVerificationService.unsupportedFormatRefusal(
+            isHDR: VideoVerificationService.transferFunction(of: [hdr]).isHDR, isProRes: false)
+        XCTAssertEqual(refusal?.errorDescription,
                        AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true)))
 
         let proRes = try formatDescription(codecType: kCMVideoCodecType_AppleProRes4444)

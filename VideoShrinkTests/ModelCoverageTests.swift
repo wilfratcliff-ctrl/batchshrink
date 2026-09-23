@@ -117,6 +117,20 @@ import AVFoundation
         XCTAssertNil(model.copyBytes(forDuration: .infinity))
     }
 
+    /// Before this change the two conversions inside `copyBytes(forDuration:)` trapped - aborting
+    /// the whole test process rather than failing a case - so a duration this large could not even
+    /// be written into a test. It can now, and it is refused instead.
+    func testACopySizeTooLargeForAnInt64IsRefusedInsteadOfTrapping() {
+        let model = CopySizeModel.make(for: .uhd4k, frameRate: .original, measured: [])
+        // 24 Mbps over 1e18 seconds is about 3e24 bytes, far past Int64.max's 9.2e18.
+        XCTAssertNil(model.copyBytes(forDuration: 1e18))
+        XCTAssertNil(model.savings(sourceBytes: 1_000, duration: 1e18))
+        XCTAssertNil(model.copyBytes(forDuration: .greatestFiniteMagnitude))
+        // A duration that only looks huge is still answered: the guard is about the range of the
+        // result, not about how big the duration is. 12 Mbps over 1e9 seconds is 1.5e15 bytes.
+        XCTAssertEqual(model.copyBytes(forDuration: 1e9)?.lowerBound, 1_500_000_000_000_000)
+    }
+
     func testEstimatedCopyBytesAndAggregatesComeFromTheSameBand() {
         let big = coverageAsset("big", bytes: 200_000_000)
         let unsized = coverageAsset("unsized", bytes: nil)
@@ -161,6 +175,45 @@ import AVFoundation
         XCTAssertEqual(empty.likelyNoReductionCount, 0)
         XCTAssertEqual(empty.estimatedCopyBytes, 0)
         XCTAssertEqual(empty.basis, .planning(resolution: .hd1080))
+    }
+
+    /// A mixed selection uses more than one band, and only one can be named. Before this change
+    /// the last sized video won, so the same selection reversed claimed a different band: the
+    /// first assertion below read `.planning(resolution: .uhd4k)`.
+    func testTheEstimateNamesTheBandThatHoldsMostOfTheBytes() {
+        let fourK = TranscodeSettings(resolution: .uhd4k, frameRate: .original)
+        // Three 1080p originals at 200 MB each against one 4K original at 50 MB. The 4K setting
+        // is not what a 1080p original gets: it is copied at its own nearest size, 1080p.
+        let first = coverageAsset("a", bytes: 200_000_000)
+        let second = coverageAsset("b", bytes: 200_000_000)
+        let third = coverageAsset("c", bytes: 200_000_000)
+        let big = coverageAsset("d", bytes: 50_000_000, width: 3_840, height: 2_160)
+
+        let forward = SavingsEstimate.make(assets: [first, second, third, big],
+                                           settings: fourK, measured: [])
+        let reversed = SavingsEstimate.make(assets: [big, third, second, first],
+                                            settings: fourK, measured: [])
+        XCTAssertEqual(forward.basis, .planning(resolution: .hd1080),
+                       "Most of the bytes are copied at 1080p, so that is the band to name")
+        XCTAssertEqual(reversed.basis, forward.basis,
+                       "Reversing the same selection cannot change what the caption claims")
+        // The caption changed; the numbers it explains did not.
+        XCTAssertEqual(reversed.sizedCount, forward.sizedCount)
+        XCTAssertEqual(reversed.sizedBytes, forward.sizedBytes)
+        XCTAssertEqual(reversed.conservativeBytes, forward.conservativeBytes)
+        XCTAssertEqual(reversed.optimisticBytes, forward.optimisticBytes)
+    }
+
+    /// An exact tie in bytes is settled by the band itself, so the same selection always gets the
+    /// same caption. The larger band is the one named.
+    func testATieInBytesIsSettledByTheBandRatherThanByTheOrder() {
+        let fourK = TranscodeSettings(resolution: .uhd4k, frameRate: .original)
+        let hd = coverageAsset("hd", bytes: 100_000_000)
+        let big = coverageAsset("4k", bytes: 100_000_000, width: 3_840, height: 2_160)
+        let forward = SavingsEstimate.make(assets: [hd, big], settings: fourK, measured: [])
+        let reversed = SavingsEstimate.make(assets: [big, hd], settings: fourK, measured: [])
+        XCTAssertEqual(forward.basis, .planning(resolution: .uhd4k))
+        XCTAssertEqual(reversed.basis, forward.basis)
     }
 
     func testSavingsAddUpForAWholeSelection() {
@@ -399,11 +452,17 @@ import AVFoundation
     }
 
     func testEveryFailureTheUserSeesHasItsOwnSentence() {
+        // The refusal the media layer decides has no words of its own: it carries `AssetRules`'
+        // sentence in, so this checks the sentence comes straight back out.
+        let carriedReason = "HDR videos aren't supported yet."
+        let carried = PipelineError.unsupportedOriginal(reason: carriedReason)
+        XCTAssertEqual(carried.errorDescription, carriedReason,
+                       "The case carries the sentence it was given rather than restating it")
         let cases: [PipelineError] = [.permissionDenied, .assetUnavailable, .unsupported, .retrieval,
                                       .export, .verification, .durationMismatch, .audioMismatch,
                                       .orientationMismatch, .insufficientStorage, .codecMismatch,
                                       .resolutionMismatch, .frameRateMismatch, .save, .temporaryFiles,
-                                      .libraryScan, .cancelled]
+                                      .libraryScan, .cancelled, carried]
         for error in cases {
             let text = error.errorDescription ?? ""
             XCTAssertFalse(text.isEmpty, "This error needs a sentence the user can act on")

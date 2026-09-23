@@ -124,6 +124,12 @@ enum BatchFailureCode: String, Codable, Equatable, Sendable {
         case .permissionDenied: self = .permission
         case .assetUnavailable: self = .unavailable
         case .unsupported: self = .unsupported
+        // An original the app deliberately refuses - HDR or ProRes - is stored as the ordinary
+        // "not supported" code rather than a code of its own. A stored code is a stable, coarse
+        // kind and the queue file deliberately holds no sentence, so the exact words live only
+        // in the run that raised them; what a restored queue can honestly say is that this video
+        // is one the app does not support, which is what `.unsupported` says.
+        case .unsupportedOriginal: self = .unsupported
         case .retrieval: self = .retrieval
         case .insufficientStorage, .temporaryFiles: self = .storage
         case .verification, .durationMismatch, .audioMismatch, .orientationMismatch,

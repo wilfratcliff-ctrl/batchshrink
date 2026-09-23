@@ -239,18 +239,21 @@ actor VideoVerificationService: VideoVerifying {
     /// cannot drift from a string typed out by hand. Note the spelling: the perceptual quantiser
     /// curve is `kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ`. There is no constant
     /// called `kCMFormatDescriptionTransferFunction_ITU_R_2100_PQ`, so writing PQ that way is a
-    /// compile error rather than a missed rule. Anything else a file can declare - a curve this
-    /// app can export with, or a value it has never seen - is treated as ordinary, which is the
-    /// distinction this check acts on and the only one. ITU-R BT.2020 primaries are deliberately
-    /// not a reason to refuse: that is a colour gamut, not a curve, and CoreMedia documents it as
+    /// compile error rather than a missed rule. ITU-R BT.2020 primaries are deliberately not a
+    /// reason to refuse: that is a colour gamut, not a curve, and CoreMedia documents it as
     /// semantically equivalent to BT.709.
+    ///
+    /// Everything else it cannot place stays `unknown` rather than being called ordinary: "this
+    /// app has never seen that curve" is not the same claim as "that curve is SDR", and only the
+    /// two curves above are a reason to refuse a video.
     static func transferFunction(declaredBy value: Any?) -> TransferFunction {
         // Two steps on purpose: the extension arrives as a `CFPropertyList`, which becomes an
         // `Any`, and the cast away from `Any` is the one that can fail.
         guard let declared = value, let value = declared as? String else { return .unknown }
         if value == kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String { return .pq }
         if value == kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String { return .hlg }
-        return .sdr
+        if value == kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String { return .sdr }
+        return .unknown
     }
 
     /// True for every ProRes subtype Apple declares: the six ordinary ones and the two RAW ones,
@@ -271,12 +274,14 @@ actor VideoVerificationService: VideoVerifying {
     /// The refusal an original with these format facts gets, or nil when it is ordinary.
     ///
     /// The words come from `AssetRules`, so this layer cannot invent a second sentence for the
-    /// same video. Pure, so every branch is exercisable without a media fixture.
-    static func unsupportedFormatRefusal(isHDR: Bool, isProRes: Bool) -> UnsupportedOriginalError? {
+    /// same video, and the refusal is a `PipelineError` so the run records it under its own
+    /// sentence instead of whatever the caller would have fallen back to. Pure, so every branch
+    /// is exercisable without a media fixture.
+    static func unsupportedFormatRefusal(isHDR: Bool, isProRes: Bool) -> PipelineError? {
         guard let reason = AssetRules.unsupportedFormatReason(isHDR: isHDR, isProRes: isProRes) else {
             return nil
         }
-        return UnsupportedOriginalError(reason: reason)
+        return .unsupportedOriginal(reason: reason)
     }
 
     /// One declared format-description extension, or nil when the media omits it.

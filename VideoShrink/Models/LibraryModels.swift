@@ -83,11 +83,27 @@ struct CopySizeModel: Equatable, Sendable {
     }
 
     /// Copy size range for a video of this duration, in bytes.
+    ///
+    /// Returns nil rather than trapping when the duration is unusable or the byte figure cannot
+    /// be held in an `Int64`. Guarding the duration alone is not enough: a duration read out of a
+    /// queue file this app did not write can be finite and positive and still large enough to put
+    /// the product below out of range, and `Int64(_: Double)` traps on that instead of failing.
+    /// `Double(Int64.max)` rounds up to 2^63, the first value an `Int64` cannot hold, so the
+    /// upper comparison is strict.
     func copyBytes(forDuration duration: Double) -> ClosedRange<Int64>? {
         guard duration.isFinite, duration > 0 else { return nil }
-        let low = Int64((lowBitsPerSecond * duration / 8).rounded())
-        let high = Int64((highBitsPerSecond * duration / 8).rounded())
+        let lowest = (lowBitsPerSecond * duration / 8).rounded()
+        let highest = (highBitsPerSecond * duration / 8).rounded()
+        guard Self.canBeAnInt64(lowest), Self.canBeAnInt64(highest) else { return nil }
+        let low = Int64(lowest)
+        let high = Int64(highest)
         return low...max(high, low)
+    }
+
+    /// True when a computed byte figure is a value an `Int64` can actually hold, which is what
+    /// makes the conversion above safe rather than a trap.
+    private static func canBeAnInt64(_ bytes: Double) -> Bool {
+        bytes.isFinite && bytes >= Double(Int64.min) && bytes < Double(Int64.max)
     }
 
     /// Estimated saving for one video: the conservative figure assumes the copy lands at the
@@ -138,12 +154,23 @@ struct SavingsEstimate: Equatable, Sendable {
         var conservative: Int64 = 0
         var optimistic: Int64 = 0
         var noReduction = 0
-        var basis: CopySizeModel.Basis = .planning(resolution: settings.resolution)
+        // The caption drawn from `basis` describes the numbers above, which are byte totals, so
+        // each band is credited with the original bytes of the videos that used it and the band
+        // holding most of those bytes is the one named. Counting videos instead would let a crowd
+        // of small originals speak for one large one. Ties are broken by a canonical order below,
+        // so reversing the selection cannot change what the caption claims.
+        var bands: [(basis: CopySizeModel.Basis, bytes: Int64)] = []
         for asset in assets {
             guard let saving = asset.savings(settings: settings, measured: measured),
                   let bytes = asset.bytes else { continue }
             let effective = settings.effectiveResolution(sourceLongEdge: asset.longEdge)
-            basis = CopySizeModel.make(for: effective, frameRate: settings.frameRate, measured: measured).basis
+            let basis = CopySizeModel.make(for: effective, frameRate: settings.frameRate,
+                                           measured: measured).basis
+            if let index = bands.firstIndex(where: { $0.basis == basis }) {
+                bands[index] = (basis: bands[index].basis, bytes: bands[index].bytes + bytes)
+            } else {
+                bands.append((basis: basis, bytes: bytes))
+            }
             sized += 1
             sizedBytes += bytes
             conservative += saving.conservativeBytes
@@ -152,8 +179,42 @@ struct SavingsEstimate: Equatable, Sendable {
         }
         return SavingsEstimate(sizedCount: sized, sizedBytes: sizedBytes,
                                conservativeBytes: conservative, optimisticBytes: optimistic,
-                               likelyNoReductionCount: noReduction, basis: basis,
+                               likelyNoReductionCount: noReduction,
+                               basis: dominantBand(bands) ?? .planning(resolution: settings.resolution),
                                frameRate: settings.frameRate)
+    }
+
+    /// The band that carries most of the sized original bytes, or nil when nothing was sized.
+    ///
+    /// A selection with mixed sizes can use more than one band, and only one of them can be named.
+    /// The one holding the largest share of the bytes is chosen because the totals the caption
+    /// explains are byte totals. An exact tie is settled by `outranks` rather than by whichever
+    /// video happened to come first, so the same selection always gets the same caption.
+    private static func dominantBand(_ bands: [(basis: CopySizeModel.Basis, bytes: Int64)])
+        -> CopySizeModel.Basis? {
+        var best: (basis: CopySizeModel.Basis, bytes: Int64)?
+        for band in bands {
+            guard let current = best else { best = band; continue }
+            if band.bytes > current.bytes
+                || (band.bytes == current.bytes && outranks(band.basis, current.basis)) {
+                best = band
+            }
+        }
+        return best?.basis
+    }
+
+    /// A total order over bands, so a tie in bytes cannot be decided by the selection's order.
+    /// A band measured on this iPhone outranks a planning band, because it is the stronger
+    /// evidence, and a larger band outranks a smaller one.
+    private static func outranks(_ band: CopySizeModel.Basis, _ other: CopySizeModel.Basis) -> Bool {
+        rank(band) > rank(other)
+    }
+
+    private static func rank(_ band: CopySizeModel.Basis) -> (kind: Int, size: Int) {
+        switch band {
+        case .planning(let resolution): return (kind: 0, size: resolution.longEdge)
+        case .measured(let samples): return (kind: 1, size: samples)
+        }
     }
 }
 
