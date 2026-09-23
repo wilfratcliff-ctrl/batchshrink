@@ -38,7 +38,7 @@
         "expo-splash-screen",
         {
           "backgroundColor": "#060911",
-          "image": "./VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+          "image": "./VideoShrink/Resources/SplashMark.png",
           "imageWidth": 160,
           "resizeMode": "contain"
         }
