@@ -1448,23 +1448,26 @@ struct BatchPausedScreen: View {
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(ShrinkStyle.cardPadding).shrinkCard()
-                if batch.restoredRun {
-                    Text("Picked up where you left off.")
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                if let reason = pauseReasonText {
-                    Text(reason)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                // What this run has already done to originals, said here rather than only on the
-                // screen the user reaches by finishing: this is the app's one irreversible action,
-                // the return path is where its journalled intent exists to be read, and the headline
-                // above is the screen's only statement about the user's videos.
-                if let note = Self.settledOriginalsNote(batch.deletionReport) {
-                    Text(note)
-                        .font(.footnote).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                // Where this run stands, in one card rather than three lines scattered down the page:
+                // whether it came back from disk, why it went away, and what it has already done to
+                // originals. The headline above is the screen's statement about the user's videos;
+                // these are the facts behind it, and one of them - the originals - is the app's only
+                // irreversible action, which is precisely why the return path has to carry it.
+                let notes = [
+                    batch.restoredRun ? "Picked up where you left off." : nil,
+                    pauseReasonText,
+                    Self.settledOriginalsNote(batch.deletionReport)
+                ].compactMap { $0 }
+                if !notes.isEmpty {
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(notes, id: \.self) { line in
+                            Text(line)
+                                .font(.footnote).foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(ShrinkStyle.cardPadding).shrinkCard()
                 }
                 if batch.summary.needsCheckCount > 0 {
                     ShrinkNotice(symbol: midSave.awaitingUser > 0 ? "questionmark.circle" : "checkmark.circle",
