@@ -1036,7 +1036,7 @@ import UIKit
             registerObserver: { _ in registrations += 1 },
             unregisterObserver: { _ in }
         )
-        let fixture = ServiceBatchFixture(assets: [], monitor: monitor)
+        let fixture = ServiceFixture(assets: [], monitor: monitor)
 
         _ = fixture.batch
 
