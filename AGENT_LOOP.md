@@ -1384,8 +1384,8 @@ the evidence a future round needs, and because two of the claims look wrong unti
 
 | ID | Priority | Item | Status |
 |----|----------|------|--------|
-| Q4 | 3 | The history store holds **2,000** completed identifiers and 2,000 created-copy identifiers, oldest first, and evicts silently once full. The marks exist to keep Select all off a video this app has copied, so an evicted mark means the run re-ticks it: a second copy of an original that already has one, or - for an evicted *copy* - the app shrinking its own output. At the app's own pacing that needs about a thousand videos processed, and the store's own comment calls the bound deliberate, so the cliff is far away rather than absent | **open, and deliberately not patched with pruning.** Dropping marks for videos the library no longer lists sounds like the obvious relief, but for this app the steady state is the opposite: a user who deletes originals keeps the *copies*, whose marks are the ones that matter and which pruning cannot remove. What pruning would help is a user who has deleted both - real, but narrow, and it costs a new store requirement and a write on every scan. The honest next step is a decision about the bound itself: a file-backed store could hold an order of magnitude more than `UserDefaults` reasonably should, and that is a migration with a failure mode (losing the marks is the harm the marks exist to prevent) |
-| DEL7 | 3 | See the row in the round-20 table above; round 26 supplied the reason it stays open rather than a patch |
+| Q4 | 3 | `UserDefaultsShrinkHistoryStore` holds **2,000** completed identifiers, 2,000 created-copy identifiers and 2,000 unconfirmed saves, oldest first, each evicting silently once full (one `append`, three keys). The first two exist to keep Select all off a video this app has copied, so an evicted mark means the run re-ticks it: a second copy of an original that already has one, or - for an evicted *copy* - the app shrinking its own output. The third would resurrect round 24's harm instead: the note that keeps an original out of an automatic selection would be gone | **open, and deliberately not patched with pruning.** Each processed video appends one entry to each of the first two lists, so the first eviction lands around the **two thousandth** video - far, but not absent. Pruning (dropping marks for videos the library no longer lists) is the obvious relief and does not work for this app: a user who deletes originals keeps the *copies*, whose marks are the ones that matter and which pruning cannot remove. The honest next step is a decision about the bound itself: a file-backed store could hold an order of magnitude more than `UserDefaults` reasonably should, and that is a migration whose failure mode is losing the marks - the harm they exist to prevent. The comments in the store say only that a list "cannot grow without limit"; nothing in the tree argues for 2,000 as the number |
+| DEL7 | 3 | See the row in the round-20 table above. Round 26 wrote down why the *lookup* half is blocked - and the honest version of that is narrower than "leave it": the audit that raised this proposed two fixes, and only one of them needs to know what PhotoKit answers in the deletion window. Settling it by looking the original up is unsafe while a delete may still be landing, and re-offering a deletion is worse. But a sentence saying plainly that the app will not try again, or a one-way control that settles only the safe direction (treat it as gone and never re-offer), needs no knowledge of PhotoKit at all | **open.** The row is a dead end in the sense that nothing can act on the answer; it is not yet a dead end that has to stay one |
 
 **The same round audited the launch path for the first time**, from the Expo shell through the module
 to the SwiftUI root, because every earlier audit had looked at the Swift screens or the Swift pipeline
@@ -1419,4 +1419,25 @@ shell. Two things were therefore checked by hand and are worth the next reader's
 ViewBuilder child counts on both screens (seven and nine, under the ten-child limit a compiler
 enforces and no local gate can see), and that each notice group sits behind a single `if`, because a
 group that draws nothing must also take no room - otherwise every ordinary launch would gain a 24-point
-gap where the notices are not.
+gap where the notices are not. The honest statement about the placement is *narrower* than "no test can
+cover it": the UI test target launches the app on a simulator and waits on drawn controls, and whether
+the notice is visible without scrolling is exactly what a hittability or frame check would measure -
+what is missing is a hook that puts the harness into the unreadable-record state, and that file already
+documents why a naive launch-argument hook is a trap.
+
+**An independent read of the round found the most valuable defect of the cycle, and it was not in the
+round's own diff.** Rereading the one-video flow's save path, it found that a *confirmed* save records
+the copy and never marks the **original** as one this iPhone has shrunk - while the batch flow does
+mark it, and while round 24's branch for a save Photos finished without naming the copy marks it too.
+The consequence is the second copy this whole area exists to prevent, and unlike `Q4` it needs no
+unusual state: shrink a video in the one-video flow, then run a batch and tap Select all, and the app
+makes a second copy of a video that already has a smaller one. The old test asserted it away by
+checking that the whole set was empty while its message defended only the copy, and its library did not
+contain the original, so the consequence was never exercised. The original is now recorded on either
+answer, and the case drives the whole save, hands the batch flow the original, the copy and one other
+video, and checks what an automatic selection does with each. The same read found the launch
+placeholder leaving the screen one line before the expensive part it exists to cover (the session's
+own initialisers run while the root view is built), which is fixed by moving the removal after the
+host's view is added; a give-up log that stated a verdict rather than the observation it had; and that
+the one sentence written for a stuck user was the only string in three rounds of VoiceOver work that
+nothing announced, which now posts an announcement when it appears.

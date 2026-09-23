@@ -229,19 +229,23 @@ import Photos
                 // can still be chosen by hand.
                 if let created {
                     history.recordCreatedCopy(identifier: created)
-                    // Photos answered, so the question the note above stood for is answered with it.
-                    if let originalIdentifier { history.clearUnconfirmedSave(identifier: originalIdentifier) }
-                } else if let originalIdentifier {
-                    // Photos finished the transaction without handing an identifier back, so the copy
-                    // is real and this app cannot name it - which is why the note is not left standing
-                    // here. The screen is about to say a copy was saved, and the note would ask the
-                    // user whether one was made. What the original needs is the one thing the app can
-                    // say about it honestly: it has been shrunk, so no automatic selection may run it
-                    // again. The copy itself stays unnameable, and that is the whole of the loss.
+                }
+                // And the original is one this iPhone has shrunk, whichever way Photos answered: a
+                // copy of it exists, so an automatic selection must leave it alone or the next batch
+                // it appears in makes a *second* copy of a video that already has a smaller one. It
+                // is the same fact the batch flow writes for its own saves, and the two flows have to
+                // agree about it or the same library behaves differently depending on which one shrank
+                // a video. A hand tick still re-runs it, which is the route every video left out of a
+                // bulk selection has.
+                if let originalIdentifier {
                     let measurement = CopyMeasurement(bitsPerSecond: checked.duration > 0
                                                       ? Double(checked.bytes) * 8 / checked.duration : 0,
                                                       longEdge: checked.longEdge)
                     history.record(identifier: originalIdentifier, measurement: measurement)
+                    // The note the save wrote before it asked is answered either way: a copy Photos
+                    // named is written down as this app's own, and a transaction Photos finished
+                    // without naming one is a copy this app cannot name - but neither is a question
+                    // any more, which is why the entry goes.
                     history.clearUnconfirmedSave(identifier: originalIdentifier)
                 }
                 output = checked

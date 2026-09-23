@@ -1074,12 +1074,18 @@ import UIKit
         XCTAssertEqual(fixture.batch.phase, .start)
     }
 
-    /// The one-video flow saved a copy and dropped the identifier Photos returned, and it had no
-    /// history store at all, so only the batch flow ever called `recordCreatedCopy`. The created-copy
-    /// set is the only thing `selectableAssets` filters on, so the next batch run's "Select all"
-    /// could pick up a copy this app had just made and shrink it again - the exact thing the
-    /// copy-exclusion work exists to prevent. This drives the whole one-video save against a real
-    /// store, then hands the batch flow a library containing the copy.
+    /// What one confirmed save in the one-video flow leaves behind, and what the batch flow does with
+    /// it.
+    ///
+    /// Two facts go into the shared store, and each has its own history of being missed. The copy's
+    /// identifier was dropped first: the flow had no store at all, so only the batch flow ever called
+    /// `recordCreatedCopy`, and the next "Select all" could pick up a copy this app had just made and
+    /// shrink it again. The original was the second: it was never marked as one this iPhone had
+    /// shrunk, so the batch flow would tick *it* and make a second copy of a video that already had a
+    /// smaller one - while the batch flow's own saves did mark it, and so did the one-video flow's
+    /// branch for a transaction Photos finished without naming the copy. This case drives the whole
+    /// save against a real store, then hands the batch flow a library holding the original, the copy
+    /// and one other video, and checks what an automatic selection does with each.
     func testACopyTheOneVideoFlowSavesIsRecordedAsThisAppsOwn() async throws {
         let name = "videoshrink.services.\(UUID().uuidString)"
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
@@ -1100,17 +1106,28 @@ import UIKit
         // later bulk selection reads.
         let copy = try XCTUnwrap(oneVideo.photos.createdIdentifiers.last)
         XCTAssertEqual(store.createdCopyIdentifiers(), [copy])
-        XCTAssertTrue(store.completedIdentifiers().isEmpty,
-                      "A copy this app made is not an original that was shrunk")
+        // And the *original* is written down as one this iPhone has shrunk, in the set the batch flow
+        // reads for exactly that. The copy never enters it: that set means "an original was shrunk",
+        // and the copy is not an original - it stays visible and can still be ticked by hand.
+        XCTAssertEqual(store.completedIdentifiers(), ["original"],
+                       "A copy of this original exists, so no automatic selection may run it again")
+        XCTAssertFalse(store.completedIdentifiers().contains(copy),
+                       "A copy this app made is not an original that was shrunk")
 
-        // And the batch flow, reading the same memory, offers everything except that copy.
-        let batchFixture = ServiceFixture(assets: [serviceAsset(copy, bytes: 20_000_000),
+        // The consequence, through the flow that reads the memory: a batch selection is offered
+        // everything except the copy *and* the original it came from. Without the original's mark
+        // this was the second copy the whole area exists to prevent - Select all would tick it and
+        // shrink an already-shrunk video all over again.
+        let batchFixture = ServiceFixture(assets: [serviceAsset("original", bytes: 20_000_000),
+                                                   serviceAsset(copy, bytes: 20_000_000),
                                                    serviceAsset("other", bytes: 20_000_000)])
         batchFixture.history.copies = store.createdCopyIdentifiers()
+        batchFixture.history.identifiers = store.completedIdentifiers()
         await scan(batchFixture)
-        XCTAssertEqual(batchFixture.batch.eligibleAssets.map(\.id), [copy, "other"],
-                       "The copy stays in the library and can still be ticked by hand")
-        XCTAssertEqual(batchFixture.batch.selectableAssets.map(\.id), ["other"])
+        XCTAssertEqual(batchFixture.batch.eligibleAssets.map(\.id), ["original", copy, "other"],
+                       "Both stay in the library and can still be ticked by hand")
+        XCTAssertEqual(batchFixture.batch.selectableAssets.map(\.id), ["other"],
+                       "Neither this app's copy nor the original it came from is picked automatically")
     }
 
     /// A save is the one step whose outcome the app cannot recover from not knowing, and this flow

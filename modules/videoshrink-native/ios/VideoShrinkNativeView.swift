@@ -73,6 +73,11 @@ final class VideoShrinkNativeView: ExpoView {
   private var host: UIHostingController<ContentView>?
   /// How many times the attach has been retried before this view says so out loud.
   private var attachAttempts = 0
+  /// True while a retry is already waiting to run, so a burst of layout passes cannot spend the
+  /// budget faster than the clock does: `layoutSubviews` can fire many times in the first frame or
+  /// two, and one retry per layout pass would burn twenty attempts in milliseconds and tell a user
+  /// the app could not start moments before it does.
+  private var retryScheduled = false
   /// Twenty tries at 50ms apart is one second, which is far longer than the hop that finds the
   /// controller in an ordinary hierarchy and short enough that a user who is stuck is told soon.
   private static let attachAttemptLimit = 20
@@ -130,7 +135,6 @@ final class VideoShrinkNativeView: ExpoView {
       retryAttach()
       return
     }
-    placeholder.removeFromSuperview()
     // A later detach and re-attach starts its own count: the retries are for finding the controller
     // the first time, not a budget the view spends once for the life of the process.
     attachAttempts = 0
@@ -143,6 +147,12 @@ final class VideoShrinkNativeView: ExpoView {
     controller.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
     addSubview(controller.view)
     controller.didMove(toParent: parent)
+    // The label goes *after* the host's view is in the hierarchy, not before it is built: building
+    // the root view is the first touch of the session's statics, and their initialisers are where the
+    // main-actor work runs - the workspace sweep, the adopted save notes, the queue restore with one
+    // Photos revalidation per saved item. Removing the words before that would leave the screen blank
+    // for exactly the slow part this label exists to cover.
+    placeholder.removeFromSuperview()
   }
 
   /// Looks again shortly, and gives up out loud rather than silently.
@@ -154,12 +164,19 @@ final class VideoShrinkNativeView: ExpoView {
     guard attachAttempts < Self.attachAttemptLimit else {
       if placeholder.text != Self.couldNotStart {
         placeholder.text = Self.couldNotStart
-        log.error("The SwiftUI host could not be attached: no parent view controller was found")
+        // The observation, not a verdict: a controller arriving later still attaches, and this view
+        // is reachable again from the next layout pass. The sentence on screen is the one a user
+        // needs; this line is what a log should say.
+        log.error("No parent view controller was found for the SwiftUI host after 20 looks over about a second")
+        UIAccessibility.post(notification: .announcement, argument: Self.couldNotStart)
       }
       return
     }
+    guard !retryScheduled else { return }
+    retryScheduled = true
     attachAttempts += 1
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+      self?.retryScheduled = false
       self?.attachHostIfNeeded()
     }
   }
