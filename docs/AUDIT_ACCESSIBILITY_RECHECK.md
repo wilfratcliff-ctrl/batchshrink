@@ -30,6 +30,21 @@ only place that records status. Read the code before acting on a line.
 
 ## Findings
 
+**What has happened to each finding since it was written.** The sections below are the audit as it
+was performed, against `ba87842` (round 23); this table is the map, because some of them were fixed
+in the two rounds that followed and two are deliberately still open.
+
+| ID | Status |
+|----|--------|
+| AX1 | **Fixed in round 24.** The sentence now says what the app does: nothing could be restored, nothing in Photos was changed, the record stays where it is, and the notice comes back until a run writes one of its own. The code half named here (moving the file aside) was refused on purpose - a version this build cannot read may belong to a *newer* build, and moving or clearing it would lose that run |
+| AX2 | **Fixed in round 24**, as `BatchProcessingScreen.processingSubhead`, which counts the copies the run can account for and names the rest in the paused screen's own words |
+| AX3 | **Open, deliberately.** Every fix runs into a documented decision: `live()` passing the state through is what lets `BatchFinishedRow.savingDisplay` explain it rather than draw a negative figure, and the row's own words (its comment and `symbol`) are built on the same state. Clamping in `live()` would fix the headline and make all of that unreachable, and clamping in the summary would put "No copies were saved." above a row beginning "Saved ·". It needs one round that decides which of the three keeps the state, for a record only a file this app did not write can hold. See `Q3` in `AGENT_LOOP.md` |
+| AX4 | **Fixed in round 25**: `BatchFinishedScreen.overflowHint(_:)` names exactly what the menu holds, from the same list that decides the trigger and its contents, with a case pinning all six shapes |
+| AX5 | **Fixed in round 25**, with one helper rather than seven ternaries: `ShrinkFormat.counted(_:_:_:)` now carries the singular at the seven sites this finding named, plus two more of the same class it did not (`1 aren't measured yet`, `1 aren't supported yet`) |
+| AX6 | **Open with `Q1`.** The heading is the heading half of `Q1`'s own proposed fix - one set for automatic selection, and a sentence chosen by the finding - and both halves need the state `Q1` records as unreachable from any shipped build. Latent, and recorded rather than patched |
+| AX7 | **Fixed in round 25**: the notice's heading now names which finding it is ("No videos to shrink" or "No videos BatchShrink can use") instead of repeating the summary's headline word for word |
+| AX8 | **Fixed in round 25**: the estimate card is one accessibility element (the same pairing `A3` made in the quality sheet), and the card's stage text leaves the accessibility tree, where the orb and the bar already say it |
+
 ### AX1 — [P2] The unreadable-record notice says the app set the record aside, and nothing does
 `VideoShrink/Presentation/BatchViewModel.swift:1820-1822` builds
 `"BatchShrink has set it aside, and nothing about the library was changed by this launch. If you had a run going, look in Photos before running the same videos again."`

@@ -214,7 +214,13 @@ struct BatchEmptyNotice: View {
     /// the ones it is allowed rather than none at all.
     let limitedAccess: Bool
 
-    var title: String { "Nothing to shrink yet" }
+    /// The notice's own heading, which used to repeat the summary's headline word for word - the
+    /// screen said "Nothing to shrink yet" twice with only "0 videos in your Photos library." between
+    /// them. It now names which of the two findings this is: the library holds no videos, or every
+    /// video in it is one BatchShrink cannot use. The detail below carries the difference either way.
+    var title: String {
+        result.videoCount == 0 ? "No videos to shrink" : "No videos BatchShrink can use"
+    }
 
     var detail: String {
         guard result.videoCount == 0 else {
@@ -352,7 +358,7 @@ struct BatchSummaryScreen: View {
                     .foregroundStyle(ShrinkStyle.accent)
                 ShrinkStat(value: EstimateCopy.noSavingHeadline,
                            label: "at this quality",
-                           detail: "Estimated for \(estimate.sizedCount.formatted()) of \(result.assets.count.formatted()) videos")
+                           detail: "Estimated for \(estimate.sizedCount.formatted()) of \(ShrinkFormat.counted(result.assets.count, "video", "videos"))")
                 Divider()
                 Text(EstimateCopy.noSavingNote)
                     .font(.footnote).foregroundStyle(.secondary)
@@ -369,7 +375,7 @@ struct BatchSummaryScreen: View {
                 ShrinkStat(value: ShrinkFormat.byteRange(low: estimate.conservativeBytes,
                                                          high: estimate.optimisticBytes),
                            label: "potentially smaller",
-                           detail: "Estimated for \(estimate.sizedCount.formatted()) of \(result.assets.count.formatted()) videos")
+                           detail: "Estimated for \(estimate.sizedCount.formatted()) of \(ShrinkFormat.counted(result.assets.count, "video", "videos"))")
                 Divider()
                 // Both rows describe the same videos: the originals a copy is expected for, and the
                 // copies. A video the estimate expects to skip has no copy, and pairing its original
@@ -393,12 +399,14 @@ struct BatchSummaryScreen: View {
 
     @ViewBuilder private func notices(result: LibraryScanResult) -> some View {
         if result.unknownSizeCount > 0 {
-            Text("\(result.unknownSizeCount) aren’t measured yet, so they’re not in the estimate.")
+            Text(result.unknownSizeCount == 1
+                 ? "1 isn’t measured yet, so it’s not in the estimate."
+                 : "\(result.unknownSizeCount) aren’t measured yet, so they’re not in the estimate.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
         if result.unsupportedCount > 0 {
-            Text("\(result.unsupportedCount) aren't supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself: the scan reads the ones already on your iPhone, and the videos you pick are read again before a run starts. A video still in iCloud is only read once the run opens it, so one of those can still turn out to be unsupported.")
+            Text("\(ShrinkFormat.counted(result.unsupportedCount, "isn't", "aren't")) supported yet: Live Photos, time-lapse, spatial, slow-motion, edited, cinematic, shared or restricted, HDR and ProRes videos. HDR and ProRes are read from the video itself: the scan reads the ones already on your iPhone, and the videos you pick are read again before a run starts. A video still in iCloud is only read once the run opens it, so one of those can still turn out to be unsupported.")
                 .font(.footnote).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -422,8 +430,12 @@ struct BatchSummaryScreen: View {
             }
             return "Planning band \(detail), \(scaling)."
         case .measured(let samples, _):
-            guard let scaling else { return "From \(samples) copies measured on this iPhone." }
-            return "From \(samples) copies measured on this iPhone, \(scaling)."
+            guard let scaling else {
+                return "From " + ShrinkFormat.counted(samples, "copy", "copies")
+                    + " measured on this iPhone."
+            }
+            return "From " + ShrinkFormat.counted(samples, "copy", "copies")
+                + " measured on this iPhone, \(scaling)."
         }
     }
 }
@@ -566,7 +578,7 @@ struct BatchSelectionScreen: View {
             Text("Make room.").font(ShrinkStyle.headline).tracking(-1)
                 .fixedSize(horizontal: false, vertical: true)
                 .accessibilityAddTraits(.isHeader)
-            Text("\(batch.eligibleAssets.count) videos to explore")
+            Text(ShrinkFormat.counted(batch.eligibleAssets.count, "video to explore", "videos to explore"))
                 .font(.subheadline).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1032,6 +1044,10 @@ struct BatchProcessingScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
         }
+        // The figure and the line under it are one statement - how long is left, and what it is based
+        // on - and VoiceOver read them as two unrelated elements. This is the same pairing `A3` fixed
+        // in the quality sheet, in the card that carries the app's only time estimate.
+        .accessibilityElement(children: .combine)
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(24).shrinkCard()
     }
@@ -1048,6 +1064,11 @@ struct BatchProcessingScreen: View {
                         Text("Video \(number) of \(batch.items.count)")
                             .font(.subheadline.weight(.semibold))
                         Text(batch.currentStage?.title ?? "Working").font(.headline)
+                            // The orb above says the stage and the percentage, and the bar under this
+                            // card says both again; this line is the third statement of the stage for
+                            // anyone listening, and the same treatment the percentage text under the
+                            // bar already gets. It stays on screen.
+                            .accessibilityHidden(true)
                         Text(detail(asset))
                             .font(.footnote).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -1370,6 +1391,9 @@ struct BatchPausedScreen: View {
                 ? "1 original has already been deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals have already been deleted. They sit in Recently Deleted for 30 days."
         }
+        if report.uncertain == 1 {
+            return "1 original may already have been deleted. Check Photos before running it again."
+        }
         if report.uncertain > 0 {
             return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
         }
@@ -1396,7 +1420,7 @@ struct BatchPausedScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("\(batch.remainingCount) videos left")
+                    Text(ShrinkFormat.counted(batch.remainingCount, "video left", "videos left"))
                         .font(.system(.title, design: .default, weight: .bold))
                         .fixedSize(horizontal: false, vertical: true)
                     if let estimate = batch.remainingEstimate {
@@ -1583,7 +1607,10 @@ struct BatchFinishedScreen: View {
                 switch extra {
                 case .deleteOriginals:
                     // The destructive role is what the menu has instead of the bar's orange text.
-                    Button(batch.deletionInProgress ? "Deleting…" : "Delete \(batch.deletableItemIDs.count) originals",
+                    Button(batch.deletionInProgress
+                           ? "Deleting…"
+                           : "Delete " + ShrinkFormat.counted(batch.deletableItemIDs.count,
+                                                             "original", "originals"),
                            role: .destructive) {
                         confirmDeletion = true
                     }
@@ -1600,7 +1627,29 @@ struct BatchFinishedScreen: View {
                 .font(.subheadline.weight(.medium))
                 .frame(minWidth: 44, minHeight: 44)
         }
-        .accessibilityHint("Delete originals, try the failed ones again, or run the ones you checked.")
+        .accessibilityHint(Self.overflowHint(extras))
+    }
+
+    /// What the overflow menu holds, named in the order it draws them.
+    ///
+    /// The hint named all three actions whatever the menu contained - a run with only failures read a
+    /// hint promising a Delete that was not behind the trigger - while the trigger's presence and its
+    /// contents already came from one list. This is that list, read the same way.
+    static func overflowHint(_ extras: [Extra]) -> String {
+        let names = extras.map { extra in
+            switch extra {
+            case .deleteOriginals: return "delete the originals that have copies"
+            case .retryFailed: return "try the failed ones again"
+            case .requeueUncertain: return "run the ones you checked in Photos"
+            }
+        }
+        // The trigger is only drawn when there is something behind it, so an empty list cannot reach
+        // a screen; an empty hint is what it would say if it could, rather than naming an action.
+        guard let last = names.last else { return "" }
+        let listed = names.count == 1
+            ? names[0]
+            : names.dropLast().joined(separator: ", ") + ", or " + last
+        return listed.prefix(1).uppercased() + String(listed.dropFirst()) + "."
     }
 
     /// What the finished screen can still do beyond the two controls on its bar, in the order they
@@ -1666,9 +1715,13 @@ struct BatchFinishedScreen: View {
         let report = batch.readBackReport
         let saved = batch.summary.savedCount
         if report.unavailable == 0 {
-            return saved == report.confirmed
-                ? "All \(saved) copies confirmed in Photos."
-                : "\(report.confirmed) of \(saved) confirmed so far."
+            // One copy is "the copy", not "all 1 copies": the read-back line is drawn whenever a copy
+            // was saved, and a single-video run is the commonest run there is.
+            guard saved == report.confirmed else {
+                return "\(report.confirmed) of \(saved) confirmed so far."
+            }
+            return saved == 1 ? "The copy is confirmed in Photos."
+                              : "All \(saved) copies confirmed in Photos."
         }
         return "\(report.confirmed) confirmed · \(report.unavailable) not readable yet."
     }
@@ -1703,6 +1756,9 @@ struct BatchFinishedScreen: View {
             return report.deleted == 1
                 ? "1 original deleted. It sits in Recently Deleted for 30 days."
                 : "\(report.deleted) originals deleted. They sit in Recently Deleted for 30 days."
+        }
+        if report.uncertain == 1 {
+            return "1 original may already have been deleted. Check Photos before running it again."
         }
         if report.uncertain > 0 {
             return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."

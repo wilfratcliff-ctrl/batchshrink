@@ -474,6 +474,63 @@ import SwiftUI
         XCTAssertTrue(many.contains("Tick one by hand"))
     }
 
+    /// A count and its noun, where a single video is the commonest run there is.
+    ///
+    /// The screens wrote "1 videos to explore", "1 videos left" and "Delete 1 originals": each count
+    /// was right and each sentence wrong, and each was reachable with one video in the library.
+    func testTheCountHelperUsesTheSingularWhereTheCountIsOne() {
+        XCTAssertEqual(ShrinkFormat.counted(1, "video", "videos"), "1 video")
+        XCTAssertEqual(ShrinkFormat.counted(0, "video", "videos"), "0 videos")
+        XCTAssertEqual(ShrinkFormat.counted(2, "video", "videos"), "2 videos")
+        XCTAssertEqual(ShrinkFormat.counted(1, "original", "originals"), "1 original")
+    }
+
+    /// And the two sentences the audit named, which are static so a case can state them.
+    func testTheEmptyStatesAndTheUncertainDeletionCountNameTheirOwnNumber() {
+        let empty = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0,
+                                      unknownSizeCount: 0, sizeSource: .reportedByPhotos,
+                                      measuredOnDeviceCount: 0)
+        // The summary screen's headline already says "Nothing to shrink yet." for this state, and the
+        // notice under it used to repeat it word for word. Each now names its own finding.
+        XCTAssertEqual(BatchEmptyNotice(result: empty, limitedAccess: false).title, "No videos to shrink")
+        XCTAssertEqual(BatchEmptyNotice(result: empty, limitedAccess: true).title, "No videos to shrink")
+        // The other empty state: a library whose videos are all ones this app cannot use, which the
+        // notice has to name as itself rather than as an empty library.
+        let unusable = LibraryScanResult(assets: [], videoCount: 3, unsupportedCount: 3,
+                                         unknownSizeCount: 0, sizeSource: .reportedByPhotos,
+                                         measuredOnDeviceCount: 0)
+        XCTAssertEqual(BatchEmptyNotice(result: unusable, limitedAccess: false).title,
+                       "No videos BatchShrink can use")
+
+        var one = DeletionReport()
+        one.uncertain = 1
+        XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(one),
+                       "1 original may already have been deleted. Check Photos before running it again.")
+        var two = DeletionReport()
+        two.uncertain = 2
+        XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(two),
+                       "2 originals may already have been deleted. Check Photos before running those again.")
+    }
+
+    /// The overflow control's hint names what is actually behind it.
+    ///
+    /// It named all three actions whatever the menu held, so a run with only failures read a hint
+    /// promising a Delete that was not there. The list already decided the trigger's contents.
+    func testTheOverflowHintNamesOnlyWhatTheMenuHolds() {
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([]), "")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.retryFailed]),
+                       "Try the failed ones again.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.requeueUncertain]),
+                       "Run the ones you checked in Photos.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.deleteOriginals]),
+                       "Delete the originals that have copies.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.deleteOriginals, .retryFailed,
+                                                        .requeueUncertain]),
+                       "Delete the originals that have copies, try the failed ones again, or run the ones you checked in Photos.")
+        XCTAssertEqual(BatchFinishedScreen.overflowHint([.retryFailed, .requeueUncertain]),
+                       "Try the failed ones again, or run the ones you checked in Photos.")
+    }
+
     func testAnErrorPhotosReportsAfterASaveIsNotAFailureEither() async {
         // A change transaction that fails in Photos' own vocabulary is the error the app cannot
         // place, and it arrives after Photos was handed the copy: the copy may be in the library

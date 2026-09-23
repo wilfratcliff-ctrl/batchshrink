@@ -387,6 +387,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
 | 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
 | 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 402 tests, none executed |
+| 25 | see below | The count, the menu hint and the two empty states say what they mean, with one helper instead of seven ternaries | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -820,6 +821,7 @@ rather than trusting the revision it was written against.
 |----|----------|------|--------|
 | Q1 | 3 | **A video the app has *concluded* has a copy would be reachable by Select all again.** `unaccountedIdentifiers` holds only an *open* question, and the app's own answer to one - `.copyInPhotos` - both keeps the video out of that set and records only the **copy's** identifier (`rememberCreatedCopy`), never the original's. An item that keeps that conclusion without settling into `.saved` (a receipt with no measured sizes, which `resolveMidSaveItems` refuses to claim) would leave the **original** in `selectableAssets` | **open, and an independent read that doubted the reachability was checked against the code that writes the receipt.** The reviewer argued from field dates - `copyEvidence` arrived in round 1, `attemptedSave` in round 6 - that a build in between could leave that shape. The writer settles it the other way: rounds 1 and 5 both persist `.saved` **before** `confirmReadBack` writes the receipt, so a `.saving` record on disk never carried one, and the repo's own `LegacyMidSaveQueue` fixture asserts exactly that (`copyEvidence: nil`). Rounds 6 and later write the identity and the sizes in the same checkpoint. So the door needs a hand-edited or corrupt file, which is why this is 3 rather than 2 - and the fix is unchanged: one set to decide automatic selection, and a third card sentence for "the copy is there", so a video the app has *concluded* about is not named with a sentence about not being able to tell |
 | Q2 | 3 | The `.choosing -> .cancelled` edge in `PipelineStage.allows` now has no caller, after SV5 moved picker cancellation to `.idle` | open, and a decision rather than a fix: it is the only move into `.cancelled` from a stage `canCancel` is false for, and pruning it is the riskier edit of the two |
+| Q3 | 3 | `AX3`: a stored `.saved` whose copy is *not smaller* is passed through by `BatchQueueReconciliation.live`, so the finished screen can say "One video, lighter." and "1 smaller copy in Photos." over a row whose own words are "its recorded size is not smaller than the original" | **open, and the fix is a decision, not a patch.** Only a queue file this app did not write can hold that state (`live()` is the reader round 19's `E8` named as the better place, and `BatchFinishedRow.savingDisplay` exists to explain it rather than draw a negative figure). Clamping in `live()` fixes the headline and makes the row's explanation, its comment and its `symbol` unreachable; clamping in the summary puts "No copies were saved." directly above a row beginning "Saved ·". One round has to choose which of the three keeps the state - and it is worth choosing only because a *second* reader of that record has now appeared |
 
 ### Round 24's audit — the accessibility wave, re-read after four rounds of UI changes
 
@@ -1264,3 +1266,44 @@ recording the original instead of raising a question; the batch excluding and na
 tick by hand, the "I checked Photos" tap and a settling look each dropping the entry; the queue's
 more specific question winning over the adopted one, and a scan not writing over it; and the working
 screen's count naming what is still a question. **None of it has been compiled.**
+
+### Round 25 — the sentences a single-video library reads
+
+The accessibility recheck round 24 produced had eight findings and two were fixed with it. This round
+takes four of the remaining six, all of them the class this project keeps finding: a sentence that is
+right for the usual case and wrong for a reachable one.
+
+`AX5` was the cluster. Seven screens wrote a count with no singular form - "1 videos to explore",
+"1 videos left", "Delete 1 originals", "All 1 copies confirmed", "1 original may already have been
+deleted" - and one video is the commonest library there is, so these are not corner cases; they are
+what a person with one video reads first. The fix is one helper, `ShrinkFormat.counted(_:_:_:)`, with
+the noun passed in so each screen still owns its own words, rather than a ternary at every site. Two
+more of the same class turned up while applying it and are fixed with it: "1 aren't measured yet" and
+"1 aren't supported yet".
+
+`AX4`: the finished screen's overflow hint named all three actions whatever the menu held, so a run
+with only failures read a hint promising a Delete that was not behind the trigger. The trigger's
+presence and its contents already came from one list; the hint now does too, with a case pinning all
+six shapes. `AX7`: a fresh install with an empty library was told "Nothing to shrink yet" twice, once
+by the summary's headline and once by the notice below it, with "0 videos in your Photos library."
+between them; each now names its own finding. `AX8`: the working screen's estimate figure and the line
+explaining it were two unrelated elements to VoiceOver, and the stage was announced three times - the
+card is now one element (the same pairing `A3` made in the quality sheet) and the card's repeated
+stage text leaves the accessibility tree, exactly as the percentage text beside it already did.
+
+**Two findings were left open on purpose, and the reasoning matters more than the patch.** `AX3` - a
+stored save whose copy is *not smaller* being counted as a lighter video by the headline while its own
+row says the opposite - cannot be fixed at one end without contradicting another: `live()` passing the
+state through is what lets the row explain it rather than draw a negative figure, and clamping in the
+summary would put "No copies were saved." directly above a row beginning "Saved ·". That is now `Q3`,
+for a round that decides which of the three keeps the state, for a record only a file this app did not
+write can hold. `AX6` belongs with `Q1` - it is the heading half of that fix.
+
+`AX8`'s two changes are view structure, and this suite has no view harness: nothing here pins them, and
+the round says so rather than implying a test covers the reading order. The count helper, the overflow
+hint and the two empty-state headings **are** pinned, by three new cases.
+
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 405
+XCTest cases present), the call-site checker PASS over 52 files, 1,233 declarations and 8,014 call
+sites with 0 findings, `npm run typecheck` clean, the pod mirror verified, and `prove:guardrails` 70
+of 70 caught across four gates. **None of it has been compiled.**
