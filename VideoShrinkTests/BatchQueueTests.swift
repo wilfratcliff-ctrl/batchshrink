@@ -1,5 +1,6 @@
 import XCTest
 import AVFoundation
+import Photos
 @testable import VideoShrink
 
 @MainActor final class BatchQueueTests: XCTestCase {
@@ -281,6 +282,33 @@ import AVFoundation
         // What Photos would have said cannot stand in for a receipt that names the copy.
         XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
         XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    func testAQueueWrittenAfterAPhotosSaveErrorIsStillAQuestion() {
+        // The queue a save Photos did not confirm leaves behind: written as `.needsCheck` rather
+        // than left as the `.saving` checkpoint, with the sizes the run measured and no receipt,
+        // because the failed save never handed an asset identifier back. A launch reads it as the
+        // same question a mid-save stop leaves, and nothing it can do runs the video again.
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a", recordedCopy: false, state: .needsCheck)
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.needsCheck)
+        XCTAssertEqual(relaunched.summary.needsCheckCount, 1)
+        XCTAssertEqual(relaunched.summary.failedCount, 0)
+        XCTAssertFalse(relaunched.hasPendingWork,
+                       "a copy that may already exist is never waiting to be run again")
+        // Neither route the screens offer for failures and for pending work can pick it up on its
+        // own. Only the user's own "I checked Photos" does.
+        relaunched.retryFailed()
+        relaunched.resume()
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.needsCheck)
     }
 
     func testAMidSaveRecordThatClaimsAReadBackStillKeepsTheOriginal() async {
@@ -604,6 +632,74 @@ import AVFoundation
         XCTAssertFalse(batch.restoredRun)
     }
 
+    // MARK: - A run that comes back from disk with its access withdrawn
+
+    func testARestoredRunWhoseAccessIsWithdrawnIsToldAccessIsGone() {
+        // A run that stopped mid-way with a video still waiting, picked up from disk on the next
+        // launch: it rests on the paused screen with work left to do.
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        fixture.store.stored = BatchQueueRecord(
+            settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                frameRate: FrameRateOption.original.rawValue),
+            items: [item("a", .saved(originalBytes: 1_000, copyBytes: 600)),
+                    item("b", .pending)])
+        let status = QueueAccessBox(.authorized)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let relaunched = fixture.makeBatch(monitor: monitor, authorizationStatus: { status.value })
+        XCTAssertTrue(relaunched.restoredRun)
+        XCTAssertEqual(relaunched.phase, .paused)
+        XCTAssertTrue(relaunched.hasPendingWork)
+
+        // Photos access is withdrawn while the app is away, and the app comes back to the front.
+        status.value = .denied
+        monitor.enteredForeground()
+
+        // The honest answer is that access is gone, said once, in the sentence that names the route
+        // back. It is deliberately not `assetUnavailable`'s sentence about a video sitting outside
+        // the allowed set, which is what each waiting video would have failed with had the run gone
+        // on to try them one by one.
+        XCTAssertEqual(relaunched.phase, .failed)
+        XCTAssertEqual(relaunched.accessBlock, .refused)
+        XCTAssertEqual(relaunched.message, PipelineError.refusedAccess)
+        XCTAssertNotEqual(relaunched.message, PipelineError.assetUnavailable.localizedDescription)
+        // Nothing about the run was rewritten or torn down on the way: its record keeps the video
+        // it saved and the one still waiting, and no Photos work was attempted for either.
+        XCTAssertEqual(relaunched.items.map(\.state),
+                       [.saved(Savings(originalBytes: 1_000, compressedBytes: 600)), .pending])
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+    }
+
+    func testAnAccessReportDoesNotTearDownARunThatIsStillWorking() async {
+        // The exception this round must not weaken: an access report never tears down work that is
+        // actually in flight, however it is answered for the flow's resting places.
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        let status = QueueAccessBox(.authorized)
+        let monitor = LibraryChangeMonitor(authorizationStatus: { status.value })
+        let batch = fixture.makeBatch(monitor: monitor, authorizationStatus: { status.value })
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.selectAll()
+        fixture.transcoder.hold = true
+        batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+        XCTAssertEqual(batch.phase, .processing)
+
+        // Photos access is withdrawn while the run is working on a video.
+        status.value = .denied
+        monitor.enteredForeground()
+
+        // The run keeps the screen and its own record of what happened to each video.
+        XCTAssertEqual(batch.phase, .processing)
+        XCTAssertNil(batch.accessBlock)
+        XCTAssertNil(batch.message)
+
+        // And it finishes the work it was given rather than being stopped by the report.
+        fixture.transcoder.hold = false
+        fixture.transcoder.release()
+        await eventually { batch.phase == .finished }
+        XCTAssertEqual(batch.summary.savedCount, 2)
+    }
+
     private func item(_ id: String, _ state: BatchQueueRecord.State) -> BatchQueueRecord.Item {
         BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
                               pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000, state: state)
@@ -685,10 +781,11 @@ private func deletionCandidateRecord(_ id: String) -> BatchQueueRecord {
 private func midSaveRecord(_ id: String,
                            savings: Savings? = Savings(originalBytes: 1_000, compressedBytes: 600),
                            recordedCopy: Bool = true,
-                           readBack: CopyReadBack? = nil) -> BatchQueueRecord {
+                           readBack: CopyReadBack? = nil,
+                           state: BatchQueueRecord.State = .saving) -> BatchQueueRecord {
     var item = BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
                                      pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000,
-                                     state: .saving)
+                                     state: state)
     item.readBack = readBack
     item.copyEvidence = recordedCopy ? copyReceipt(for: id) : nil
     item.attemptedSave = savings.map { AttemptedSave($0) }
@@ -874,13 +971,18 @@ private var preflightHDRReason: String {
 
 @MainActor private final class QueueMockTranscoder: VideoTranscoding {
     var written = URL(fileURLWithPath: "/queue-root/output.mov")
+    /// Holds a transcode, so a test can look at a run while one video is really in flight.
+    var hold = false
+    var gate: CheckedContinuation<Void, Never>?
 
     func transcode(_ source: RetrievedVideo, metadata: VideoMetadata, settings: TranscodeSettings,
                    progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         progress(1)
+        if hold { await withCheckedContinuation { gate = $0 } }
         return written
     }
 
+    func release() { gate?.resume(); gate = nil }
     func cancel() {}
 }
 
@@ -944,9 +1046,28 @@ private final class QueueMockVerifier: VideoVerifying {
 
     init(assets: [LibraryAsset]) { self.assets = assets }
 
-    func makeBatch() -> BatchViewModel {
-        BatchViewModel(photos: photos, scanner: scanner, transcoder: transcoder, verifier: verifier,
-                       temporary: files, history: history, queueStore: store,
-                       screenAwake: screenAwake, settings: settings)
+    /// The model. It watches the real Photos library unless a test hands it a monitor it can drive,
+    /// and reads the running system's authorization status unless the test names one too - which is
+    /// the only way a test can put the flow somewhere access really has been withdrawn.
+    func makeBatch(monitor: LibraryChangeMonitor? = nil,
+                   authorizationStatus: (() -> PHAuthorizationStatus)? = nil) -> BatchViewModel {
+        let status: () -> PHAuthorizationStatus
+        if let authorizationStatus {
+            status = authorizationStatus
+        } else {
+            status = { PHPhotoLibrary.authorizationStatus(for: .readWrite) }
+        }
+        return BatchViewModel(photos: photos, scanner: scanner, transcoder: transcoder,
+                              verifier: verifier, temporary: files, history: history,
+                              queueStore: store, screenAwake: screenAwake,
+                              libraryChanges: monitor,
+                              settings: settings,
+                              authorizationStatus: status)
     }
+}
+
+/// Photos access a test can move, so the report the monitor makes can be driven without a library.
+private final class QueueAccessBox {
+    var value: PHAuthorizationStatus
+    init(_ value: PHAuthorizationStatus) { self.value = value }
 }

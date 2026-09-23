@@ -1,11 +1,13 @@
 import XCTest
 import Foundation
 import AVFoundation
+import Photos
 @testable import VideoShrink
 
 /// Cases for the pure decision-making the other suites leave alone: the savings model, the
 /// quality choices, the stored history and its bounds, the failure vocabulary, the queue's
-/// on-disk shape and the number formatting the interface shows.
+/// on-disk shape, the number formatting the interface shows, and the words the one-video flow
+/// fails in.
 ///
 /// Nothing here needs PhotoKit, AVFoundation media, a device or a real library: the inputs are
 /// plain values plus one temporary directory.
@@ -472,6 +474,119 @@ import AVFoundation
         XCTAssertEqual(Set(cases.map(\.errorDescription)).count, cases.count)
     }
 
+    // MARK: - A space refusal says what it asked for
+
+    /// The audit's finding: a storage refusal named no figure at all, so the one thing the user
+    /// needs in order to act - how much room this step wanted - was missing from the sentence.
+    func testASpaceRefusalStatesTheFigureTheStepAskedFor() {
+        let figure = DiskHeadroom.neededToWrite(3_000_000_000)
+        let sentence = PipelineError.insufficientStorageSentence(needed: figure)
+        XCTAssertTrue(sentence.contains(ShrinkFormat.bytes(figure)),
+                      "the figure the check asked for is what makes the refusal actionable")
+        XCTAssertTrue(sentence.contains(ShrinkFormat.bytes(DiskHeadroom.reserve)),
+                      "the working room inside that figure is named too, so a demand larger than the copy reads as a reason rather than a mystery")
+        XCTAssertTrue(sentence.contains("unchanged"), "a refusal that wrote nothing has to say so")
+        XCTAssertFalse(sentence.contains("PipelineError"))
+        XCTAssertNotEqual(sentence, PipelineError.insufficientStorage.localizedDescription,
+                          "a step that holds a figure never falls back to the sentence of one that does not")
+    }
+
+    /// Before a video has been measured - before a retrieval whose original may still be in iCloud
+    /// - the demand is the working reserve alone, and it is the same figure whatever follows it.
+    /// That sameness is the whole reason a run stops on it instead of failing every remaining
+    /// video with one repeated sentence.
+    func testTheDemandMadeBeforeAnyVideoIsMeasuredIsTheWorkingReserveAlone() {
+        let floor = DiskHeadroom.neededToWrite(nil)
+        XCTAssertEqual(floor, DiskHeadroom.reserve)
+        let sentence = PipelineError.insufficientStorageSentence(needed: floor)
+        XCTAssertTrue(sentence.contains(ShrinkFormat.bytes(floor)))
+        XCTAssertFalse(sentence.contains("the copy itself"),
+                       "nothing has measured a copy at that point, so the sentence must not name one")
+        XCTAssertNotEqual(sentence,
+                          PipelineError.insufficientStorageSentence(needed: DiskHeadroom.neededToWrite(3_000_000_000)))
+    }
+
+    /// The sentence a restored queue and a disk-full error from Photos still show. It names no
+    /// figure because nothing at that point holds one, and it stays specific about what to do.
+    func testTheSpaceRefusalWithoutAFigureStaysSpecificAboutWhatToDo() {
+        let coarse = PipelineError.insufficientStorage.localizedDescription
+        XCTAssertTrue(coarse.contains("free some space"))
+        XCTAssertTrue(coarse.contains("unchanged"))
+        XCTAssertFalse(coarse.contains(ShrinkFormat.bytes(DiskHeadroom.reserve)),
+                       "a figure here would be one the queue and Photos cannot back up")
+    }
+
+    // MARK: - The one-video flow's own failure wording
+
+    /// The batch flow learned in round 15 that a restriction is not a refusal. The one-video flow
+    /// did not, and sent a device held back by Screen Time or a device management profile to a
+    /// Photos switch that is not on this app's Settings page.
+    func testARestrictedDeviceIsNotSentToASwitchThatIsNotThere() async {
+        let refused = OneVideoFixture()
+        refused.photos.accessError = .permissionDenied
+        refused.model.chooseVideo()
+        await eventually { refused.model.stage == .failed }
+        XCTAssertEqual(refused.model.message, PipelineError.refusedAccess)
+
+        let restricted = OneVideoFixture(authorizationStatus: { .restricted })
+        restricted.photos.accessError = .permissionDenied
+        restricted.model.chooseVideo()
+        await eventually { restricted.model.stage == .failed }
+        XCTAssertEqual(restricted.model.message, PipelineError.restrictedAccess)
+        XCTAssertFalse((restricted.model.message ?? "").lowercased().contains("settings"),
+                       "a restricted device has no Photos switch to send anyone to")
+    }
+
+    /// A space refusal in the one-video flow states the figure the step asked for, and the figure
+    /// follows the step that refused rather than the last one that ran.
+    func testASpaceRefusalInTheOneVideoFlowStatesTheFigureTheRefusedStepAskedFor() async {
+        let floorRefused = OneVideoFixture()
+        floorRefused.files.capacityError = .insufficientStorage
+        await chooseVideo(floorRefused)
+        floorRefused.model.selected(identifier: "a")
+        await eventually { floorRefused.model.stage == .failed }
+        let floor = DiskHeadroom.neededToWrite(nil)
+        XCTAssertEqual(floorRefused.model.message, PipelineError.insufficientStorageSentence(needed: floor))
+        XCTAssertEqual(floorRefused.photos.retrieveCount, 0,
+                       "a refusal taken before retrieval never asks Photos for anything")
+
+        // The same flow with the floor check let through: the refusal that lands is the one taken
+        // after the video was measured, and the sentence names that step's own figure.
+        let copyRefused = OneVideoFixture()
+        copyRefused.verifier.inspectBytes = 3_000_000_000
+        copyRefused.files.refuseDemand = 2
+        copyRefused.files.capacityError = .insufficientStorage
+        await chooseVideo(copyRefused)
+        copyRefused.model.selected(identifier: "a")
+        await eventually { copyRefused.model.stage == .failed }
+        let copyRoom = DiskHeadroom.neededToWrite(3_000_000_000)
+        XCTAssertEqual(copyRefused.model.message, PipelineError.insufficientStorageSentence(needed: copyRoom))
+        XCTAssertNotEqual(copyRoom, floor)
+        XCTAssertEqual(copyRefused.photos.retrieveCount, 1)
+        XCTAssertEqual(copyRefused.photos.saveCount, 0)
+    }
+
+    /// The check the save makes on its own, which is the last place a run can be refused for room.
+    func testASpaceRefusalAtTheSaveStepNamesThatStepsOwnFigure() async {
+        let fixture = OneVideoFixture()
+        fixture.verifier.inspectBytes = 3_000_000_000
+        await chooseVideo(fixture)
+        fixture.model.selected(identifier: "a")
+        await eventually { fixture.model.stage == .readyToSave }
+
+        // The two checks before this one were let through, so the demand that refuses is the
+        // save's own and not one of theirs.
+        fixture.files.refuseDemand = 3
+        fixture.files.capacityError = .insufficientStorage
+        fixture.model.save()
+        await eventually { fixture.model.stage == .failed }
+
+        XCTAssertEqual(fixture.model.message,
+                       PipelineError.insufficientStorageSentence(needed: DiskHeadroom.neededToWrite(fixture.verifier.verifiedBytes)))
+        XCTAssertEqual(fixture.photos.saveCount, 0,
+                       "a refusal before the save never asks Photos to keep anything")
+    }
+
     // MARK: - One item, one row, one summary
 
     func testAFinishedVideoIsTheOneTheRunWillNotTouchAgain() {
@@ -736,6 +851,23 @@ import AVFoundation
         XCTAssertTrue(ShrinkFormat.byteRange(low: 900, high: 2_000_000).contains(" to "))
         XCTAssertEqual(ShrinkFormat.compactBytes(1_500_000_000), ShrinkFormat.bytes(1_500_000_000))
     }
+
+    // MARK: - Driving the one-video flow
+
+    /// Takes the flow as far as the picker, which is the state a chosen video is handed over from.
+    private func chooseVideo(_ fixture: OneVideoFixture) async {
+        fixture.model.chooseVideo()
+        await eventually { fixture.model.stage == .choosing }
+    }
+
+    private func eventually(_ predicate: () -> Bool, file: StaticString = #filePath,
+                            line: UInt = #line) async {
+        for _ in 0..<500 {
+            if predicate() { return }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        XCTFail("Timed out waiting for the pipeline", file: file, line: line)
+    }
 }
 
 // MARK: - Fixtures
@@ -750,4 +882,124 @@ private func coverageAsset(_ id: String, bytes: Int64?, duration: Double = 120,
 private func coverageQueueItem(_ id: String, bytes: Int64? = 1_000) -> BatchQueueRecord.Item {
     BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
                           pixelWidth: 1_920, pixelHeight: 1_080, bytes: bytes, state: .pending)
+}
+
+// MARK: - The one-video flow, without Photos or media
+
+/// The one-video view model, driven by fakes: no library, no media file and no device are
+/// involved, and the authorization status is the state a simulator cannot be put in.
+@MainActor private final class OneVideoFixture {
+    let photos = OneVideoMockPhotos()
+    let transcoder = OneVideoMockTranscoder()
+    let verifier = OneVideoMockVerifier()
+    let files = OneVideoMockFiles()
+    /// The Photos status the model reads for the one question a permission failure cannot answer
+    /// by itself: refused by the user, or restricted by something outside the app.
+    private let authorizationStatus: () -> PHAuthorizationStatus
+    let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
+                                  ?? .standard)
+    /// The one-video model writes the identifier of the copy Photos hands back to its device
+    /// memory, so a fixture without a store of its own would write into the machine's standard
+    /// defaults. Its own suite, like the other one-video fixtures.
+    let history = UserDefaultsShrinkHistoryStore(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
+                                                 ?? .standard)
+    /// Built on first use, like the batch fixture: an initialiser that read the fakes to build the
+    /// model would be reading `self` before every stored property was set.
+    lazy var model = CompressionViewModel(photos: photos, transcoder: transcoder, verifier: verifier,
+                                          temporary: files, history: history, settings: settings,
+                                          authorizationStatus: authorizationStatus)
+
+    init(authorizationStatus: @escaping () -> PHAuthorizationStatus = { .authorized }) {
+        self.authorizationStatus = authorizationStatus
+    }
+}
+
+@MainActor private final class OneVideoMockPhotos: PhotoLibraryServing {
+    var accessError: PipelineError?
+    var retrievalError: PipelineError?
+    var saveError: PipelineError?
+    var limited = false
+    var retrieveCount = 0
+    var saveCount = 0
+
+    func requestAccess() async throws -> Bool {
+        if let accessError { throw accessError }
+        return limited
+    }
+    func retrieve(identifier: String, progress: @escaping @MainActor (Double) -> Void) async throws -> RetrievedVideo {
+        retrieveCount += 1
+        if let retrievalError { throw retrievalError }
+        return RetrievedVideo(asset: AVURLAsset(url: URL(fileURLWithPath: "/mock-source.mov")),
+                              identity: .unknown)
+    }
+    func cancelRetrieval() {}
+    func save(videoAt url: URL, identity: AssetIdentity) async throws -> String? {
+        saveCount += 1
+        if let saveError { throw saveError }
+        return "created-\(saveCount)"
+    }
+    func localFileURL(identifier: String) async -> URL? { nil }
+    func playerItem(identifier: String) async throws -> AVPlayerItem { throw PipelineError.assetUnavailable }
+    // This flow has no deletion path at all, so the fake never writes a receipt and never approves
+    // a delete.
+    func deletionEvidence(originalIdentifier: String, copyIdentifier: String) -> DeletionEvidence? { nil }
+    func revalidateForDeletion(_ evidence: DeletionEvidence) -> CopyRevalidation { .unavailable }
+    func deleteOriginals(afterRevalidating evidence: [String: DeletionEvidence]) async throws -> DeletionResult {
+        DeletionResult()
+    }
+}
+
+@MainActor private final class OneVideoMockTranscoder: VideoTranscoding {
+    var error: PipelineError?
+    var exports = 0
+    var written = URL(fileURLWithPath: "/mock-output.mov")
+
+    func transcode(_ source: RetrievedVideo, metadata: VideoMetadata, settings: TranscodeSettings,
+                   progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        exports += 1
+        if let error { throw error }
+        return written
+    }
+    func cancel() {}
+}
+
+private final class OneVideoMockVerifier: VideoVerifying {
+    /// What the original is measured as. A real inspection reads the media; this is the one figure
+    /// the space checks are sized from.
+    var inspectBytes: Int64 = 1_000
+    /// What the copy comes out as, which is the figure the save's own space check asks for.
+    var verifiedBytes: Int64 = 600
+
+    func inspect(_ url: URL) async throws -> VideoMetadata {
+        VideoMetadata(duration: 120, width: 1_920, height: 1_080, bytes: inspectBytes,
+                      fileType: "MOV", audioTrackCount: 1, isPlayable: true, codec: .hevc,
+                      nominalFrameRate: 30)
+    }
+    func verify(_ url: URL, source: VideoMetadata, expecting codec: VideoCodec?) async throws -> VideoMetadata {
+        VideoMetadata(duration: source.duration, width: 1_920, height: 1_080, bytes: verifiedBytes,
+                      fileType: "MOV", audioTrackCount: 1, isPlayable: true, codec: codec ?? .hevc,
+                      nominalFrameRate: 30)
+    }
+    func verifyImportedCopy(_ url: URL, matching expected: VideoMetadata) async throws -> VideoMetadata {
+        expected
+    }
+}
+
+/// The workspace's space check, counted so a test can let one demand through and refuse the next.
+@MainActor private final class OneVideoMockFiles: TemporaryFileManaging {
+    var capacityError: PipelineError?
+    /// The 1-based demand this fake refuses. Nil means every demand is answered with
+    /// `capacityError`, which is how the check taken before retrieval behaves on a full iPhone.
+    var refuseDemand: Int?
+    private var demands = 0
+
+    func ensureWorkspace() throws {}
+    func outputURL() throws -> URL { URL(fileURLWithPath: "/mock-output.mov") }
+    func remove(_ url: URL) throws {}
+    func requireCapacity(for bytes: Int64) throws {
+        demands += 1
+        if let refuseDemand, demands != refuseDemand { return }
+        if let capacityError { throw capacityError }
+    }
+    func cleanup() throws {}
 }

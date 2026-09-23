@@ -7,12 +7,17 @@ import UIKit
 @MainActor enum VideoShrinkNativeSession {
   static let settings = ShrinkSettings()
   static let temporary = TemporaryFileManager()
+  // The same store for both flows, exactly as the app target shares one: a copy saved in the
+  // one-video flow is this app's own output, and the batch flow's "Select all" can only leave it
+  // alone if both flows read and write the same device-local memory.
+  static let history = UserDefaultsShrinkHistoryStore()
 
   static let model = CompressionViewModel(
     photos: PhotoLibraryService(),
     transcoder: VideoTranscodingService(temporary: temporary),
     verifier: VideoVerificationService(),
     temporary: temporary,
+    history: history,
     settings: settings
   )
 
@@ -22,7 +27,7 @@ import UIKit
     transcoder: VideoTranscodingService(temporary: temporary),
     verifier: VideoVerificationService(),
     temporary: temporary,
-    history: UserDefaultsShrinkHistoryStore(),
+    history: history,
     queueStore: FileBatchQueueStore(),
     screenAwake: ScreenAwakeController(),
     settings: settings

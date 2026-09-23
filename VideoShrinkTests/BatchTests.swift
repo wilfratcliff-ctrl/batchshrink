@@ -261,7 +261,59 @@ import Photos
         XCTAssertEqual(fixture.history.records.count, 2)
     }
 
-    func testAFailedSaveLeavesTheVideoUnmarked() async {
+    func testARetrievalPhotoKitCancelledWithNoStopIsRetriedTwiceThenFails() async {
+        // The audit's finding: `process`'s catch put a cancelled item straight back to `.pending`,
+        // and the run loop picked the same video up again with no attempt cap, so a persistent
+        // cause would spin the run on one video for ever. Every stop of the user's own sets its
+        // flag before it cancels any work, so a `.cancelled` failure with no stop asked for can
+        // only be PhotoKit answering the app's own retrieval that way. Three attempts is the
+        // ceiling, and the video then fails in the retrieval's own words: `.cancelled` persists as
+        // the export code, which would name a step that never ran.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.photos.retrievalFailures = ["a": .cancelled]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // Two immediate retries, so three attempts on "a" in all, and the run then moves on to "b".
+        XCTAssertEqual(fixture.photos.retrieveCount, 3 + 1)
+        XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.failed(.retrieval))
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 0)
+        XCTAssertFalse(fixture.batch.hasPendingWork)
+        // What reached disk is the retrieval's code, not the export fallback `.cancelled` would be
+        // stored as, and it is a failure the Retry button can pick up rather than a stuck item.
+        XCTAssertEqual(fixture.queue.stored?.items.first?.state, .failed(code: .retrieval))
+    }
+
+    func testARunStoppedByTheUserStillLeavesTheItemWaitingRatherThanFailingIt() async {
+        // The bound above must not reach the one cancellation that is not a fault. A stop cancels
+        // the retrieval too, and that item has to wait for the resume instead of being counted
+        // against the cap and failed.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.holdRetrieval = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.photos.retrieveGate != nil }
+
+        fixture.batch.pause()
+        await eventually { fixture.batch.phase == .paused }
+
+        XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.pending)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
+        XCTAssertTrue(fixture.batch.hasPendingWork)
+    }
+
+    func testASavePhotosDidNotConfirmIsAQuestionRatherThanAFailure() async {
+        // The audit's finding: a save failure was shown as "HEVC export failed", and the item was
+        // persisted as a failure, so one tap on "Try the failed ones again" ran the video a second
+        // time. Photos may already hold the first copy, so a save that did not confirm is a
+        // question, not a failure.
         let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
         fixture.photos.saveError = .save
         await scan(fixture)
@@ -270,10 +322,51 @@ import Photos
         fixture.batch.start()
         await eventually { fixture.batch.phase == .finished }
 
-        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.needsCheck)
+        XCTAssertEqual(fixture.batch.summary.needsCheckCount, 1)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
         XCTAssertEqual(fixture.batch.summary.savedCount, 0)
+        XCTAssertFalse(fixture.batch.items.contains { $0.state == .failed(.export) },
+                       "a save is not an export, and Photos' answer about it is not an export failure")
+        // The row says what happened in the save's own words.
+        XCTAssertEqual(fixture.batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: PipelineError.save.localizedDescription))
         XCTAssertTrue(fixture.history.records.isEmpty)
         XCTAssertTrue(fixture.history.identifiers.isEmpty)
+        // What reached disk keeps the sizes the run measured for the copy Photos may hold, so a
+        // later launch can describe it, and it is not a state anything runs again on its own.
+        XCTAssertEqual(fixture.queue.stored?.items.first?.state, BatchQueueRecord.State.needsCheck)
+        XCTAssertEqual(fixture.queue.stored?.items.first?.attemptedSave,
+                       AttemptedSave(Savings(originalBytes: 1_000, compressedBytes: 600)))
+        // "Try the failed ones again" cannot pick it up, because it is not a failure.
+        fixture.batch.retryFailed()
+        XCTAssertEqual(fixture.photos.retrieveCount, 1)
+        XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.needsCheck)
+    }
+
+    func testAnErrorPhotosReportsAfterASaveIsNotAFailureEither() async {
+        // A change transaction that fails in Photos' own vocabulary is the error the app cannot
+        // place, and it arrives after Photos was handed the copy: the copy may be in the library
+        // whatever the error says, so this is the same question the mid-save stop leaves.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.saveRawError = NSError(domain: "PHPhotosErrorDomain", code: -1)
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.items.first?.state, BatchItemState.needsCheck)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 0)
+        XCTAssertFalse(fixture.batch.items.contains { $0.state == .failed(.export) },
+                       "an unplaceable error is never dressed as an export failure")
+        XCTAssertEqual(fixture.batch.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: PipelineError.save.localizedDescription))
+        // The copy remains a question on disk too, in the form a launch reconciles a mid-save stop
+        // into rather than a failure it may repeat.
+        let stored = fixture.queue.stored?.items.map(\.state) ?? []
+        XCTAssertEqual(stored, [BatchQueueRecord.State.needsCheck])
     }
 
     func testPausingKeepsUnfinishedWorkAndResumingFinishesIt() async {
@@ -330,8 +423,84 @@ import Photos
         XCTAssertEqual(fixture.photos.saveCount, 0)
     }
 
-    func testLowStorageStopsTheFirstVideoWithoutSaving() async {
-        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+    func testAPauseReachesTheExportInFlightAndNotOnlyTheSessionItHandedOver() async {
+        // The transcoder cancels only the session running at that instant, and it tries another
+        // plan when an attempt fails: that attempt builds a session of its own, and nothing can
+        // cancel a session that does not exist yet. What its plan loop reads before it would start
+        // one is the cancellation of the task the export runs in, so a stop has to reach that task
+        // - which is what the one-video flow's own cancel does.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+
+        fixture.batch.pause()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .paused }
+
+        XCTAssertTrue(fixture.transcoder.workWasStopped,
+                      "the stop has to reach the work in flight, not only the session handed to it")
+        XCTAssertTrue(fixture.transcoder.cancelCalled)
+        // The stopped export was not asked for again, and nothing of it was saved.
+        XCTAssertEqual(fixture.transcoder.receivedSettings.count, 1)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 2)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    func testFinishingEarlyAlsoStopsTheExportInFlight() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+
+        fixture.batch.finishNow()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertTrue(fixture.transcoder.workWasStopped)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 2)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    func testLowStorageStopsTheRunOnceInsteadOfFailingEveryVideo() async {
+        // The check that refuses here is the one the run makes before it has measured anything:
+        // the same figure for every video, and nothing the run does to one video changes it.
+        // Failing each remaining video would repeat one sentence per item and end on "No copies
+        // were saved." The run stops once instead, with every video still waiting.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000),
+                                            asset("c", bytes: 1_000)])
+        fixture.files.capacityError = .insufficientStorage
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .paused }
+
+        XCTAssertEqual(fixture.batch.pauseReason, .storage)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 0)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 3)
+        XCTAssertEqual(fixture.batch.remainingCount, 3)
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        // Nothing was lost and nothing was called a failure: what reached disk says every video is
+        // still waiting for the space it needs.
+        XCTAssertEqual(fixture.queue.stored?.items.map(\.state) ?? [],
+                       [.pending, .pending, .pending])
+    }
+
+    func testASizeSpecificStorageRefusalFailsOnlyTheVideoItMeasured() async {
+        // The run's own floor check is let through and the refusal lands on the room for one
+        // video's copy, which is a figure measured for that video. A later video may be small
+        // enough, so the run carries on and only the video that did not fit fails.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.files.refuseDemand = 2
         fixture.files.capacityError = .insufficientStorage
         await scan(fixture)
         fixture.batch.beginSelecting()
@@ -339,9 +508,25 @@ import Photos
         fixture.batch.start()
         await eventually { fixture.batch.phase == .finished }
 
+        XCTAssertNil(fixture.batch.pauseReason)
         XCTAssertEqual(fixture.batch.summary.failedCount, 1)
-        XCTAssertEqual(fixture.photos.retrieveCount, 0)
-        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+    }
+
+    func testAStopTheUserDidNotAskForAlwaysExplainsItself() {
+        XCTAssertNil(BatchPauseReason.asked.explanation,
+                     "a pause the user asked for needs no explanation")
+        for reason in BatchPauseReason.allCases where reason != .asked {
+            let text = reason.explanation
+            XCTAssertNotNil(text, "\(reason) must not rest on a screen that explains nothing")
+            XCTAssertFalse(text?.isEmpty ?? true)
+        }
+        // The storage stop names the figure the check asked for: the working reserve, because
+        // nothing has measured a video at the point this check refuses.
+        XCTAssertEqual(BatchPauseReason.storage.explanation,
+                       PipelineError.insufficientStorageSentence(needed: DiskHeadroom.neededToWrite(nil)))
+        XCTAssertTrue(BatchPauseReason.storage.explanation?.contains("some space") ?? false)
     }
 
     // MARK: - Scanning and selection
@@ -1464,8 +1649,13 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
 @MainActor private final class BatchMockPhotos: PhotoLibraryServing {
     var retrievalFailures: [String: PipelineError] = [:]
     var saveError: PipelineError?
+    /// A failure in Photos' own vocabulary, which is what a failed change transaction looks like
+    /// to this app: nothing in `PipelineError` places it.
+    var saveRawError: Error?
     var deleteError: PipelineError?
     var retrieveCount = 0
+    var holdRetrieval = false
+    var retrieveGate: CheckedContinuation<Void, Error>?
     var saveCount = 0
     var deletedIdentifiers: [String] = []
     var previewError: PipelineError?
@@ -1484,14 +1674,19 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     func retrieve(identifier: String, progress: @escaping @MainActor (Double) -> Void) async throws -> RetrievedVideo {
         retrieveCount += 1
         if let failure = retrievalFailures[identifier] { throw failure }
+        if holdRetrieval { try await withCheckedThrowingContinuation { retrieveGate = $0 } }
         try Task.checkCancellation()
         return RetrievedVideo(asset: AVURLAsset(url: URL(fileURLWithPath: "/mock-\(identifier).mov")),
                               identity: AssetIdentity(originalFilename: "\(identifier).mov"))
     }
 
-    func cancelRetrieval() {}
+    func cancelRetrieval() {
+        retrieveGate?.resume(throwing: PipelineError.cancelled)
+        retrieveGate = nil
+    }
 
     func save(videoAt url: URL, identity: AssetIdentity) async throws -> String? {
+        if let saveRawError { throw saveRawError }
         if let saveError { throw saveError }
         saveCount += 1
         receivedIdentities.append(identity)
@@ -1624,6 +1819,11 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
     var error: PipelineError?
     var hold = false
     var cancelCalled = false
+    /// Whether the task this export runs in was cancelled while the export was held open. Cancel
+    /// reaches only the session running at that instant, and the real service starts another
+    /// session after a failed attempt, so this is the signal its plan loop reads before it would
+    /// start one: a stop has to reach the task the work runs in, not only the service.
+    var workWasStopped = false
     var gate: CheckedContinuation<Void, Never>?
     var receivedSettings: [TranscodeSettings] = []
     var written = URL(fileURLWithPath: "/mock-root/output.mov")
@@ -1633,6 +1833,7 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
         receivedSettings.append(settings)
         if let error { throw error }
         if hold { await withCheckedContinuation { gate = $0 } }
+        workWasStopped = Task.isCancelled
         try Task.checkCancellation()
         return written
     }
@@ -1674,9 +1875,15 @@ private final class BatchMockVerifier: VideoVerifying {
 
 @MainActor private final class BatchMockFiles: TemporaryFileManaging {
     var capacityError: PipelineError?
+    /// The 1-based demand this fake refuses, counting every `requireCapacity` call in one run. A
+    /// test uses it to refuse one step's figure rather than every check the run makes; nil refuses
+    /// whatever `capacityError` names, which is how the check taken before retrieval behaves on a
+    /// full iPhone.
+    var refuseDemand: Int?
     var cleanups = 0
     var removed: [String] = []
     private var counter = 0
+    private var demands = 0
 
     func ensureWorkspace() throws {}
     func outputURL() throws -> URL {
@@ -1684,7 +1891,11 @@ private final class BatchMockVerifier: VideoVerifying {
         return URL(fileURLWithPath: "/mock-root/\(counter).mov")
     }
     func remove(_ url: URL) throws { removed.append(url.lastPathComponent) }
-    func requireCapacity(for bytes: Int64) throws { if let capacityError { throw capacityError } }
+    func requireCapacity(for bytes: Int64) throws {
+        demands += 1
+        if let refuseDemand, demands != refuseDemand { return }
+        if let capacityError { throw capacityError }
+    }
     func cleanup() throws { cleanups += 1 }
 }
 

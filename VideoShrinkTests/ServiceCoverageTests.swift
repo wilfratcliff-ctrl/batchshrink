@@ -114,6 +114,33 @@ import UIKit
         try manager.remove(removed)
     }
 
+    func testAnExportThatFailsMidWriteRemovesItsOwnPartialOutput() async {
+        // The encoder writes into the destination itself, so an attempt that fails can leave bytes
+        // behind - a stop can interrupt one mid-write. Nothing outside the transcoder is ever
+        // handed that URL on a failure path, so it has to take the partial copy with it instead of
+        // leaving it in the shared workspace until the run ends.
+        let files = ServiceMockFiles()
+        let service = VideoTranscodingService(temporary: files)
+        // A source with no readable media fails the export whichever way the OS rejects it. The
+        // shape of that rejection is not what this test is about, so it is left to the OS, exactly
+        // as the verification tests leave theirs; what must hold either way is that the file the
+        // attempt started is gone.
+        let missing = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let source = RetrievedVideo(asset: AVURLAsset(url: missing), identity: .unknown)
+        let metadata = VideoMetadata(duration: 120, width: 3840, height: 2160, bytes: 1_000,
+                                     fileType: "MOV", audioTrackCount: 1, isPlayable: true,
+                                     codec: .hevc, nominalFrameRate: 30)
+
+        do {
+            _ = try await service.transcode(source, metadata: metadata, settings: .standard) { _ in }
+            XCTFail("An export of a file with no media must never report a written copy")
+        } catch {
+            XCTAssertFalse(error is CancellationError)
+        }
+        XCTAssertEqual(files.removed, ["1.mov"],
+                       "a failed export has to remove the destination it had already started")
+    }
+
     func testTheDiskReserveRefusesAWriteBeforeTheEncoderDiscoversIt() throws {
         let manager = TemporaryFileManager()
         defer { try? manager.cleanup() }
@@ -642,6 +669,94 @@ import UIKit
         XCTAssertTrue(fixture.batch.revalidationOutcomes.isEmpty)
     }
 
+    // MARK: - The two waits this service makes for PhotoKit
+
+    // The read-back that checks a saved copy and the quick look that opens one both ask PhotoKit
+    // for media and wait for one callback. PhotoKit documents that the callback arrives exactly
+    // once, and nothing here can prove a device always does. Both waits used to be unbounded, so a
+    // handler that never called back held the step for good: the run's "Checking the copy" step had
+    // nothing that could end it, and the scrub sheet's spinner had nothing either. Both now run
+    // through the scan's own bounded read (`PhotoLibraryScanService.boundedAnswer`), where one
+    // lock-guarded claim decides whether the handler, the bound or a stop finishes the wait, so a
+    // handler that never arrives and one that arrives twice are both harmless.
+
+    func testTheTwoPhotoKitWaitsThisServiceMakesAreBounded() {
+        // Both bounds are the only thing between a PhotoKit read that never answers and a step that
+        // never ends, so the numbers themselves are pinned here as the scan's own bound is. The
+        // read-back's is the scan's number because it is the same read - a file already on the
+        // iPhone, with the network off - and the quick look's is longer because PhotoKit may have
+        // to reach iCloud for it.
+        XCTAssertEqual(PhotoLibraryService.copyReadBackTimeout, Duration.seconds(10))
+        XCTAssertEqual(PhotoLibraryService.scrubRequestTimeout, Duration.seconds(20))
+        XCTAssertEqual(PhotoLibraryService.copyReadBackTimeout,
+                       PhotoLibraryScanService.onDeviceRequestTimeout)
+    }
+
+    func testAQuickLookThatNeverAnswersIsGivenUpAndExplainedInsteadOfSpinning() async {
+        let started = Date()
+        // The wait the quick look makes, driven with the value it really hands back. Nothing answers
+        // here, which is the case this bound exists for.
+        let answer: PlayerItemAnswer? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: .milliseconds(40),
+            start: { _ in
+                let nothingToCancel: () -> Void = {}
+                return nothingToCancel
+            })
+        let waited = Date().timeIntervalSince(started)
+
+        XCTAssertNil(answer)
+        // It waited for the bound rather than giving up at once...
+        XCTAssertGreaterThanOrEqual(waited, 0.02)
+        // ...and the bound is what ended the wait.
+        XCTAssertLessThan(waited, 5)
+        // What the caller is told is the sheet's own failure line rather than a spinner:
+        // `previewItem` passes this straight through, and the sheet stops loading and draws it.
+        XCTAssertThrowsError(try PhotoLibraryService.resolvePlayerItem(answer)) { error in
+            XCTAssertEqual(error as? PipelineError, .retrieval)
+        }
+    }
+
+    func testAPlayerItemIsHandedBackWhenPhotosAnswersAndItsOwnSentenceWhenItDoesNot() throws {
+        let item = AVPlayerItem(url: URL(fileURLWithPath: "/service-preview.mov"))
+        let answered = PlayerItemAnswer(item: item, error: nil)
+        XCTAssertTrue(try PhotoLibraryService.resolvePlayerItem(answered) === item)
+
+        // A read Photos answered with nothing keeps the sentence it always produced.
+        XCTAssertThrowsError(try PhotoLibraryService.resolvePlayerItem(PlayerItemAnswer(item: nil,
+                                                                                        error: nil))) { error in
+            XCTAssertEqual(error as? PipelineError, .retrieval)
+        }
+        // ...and an error Photos did report travels as itself, exactly as it did before the bound
+        // was added.
+        XCTAssertThrowsError(try PhotoLibraryService.resolvePlayerItem(
+            PlayerItemAnswer(item: nil, error: PipelineError.insufficientStorage))) { error in
+            XCTAssertEqual(error as? PipelineError, .insufficientStorage)
+        }
+    }
+
+    func testACopyPhotosHandsNothingBackForIsSavedButNeverOfferedForDeletion() async {
+        let fixture = ServiceFixture(assets: [serviceAsset("a", bytes: 20_000_000)])
+        fixture.verifier.inspectBytes = 20_000_000
+        fixture.verifier.outputs = [10_000_000]
+        // Nil is both what a bounded-out read-back answers and what Photos answers when it cannot
+        // produce the file, and the two must read the same way: a copy that was saved, that this
+        // app could not check.
+        fixture.photos.readBackURL = nil
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
+        XCTAssertEqual(fixture.batch.readBackOutcomes["a"], .unavailable)
+        XCTAssertEqual(fixture.batch.readBackReport.unavailable, 1)
+        // And an unconfirmed copy is not evidence enough to delete the original it came from.
+        fixture.batch.settings.deletionMode = .afterRun
+        XCTAssertTrue(fixture.batch.deletableItemIDs.isEmpty)
+    }
+
     // MARK: - Temporary files a run cannot clear
 
     func testATemporaryCopyThatCannotBeRemovedIsReportedWhileTheRestCarriesOn() async {
@@ -688,6 +803,103 @@ import UIKit
         XCTAssertNotNil(fixture.batch.cleanupWarning)
         // The launch's own cleanup ran; the run's failed one is not counted as a success.
         XCTAssertEqual(fixture.files.cleanups, 1)
+    }
+
+    // MARK: - What a retrieval refuses, in its own words
+
+    /// The retrieval step reads a video's traits and refuses on them, exactly as the library scan
+    /// does. What it threw was `PipelineError.unsupported` - a sentence listing everything that
+    /// might be wrong - even though `AssetRules.unsupportedReason` had just answered the question
+    /// with one fact. A video that gains a refusal trait between the scan and the run (edited in
+    /// Photos, moved into a shared album) is not re-screened, so it arrives here and was described
+    /// by that guess. This pins the mapping the request now uses, which is the part of it a machine
+    /// with no Photos library can drive.
+    func testARefusedTraitIsDescribedByTheRulesOwnSentence() throws {
+        let guess = PipelineError.unsupported.localizedDescription
+        let refused: [AssetRules.Traits] = [
+            AssetRules.Traits(isVideo: false),
+            AssetRules.Traits(hasPairedVideo: true),
+            AssetRules.Traits(isTimeLapse: true),
+            AssetRules.Traits(isSpatial: true),
+            AssetRules.Traits(isHighFrameRate: true),
+            AssetRules.Traits(hasAdjustmentData: true),
+            AssetRules.Traits(hasFullSizeVideo: true),
+            AssetRules.Traits(isCinematic: true),
+            AssetRules.Traits(isProRes: true),
+            AssetRules.Traits(isHDR: true),
+            AssetRules.Traits(isSharedOrRestricted: true)
+        ]
+        for traits in refused {
+            let sentence = try XCTUnwrap(AssetRules.unsupportedReason(traits))
+            let refusal = try XCTUnwrap(PhotoLibraryService.unsupportedOriginalRefusal(traits))
+            XCTAssertEqual(refusal, .unsupportedOriginal(reason: sentence))
+            // Both flows draw this string: the one-video screen shows it as its message, and a batch
+            // row draws the same `localizedDescription`.
+            XCTAssertEqual(refusal.localizedDescription, sentence)
+            XCTAssertNotEqual(refusal.localizedDescription, guess,
+                              "A trait the app has just read is not a list of what might be wrong")
+        }
+        // Nothing refuses an ordinary video, so a retrieval of one is not refused here either.
+        XCTAssertNil(PhotoLibraryService.unsupportedOriginalRefusal(AssetRules.Traits()))
+        // And the sentence is the rules' own, not a copy of it kept beside this mapping.
+        XCTAssertEqual(AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true)),
+                       AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false))
+    }
+
+    /// The one refusal no trait describes: PhotoKit answered the request for an original with
+    /// something that is not a file on this iPhone. This branch threw the same list of formats,
+    /// which is untrue in a specific way - the media was never the problem, and every trait rule
+    /// had already passed. The reachable half of that branch is its sentence, and the sentence is
+    /// what this drives: the request itself needs a real Photos library.
+    func testAnOriginalPhotoKitDoesNotHandBackAsAFileSaysSoInsteadOfListingFormats() {
+        let refusal = PhotoLibraryService.unreadableOriginalRefusal()
+        XCTAssertEqual(refusal.errorDescription, PhotoLibraryService.unreadableOriginalSentence)
+        XCTAssertEqual(refusal.localizedDescription, PhotoLibraryService.unreadableOriginalSentence)
+        XCTAssertNotEqual(refusal.localizedDescription, PipelineError.unsupported.localizedDescription)
+        // It says what was found - not a file - rather than naming formats that were never read.
+        XCTAssertTrue(refusal.localizedDescription.contains("file"))
+        XCTAssertFalse(refusal.localizedDescription.contains("ProRes"))
+    }
+
+    // MARK: - A copy the one-video flow made
+
+    /// The one-video flow saved a copy and dropped the identifier Photos returned, and it had no
+    /// history store at all, so only the batch flow ever called `recordCreatedCopy`. The created-copy
+    /// set is the only thing `selectableAssets` filters on, so the next batch run's "Select all"
+    /// could pick up a copy this app had just made and shrink it again - the exact thing the
+    /// copy-exclusion work exists to prevent. This drives the whole one-video save against a real
+    /// store, then hands the batch flow a library containing the copy.
+    func testACopyTheOneVideoFlowSavesIsRecordedAsThisAppsOwn() async throws {
+        let name = "videoshrink.services.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsShrinkHistoryStore(defaults: defaults)
+
+        let oneVideo = OneVideoServiceFixture(history: store)
+        oneVideo.model.chooseVideo()
+        await eventually { oneVideo.model.showingPicker }
+        oneVideo.model.selected(identifier: "original")
+        // `canSave` stays false until the run's own task has finished, which is the state `save()`
+        // needs before it will take the tap at all.
+        await eventually { oneVideo.model.canSave }
+        oneVideo.model.save()
+        await eventually { oneVideo.model.stage == .saved }
+
+        // The identifier Photos reported is in the device-local memory, under the copy key: what a
+        // later bulk selection reads.
+        let copy = try XCTUnwrap(oneVideo.photos.createdIdentifiers.last)
+        XCTAssertEqual(store.createdCopyIdentifiers(), [copy])
+        XCTAssertTrue(store.completedIdentifiers().isEmpty,
+                      "A copy this app made is not an original that was shrunk")
+
+        // And the batch flow, reading the same memory, offers everything except that copy.
+        let batchFixture = ServiceFixture(assets: [serviceAsset(copy, bytes: 20_000_000),
+                                                   serviceAsset("other", bytes: 20_000_000)])
+        batchFixture.history.copies = store.createdCopyIdentifiers()
+        await scan(batchFixture)
+        XCTAssertEqual(batchFixture.batch.eligibleAssets.map(\.id), [copy, "other"],
+                       "The copy stays in the library and can still be ticked by hand")
+        XCTAssertEqual(batchFixture.batch.selectableAssets.map(\.id), ["other"])
     }
 
     // MARK: - Helpers
@@ -791,6 +1003,25 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
     }
 }
 
+/// The one-video model over the same fakes, with the history store a test hands it. It exists so a
+/// test can drive a save in the one-video flow and then read what the *other* flow reads.
+@MainActor private final class OneVideoServiceFixture {
+    let photos = ServiceMockPhotos()
+    let transcoder = ServiceMockTranscoder()
+    let verifier = ServiceMockVerifier()
+    let files = ServiceMockFiles()
+    let history: any ShrinkHistoryStoring
+    let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.services.\(UUID().uuidString)")
+                                  ?? .standard)
+    lazy var model = CompressionViewModel(photos: photos, transcoder: transcoder,
+                                          verifier: verifier, temporary: files,
+                                          history: history, settings: settings)
+
+    init(history: any ShrinkHistoryStoring) {
+        self.history = history
+    }
+}
+
 @MainActor private final class ServiceMockScreenAwake: ScreenAwakeControlling {
     var values: [Bool] = []
     func hold(_ hold: Bool) { values.append(hold) }
@@ -820,6 +1051,8 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
     var retrievalFailures: [String: PipelineError] = [:]
     var retrieveCount = 0
     var saveCount = 0
+    /// Every identifier this fake handed back, so a test can read what a save did with it.
+    var createdIdentifiers: [String] = []
     /// One entry per Photos transaction, which is one system confirmation.
     var deleteBatches: [[String]] = []
     var deletedIdentifiers: [String] = []
@@ -840,7 +1073,9 @@ private func serviceStoredRecord(_ id: String) -> BatchQueueRecord {
 
     func save(videoAt url: URL, identity: AssetIdentity) async throws -> String? {
         saveCount += 1
-        return "created-\(saveCount)"
+        let identifier = "created-\(saveCount)"
+        createdIdentifiers.append(identifier)
+        return identifier
     }
 
     func localFileURL(identifier: String) async -> URL? { readBackURL }

@@ -153,6 +153,19 @@ enum PhotosAccessBlock: Equatable, Sendable {
     /// still a question: they are what turns "a copy is in Photos" into the save it turned out to
     /// be rather than an unanswerable claim.
     private var attemptedSaves: [String: Savings] = [:]
+    /// How many times in a row one video's retrieval has been answered with a cancellation while
+    /// the run was not stopping, by original.
+    ///
+    /// Every stop of the user's own sets its flag before it cancels any work, so a `.cancelled`
+    /// failure arriving with no stop asked for can only be PhotoKit answering the app's own
+    /// retrieval that way. That answer can repeat, and without a bound the run loop would pick the
+    /// same video back up immediately every time and spin on it. The count is cleared the moment an
+    /// attempt gets past retrieval, so only consecutive cancellations of one retrieval accumulate,
+    /// and it is cleared with the rest of the per-item bookkeeping when a fresh run begins.
+    private var cancelledAttempts: [String: Int] = [:]
+    /// How many consecutive retrieval cancellations one video is allowed before it fails. Two
+    /// retries is three attempts in all.
+    private static let cancelledRetryLimit = 2
     static let deletionBatchSize = 5
 
     init(photos: any PhotoLibraryServing,
@@ -610,14 +623,21 @@ enum PhotosAccessBlock: Equatable, Sendable {
     /// Photos access is gone.
     ///
     /// The companion of `scan()`'s own Photos failure: the flow says so rather than holding a
-    /// library it can no longer read, and it is taken only from the phases a scan itself may start
-    /// in. A run in flight, or one paused with work left, keeps the screen and its own record of
-    /// what happened to each video.
+    /// library it can no longer read, and it is taken from the phases a scan itself may start in,
+    /// plus the pause a run picked up from disk comes back on.
     ///
     /// A scan that is reading the library when access goes is stopped rather than left to run:
     /// what it would produce is a library this app may no longer read, and the flow says so
     /// instead. The scan's own cancel path leaves a phase it no longer owns alone, so this
     /// decision survives the cancellation landing.
+    ///
+    /// A run that is in flight is deliberately left alone - `runTask != nil` is the test, so an
+    /// access report never tears down work that is actually going. Every other resting place,
+    /// including the pause a restored run comes back on, is answered with the access sentence
+    /// instead of being left where it is: without access there is nothing to continue, and each
+    /// waiting video would fail with `assetUnavailable`'s sentence about a video sitting outside
+    /// the allowed set, which is not what happened to it. The run's own record is not torn down
+    /// here: `items` is untouched and the queue on disk still describes it.
     ///
     /// `reason` is kept rather than folded away, because the recovery screen reads it: a refusal
     /// gets the route to Settings, and a restriction gets the truth that this app cannot lift it.
@@ -627,7 +647,8 @@ enum PhotosAccessBlock: Equatable, Sendable {
             runTask?.cancel()
         } else {
             guard runTask == nil,
-                  [BatchPhase.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
+                  [BatchPhase.start, .scanned, .selecting, .finished, .failed, .paused].contains(phase)
+            else { return }
         }
         phase = .failed
         accessBlock = reason
@@ -784,6 +805,8 @@ enum PhotosAccessBlock: Equatable, Sendable {
     /// changed except the list it was handed.
     private func beginRun(with chosen: [LibraryAsset]) {
         items = chosen.map { BatchItem(asset: $0, state: .pending) }
+        // A fresh run starts with no history of cancellations against any video.
+        cancelledAttempts = [:]
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
         estimator = ProcessingEstimator()
@@ -844,6 +867,8 @@ enum PhotosAccessBlock: Equatable, Sendable {
         guard runTask == nil else { return }
         let failed = items.indices.filter { items[$0].state.isFailed }
         guard !failed.isEmpty else { return }
+        // The user asked for these videos to be tried again, so each starts with a clean slate.
+        cancelledAttempts = [:]
         for index in failed { items[index].state = .pending }
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
@@ -874,6 +899,7 @@ enum PhotosAccessBlock: Equatable, Sendable {
         activeDeletionMode = settings.deletionMode
         checkpointFailure = false
         attemptedSaves = [:]
+        cancelledAttempts = [:]
         queueWarning = nil
         clearStoredQueue()
         selection.removeAll()
@@ -977,6 +1003,10 @@ enum PhotosAccessBlock: Equatable, Sendable {
         copyEvidence[id] = nil
         revalidationOutcomes[id] = nil
         readBackOutcomes[id] = nil
+        // A fresh attempt makes a new copy, so the sizes measured for the last one describe a
+        // different file. They stay in the record only for an item whose copy is still a question,
+        // which is what `attemptedSaves` is for; an attempt that reaches this step writes its own.
+        attemptedSaves[id] = nil
         // Work only starts while the queue can be written. Shrinking a video for an hour and then
         // finding out the app cannot record the copy is work thrown away, and copying without a
         // record is worse than not copying at all.
@@ -991,14 +1021,29 @@ enum PhotosAccessBlock: Equatable, Sendable {
         setState(.retrieving(nil), for: id)
         var destination: URL?
         var workingIdentity = AssetIdentity.unknown
+        // Set only while the run's own floor check is in hand: the one space demand made before
+        // anything about this video has been measured, and therefore the same figure for every
+        // video in the run. A refusal of it is the device's answer about the run, not about this
+        // video, so it stops the run once instead of failing each remaining item in turn.
+        var refusingFloor = false
+        // Set the moment Photos is handed the copy, so a failure arriving after that is read as the
+        // question it is: Photos may already hold the copy, whatever it answered. It is per attempt
+        // on purpose - the sizes `attemptedSaves` keeps describe the copy this attempt makes, and an
+        // entry left by an earlier one says nothing about a step that has not been reached yet.
+        var handedToPhotos = false
         do {
             try temporary.ensureWorkspace()
+            refusingFloor = true
             try temporary.requireCapacity(for: DiskHeadroom.neededToWrite(nil))
+            refusingFloor = false
             let retrieved = try await photos.retrieve(identifier: id) { [weak self] value in
                 guard let self, self.currentID == id else { return }
                 self.currentProgress = value
                 self.setState(.retrieving(value), for: id)
             }
+            // This attempt got past the retrieval, so whatever run of cancellations came before it
+            // is over. Only consecutive cancellations of the same retrieval may accumulate.
+            cancelledAttempts[id] = nil
             workingIdentity = retrieved.identity
             try checkStop()
             setState(.preparing, for: id)
@@ -1040,6 +1085,7 @@ enum PhotosAccessBlock: Equatable, Sendable {
                 // app stops for good.
                 try requireJournaledCheckpoint(setState(.saving, for: id), step: "saving a copy")
                 currentStage = .saving
+                handedToPhotos = true
                 let created = try await photos.save(videoAt: written, identity: workingIdentity)
                 // Photos already holds this copy, so its identifier is remembered straight away:
                 // the copy is in the library whatever happens to the rest of this step, and the
@@ -1077,10 +1123,46 @@ enum PhotosAccessBlock: Equatable, Sendable {
             }
         } catch {
             let normalized = PipelineError.normalize(error, fallback: .export)
-            if stopRequested || normalized == .cancelled {
+            if refusingFloor, normalized == .insufficientStorage {
+                // The run asked for the same working reserve for every video in it, and this is
+                // that check refusing. The video goes back to waiting - nothing was retrieved,
+                // written or asked of Photos - and the run stops once, with the paused screen
+                // naming the figure the check asked for. Failing each remaining video instead
+                // would repeat one sentence per item and end on "No copies were saved."
+                setState(.pending, for: id)
+                pause(reason: .storage)
+            } else if handedToPhotos {
+                // Photos was asked to keep a copy and answered something this run cannot place.
+                // A copy may already be in the library, so this is not a clean failure and not an
+                // item the run may pick up again by itself: it keeps the `.saving` evidence as the
+                // question the read-back path already knows how to settle. See
+                // `noteUnsettledSave` for why it is not persisted as `.failed`.
+                noteUnsettledSave(for: id)
+            } else if stopRequested || normalized == .cancelled {
                 // A copy Photos already kept is never put back in the waiting list: running that
                 // video again would make a second copy. Anything else is safe to run again.
-                if !hasSavedCopy(id) { setState(.pending, for: id) }
+                if !hasSavedCopy(id) {
+                    if stopRequested {
+                        // The run is stopping because the user asked it to, so nothing about this
+                        // answer is a fault: the video waits for the resume that picks it up.
+                        setState(.pending, for: id)
+                    } else if (cancelledAttempts[id] ?? 0) < Self.cancelledRetryLimit {
+                        // PhotoKit cancelled a retrieval this run never asked to stop. Retrying it
+                        // straight away is safe and usually enough, so the video waits again - but
+                        // only while the retries last, or a persistent cause would spin the run on
+                        // this one video forever.
+                        cancelledAttempts[id] = (cancelledAttempts[id] ?? 0) + 1
+                        setState(.pending, for: id)
+                    } else {
+                        // The cap is reached and this video has failed. It fails in the retrieval's
+                        // own words rather than the export's: outside a stop the only step that can
+                        // be cancelled is the retrieval, and `.cancelled` persists as `.export`,
+                        // which would tell the user about an export that never ran.
+                        cancelledAttempts[id] = nil
+                        setState(.failed(.retrieval), for: id)
+                        log.error("Batch item failed")
+                    }
+                }
             } else {
                 setState(.failed(normalized), for: id)
                 log.error("Batch item failed")
@@ -1096,6 +1178,13 @@ enum PhotosAccessBlock: Equatable, Sendable {
     private func stopActiveWork() {
         // An accepted Photos save cannot be cancelled; let it settle.
         guard items.first(where: { $0.id == currentID })?.state.isSaving != true else { return }
+        // Cancelling the task the run is driven by is what makes a stop reach work that is in
+        // flight. The session `transcoder.cancel()` reaches is only the one running at this
+        // instant: the transcoder tries a second plan after a failed attempt, that attempt builds
+        // a session of its own, and nothing can cancel a session that does not exist yet. The plan
+        // loop reads this task before it starts another, exactly as the one-video flow's own
+        // cancel does, so a retry cannot outlive the stop that caused it.
+        runTask?.cancel()
         photos.cancelRetrieval()
         transcoder.cancel()
     }
@@ -1109,6 +1198,26 @@ enum PhotosAccessBlock: Equatable, Sendable {
         guard let item = items.first(where: { $0.id == id }) else { return false }
         if case .saved = item.state { return true }
         return false
+    }
+
+    /// Records that Photos answered a save in a way this run cannot place, without throwing away
+    /// the evidence that a copy may exist.
+    ///
+    /// The item becomes `.needsCheck`, which is the state a queue that stopped mid-save is
+    /// reconciled into: Photos may hold the copy, the sizes the run measured for it stay in the
+    /// record beside it, and nothing runs this video again until the user has looked in Photos.
+    /// It is deliberately not `.failed`: `retryFailed()` runs failed items again on one tap, and a
+    /// second copy is the outcome this whole area exists to prevent. The wording is
+    /// `PipelineError.save`'s, because that is what happened - Photos did not confirm the save.
+    ///
+    /// A record that cannot be written here is not the dangerous kind: the `.saving` entry already
+    /// on disk is the same evidence, and a queue read back from it is reconciled into this very
+    /// state. Nothing was added to or removed from Photos by the write either way.
+    private func noteUnsettledSave(for id: String) {
+        guard !hasSavedCopy(id) else { return }
+        midSaveFindings[id] = .unresolved(question: PipelineError.save.localizedDescription)
+        setState(.needsCheck, for: id)
+        log.error("Photos did not confirm a save; the copy is a question now")
     }
 
     /// Stops the run before the next Photos step when the checkpoint that would describe it is

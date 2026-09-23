@@ -268,6 +268,7 @@ struct ShrinkHelp: View {
                 }
                 Section("Photos access") {
                     Text("With limited access, only the videos you’ve allowed can be listed or shrunk. You can change access in Settings.")
+                    Text("Screen Time or a device management profile can switch Photos off for every app on the iPhone. While that is on, Photos is not on BatchShrink’s Settings page at all, and only a change to those settings turns it back on.")
                     Button("Open Photos access settings") {
                         if let url = URL(string: UIApplication.openSettingsURLString) { openURL(url) }
                     }

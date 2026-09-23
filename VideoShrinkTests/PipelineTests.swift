@@ -434,8 +434,13 @@ import Combine
     let files = MockFiles()
     let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
                                   ?? .standard)
+    /// The one-video model writes the identifier of the copy Photos hands back to its device
+    /// memory, so a fixture without a store of its own would write into the machine's standard
+    /// defaults. Its own suite, like the batch fixture and the other one-video fixtures.
+    let history = UserDefaultsShrinkHistoryStore(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
+                                                 ?? .standard)
     lazy var model = CompressionViewModel(photos: photos, transcoder: transcoder, verifier: verifier,
-                                          temporary: files, settings: settings)
+                                          temporary: files, history: history, settings: settings)
 }
 
 @MainActor private final class MockPhotos: PhotoLibraryServing {

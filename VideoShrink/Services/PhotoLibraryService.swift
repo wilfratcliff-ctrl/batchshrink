@@ -51,7 +51,7 @@ struct DeletionResult: Equatable, Sendable {
             isSharedOrRestricted: source.contains(.typeCloudShared)
                 || source.contains(.typeiTunesSynced)
                 || !photo.canPerform(.delete))
-        guard AssetRules.unsupportedReason(traits) == nil else { throw PipelineError.unsupported }
+        if let refusal = Self.unsupportedOriginalRefusal(traits) { throw refusal }
         let options = PHVideoRequestOptions()
         options.version = .original
         options.deliveryMode = .highQualityFormat
@@ -87,7 +87,7 @@ struct DeletionResult: Equatable, Sendable {
                         } else if asset == nil {
                             self.finish(.failure(PipelineError.retrieval))
                         } else {
-                            self.finish(.failure(PipelineError.unsupported))
+                            self.finish(.failure(Self.unreadableOriginalRefusal()))
                         }
                     }
                 }
@@ -99,6 +99,42 @@ struct DeletionResult: Equatable, Sendable {
             }
         }, isolation: #isolation)
     }
+
+    /// The refusal for a video whose traits break one of `AssetRules`' rules, in `AssetRules`' own
+    /// words.
+    ///
+    /// The traits are the same ones the library scan fills in and refuses with, so a video that
+    /// gains a refusal trait between the scan and the run - edited in Photos, moved into a shared
+    /// album - is described here by what was actually found, not by the list of everything that
+    /// might be wrong. That list is what this path used to throw, and it is a guess precisely where
+    /// the app has just read the facts: `AssetRules.unsupportedReason` already answered the
+    /// question and the answer was thrown away.
+    ///
+    /// One sentence reaches both flows from here, because both read it: the one-video flow shows
+    /// `localizedDescription` as its message, and a batch row draws the same string and stores the
+    /// coarse code. There is still one place where these sentences change, and this is not it.
+    ///
+    /// Split out from the request itself so the mapping can be driven without a Photos library,
+    /// which is the only way this project can test it.
+    nonisolated static func unsupportedOriginalRefusal(_ traits: AssetRules.Traits) -> PipelineError? {
+        guard let sentence = AssetRules.unsupportedReason(traits) else { return nil }
+        return .unsupportedOriginal(reason: sentence)
+    }
+
+    /// The refusal when PhotoKit answers the request for an original with something that is not a
+    /// file on this iPhone.
+    ///
+    /// Every trait rule has passed by the time this can happen - the request above refuses the
+    /// whole video first - so there is no `AssetRules` sentence for this case, and the list
+    /// `.unsupported` carries would be a guess about the media rather than a report of what
+    /// happened. What happened is that Photos answered and the answer was not a file this app
+    /// could read, so the sentence says that much and names the one step that can change it.
+    static func unreadableOriginalRefusal() -> PipelineError {
+        .unsupportedOriginal(reason: unreadableOriginalSentence)
+    }
+
+    /// That sentence, in one piece so the caller and the test read the same one.
+    static let unreadableOriginalSentence = "Photos did not hand this video's original back as a file on this iPhone, so BatchShrink could not read it. Try again, and if the video is stored in iCloud, download it in Photos first."
 
     private func finish(_ result: Result<RetrievedVideo, Error>) {
         let continuation = pending
@@ -252,9 +288,34 @@ struct DeletionResult: Equatable, Sendable {
                              isHidden: photo.isHidden)
     }
 
+    /// How long a read-back may wait for PhotoKit before the copy is called unconfirmed.
+    ///
+    /// The read is a fetch of a file this app wrote moments ago, with the network switched off, so
+    /// a read that has not answered in this long is not a slow one. It is the same bound, for the
+    /// same reason, as the scan's own on-device read (`PhotoLibraryScanService.onDeviceRequestTimeout`),
+    /// and it exists for the same failure: a PhotoKit handler that never calls back used to leave
+    /// this step suspended with nothing that could end it. Giving up is not a change of meaning -
+    /// `localFileURL` answering nil has always meant "this copy could not be confirmed", which is
+    /// exactly what a bounded-out read is.
+    static let copyReadBackTimeout: Duration = .seconds(10)
+
+    /// How long the quick look may wait for Photos to hand over a player item.
+    ///
+    /// Longer than the read-back because this one may involve iCloud - PhotoKit has to decide
+    /// whether to stream the original or hand over a file it already has - and the user is watching
+    /// the sheet while it happens. It is bounded for the reason the others are: a request that never
+    /// calls back has to reach the sheet's own failure line instead of leaving a spinner that no
+    /// control can end.
+    static let scrubRequestTimeout: Duration = .seconds(20)
+
     /// Hands back a file for an asset this app created moments ago. Network access stays off: the
     /// copy was written on this iPhone, so if Photos cannot produce it locally the caller is told
     /// nothing rather than given something to download.
+    ///
+    /// The wait is bounded by `copyReadBackTimeout` and runs through the scan's own bounded read
+    /// (`PhotoLibraryScanService.boundedAnswer`), where one lock-guarded claim decides whether the
+    /// handler, the bound or a stop finishes the wait: a handler that never calls back, or one that
+    /// arrives after the bound, cannot resume the same continuation twice.
     func localFileURL(identifier: String) async -> URL? {
         guard let photo = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { return nil }
@@ -262,23 +323,33 @@ struct DeletionResult: Equatable, Sendable {
         options.version = .original
         options.deliveryMode = .highQualityFormat
         options.isNetworkAccessAllowed = false
-        return await withCheckedContinuation { (continuation: CheckedContinuation<URL?, Never>) in
-            var finished = false
-            manager.requestAVAsset(forVideo: photo, options: options) { requested, _, _ in
-                guard !finished else { return }
-                finished = true
-                guard let urlAsset = requested as? AVURLAsset, urlAsset.url.isFileURL else {
-                    continuation.resume(returning: nil)
+        let manager = self.manager
+        let asset: AVURLAsset? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: Self.copyReadBackTimeout
+        ) { answer in
+            let request = manager.requestAVAsset(forVideo: photo, options: options) { handed, _, _ in
+                // Only a file already on this iPhone may answer. A streaming asset is not this
+                // read's business, and following one would fetch bytes this read never fetches.
+                guard let urlAsset = handed as? AVURLAsset, urlAsset.url.isFileURL else {
+                    answer(nil)
                     return
                 }
-                continuation.resume(returning: urlAsset.url)
+                answer(urlAsset)
             }
+            return { manager.cancelImageRequest(request) }
         }
+        return asset?.url
     }
 
     /// Hands back a player item for the original. PhotoKit decides whether that streams from iCloud
     /// or comes from the phone, and this never asks for the export-grade original, so a quick look
     /// does not pull down a full-quality copy just to show a few seconds.
+    ///
+    /// The wait is bounded by `scrubRequestTimeout` and runs through the scan's own bounded read, so
+    /// a request that never calls back, or one that calls back after the bound, cannot leave the
+    /// sheet on its spinner or resume the same continuation twice. Whoever asks is handed the item,
+    /// or the sentence for why there is none: a read that was given up reads as
+    /// `PipelineError.retrieval`, the same answer Photos' own "nothing came back" produces.
     func playerItem(identifier: String) async throws -> AVPlayerItem {
         guard let photo = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { throw PipelineError.assetUnavailable }
@@ -286,24 +357,52 @@ struct DeletionResult: Equatable, Sendable {
         options.version = .current
         options.deliveryMode = .automatic
         options.isNetworkAccessAllowed = true
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<AVPlayerItem, Error>) in
-            var finished = false
-            manager.requestPlayerItem(forVideo: photo, options: options) { item, info in
-                guard !finished else { return }
-                finished = true
-                if let item {
-                    continuation.resume(returning: item)
-                } else {
-                    let error = info?[PHImageErrorKey] as? Error
-                    continuation.resume(throwing: PipelineError.normalize(error ?? PipelineError.retrieval,
-                                                                         fallback: .retrieval))
-                }
+        let manager = self.manager
+        let answer: PlayerItemAnswer? = await PhotoLibraryScanService.boundedAnswer(
+            timeout: Self.scrubRequestTimeout
+        ) { deliver in
+            let request = manager.requestPlayerItem(forVideo: photo, options: options) { item, info in
+                deliver(PlayerItemAnswer(item: item, error: info?[PHImageErrorKey] as? Error))
             }
+            return { manager.cancelImageRequest(request) }
         }
+        return try Self.resolvePlayerItem(answer)
+    }
+
+    /// What a bounded player-item read means: the item, or the sentence for why there is none.
+    ///
+    /// Nil is the bounded read's answer for a wait that was given up - Photos never called back
+    /// within the bound, or the read was stopped - and it is answered with the same
+    /// `PipelineError.retrieval` a read Photos refused produces, so both reach the sheet's failure
+    /// line. It is split out from the request itself so this mapping can be driven without a Photos
+    /// library, which is the only way this project can test it.
+    nonisolated static func resolvePlayerItem(_ answer: PlayerItemAnswer?) throws -> AVPlayerItem {
+        guard let answer else { throw PipelineError.retrieval }
+        guard let item = answer.item else {
+            throw PipelineError.normalize(answer.error ?? PipelineError.retrieval, fallback: .retrieval)
+        }
+        return item
     }
 }
 
 /// The change block may run off the main actor, so the identifier comes back in a box.
 private final class CreatedAssetBox: @unchecked Sendable {
     var identifier: String?
+}
+
+/// What one bounded player-item read handed back: the item Photos produced, or the error it
+/// reported instead of one.
+///
+/// The bounded read answers with a single value or with nil, so the error a Photos handler carries
+/// travels inside this rather than being read from shared state on a queue of PhotoKit's choosing.
+/// Nothing writes to it after it is handed over, which is what makes it safe to pass across the
+/// boundary the handler runs on.
+final class PlayerItemAnswer: @unchecked Sendable {
+    let item: AVPlayerItem?
+    let error: Error?
+
+    init(item: AVPlayerItem?, error: Error?) {
+        self.item = item
+        self.error = error
+    }
 }

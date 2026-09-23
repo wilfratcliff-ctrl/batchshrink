@@ -214,10 +214,18 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
 | N20 | 0 | **7 of 162 tests failed.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | **done.** Fixed in `7c11f26`, proven green by CI from `5d72357` onward |
 | N21 | 0 | Prove the fixes turn the suite green | **done for the suite.** Green in CI since `5d72357`. The deletion path still needs a device run, which is N19 |
-| N22 | 2 | `PhotoLibraryService.localFileURL` and `playerItem` still use an unbounded `withCheckedContinuation` with no cancellation path, so a handler that never calls back would stall that step. The scan's format read was hardened with a single-resumption bound in round 15; these two were not | open |
-| N23 | 2 | A storage refusal does not say how much is needed or how much there is, and a batch repeats the same sentence per item until the run ends. The numbers are held at the moment of the decision | open |
-| N24 | 3 | The single-video flow still shows the refusal sentence on a restricted device, where it points at a Settings switch that does not exist for Photos. The batch flow distinguishes the two | open |
-| N25 | 2 | A restored run resumed with access revoked fails each item with the limited-access sentence, which is not what happened | open |
+| N22 | 2 | `localFileURL` and `playerItem` were unbounded waits | **done, round 16.** Both now go through the scan's `boundedAnswer`, so one mechanism owns the single resumption |
+| N23 | 2 | A storage refusal named no figure, and a batch repeated it per item | **done, round 16.** The floor refusal now pauses the run once; a size-specific one fails only its video |
+| N24 | 3 | The single-video flow sent a restricted user to a Settings switch that is not there | done, round 16 |
+| N25 | 2 | A paused restored run resumed with access revoked said the wrong thing | done, round 16 |
+| N26 | 0 | **Pause during a batch export silently restarted it** | **done, round 16.** Two holes: the stop never reached the export, and a session built after the stop had nothing to cancel it |
+| N27 | 0 | **A save failure was labelled an export failure, and an error after Photos committed could make a second copy on retry** | **done, round 16.** An item Photos was asked to save is never persisted as `.failed`; it becomes the question, with the `.saving` evidence kept |
+| N28 | 2 | `retrieve` discarded the refusal reason it had already computed | done, round 16 |
+| N29 | 2 | A copy made in the one-video flow was not recorded as app-created | done, round 16 |
+| N30 | 3 | The device plan described code that no longer exists | done, round 16 |
+| N31 | 2 | A cancelled item was retried immediately, forever, and a failed export left its partial output behind | done, round 16 |
+| N32 | 2 | `.notDetermined` access with a restored queue still reaches Continue and the per-item `assetUnavailable` sentence. Left alone deliberately: the honest fix needs a decision about prompting, not just wording | open |
+| N33 | 2 | `VideoTranscodingService.makeSession` throws the generic `.unsupported` list when Apple has no export session for the preset — the same "guess instead of the finding" shape N28 fixed on the retrieval path | open |
 
 ## Round log
 
@@ -239,6 +247,37 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 13 | see below | A pre-run format check, first-run expectations, and a whole-app coherence review | local gates PASS | 286 tests |
 | 14 | `4d5da93` | Fix three tests that passed vacuously; correct the marketing again | CI: **green** | 289 tests |
 | 15 | see below | A first-sixty-seconds device audit and its findings | local gates PASS | 307 tests |
+| 16 | see below | A pipeline audit of one video's real journey, and its findings | local gates PASS | 331 tests |
+
+### Round 16 — the pipeline audit, and the two worst things it found
+
+The device-focused audits keep outperforming code review, so this one traced a single video all
+the way through the real path: retrieve, export, verify, save, read back, delete. It found seven
+things. Two were serious:
+
+**Pausing during an export silently restarted it.** The transcoder's plan loop retried on any
+failure and only gave up when the enclosing Swift task was cancelled — but `pause()` never
+cancelled that task, and each retry built a fresh session that nothing could cancel. So tapping
+Pause on a long clip made progress jump back to zero while the phone encoded the whole clip
+again. This is device-plan case 4, the one the first real run would have hit.
+
+**A failed save could make a second copy.** A save failure was normalised with the export
+fallback, so the user read "HEVC export failed" about something that never exported — and worse,
+an error arriving *after* Photos had committed the copy was persisted as `.failed`, which is
+exactly the state Retry runs again. `PipelineError.save`'s own sentence, written for this moment,
+was thrown nowhere in the app. An item Photos was asked to save is now never persisted as a clean
+failure: it becomes the question, with the `.saving` evidence kept.
+
+Also fixed: two unbounded PhotoKit waits that could freeze a run with both controls dead; a
+storage refusal that named no figure and repeated itself once per video; a restricted user sent to
+a Settings switch that does not exist; a retrieval step that threw away the refusal reason it had
+already computed; a copy from the one-video flow that Select all could shrink again; and a
+cancelled item retried forever with no cap.
+
+**The pattern across rounds 15 and 16 is worth keeping.** Both audits were read-only, both were
+aimed at a specific moment in the user's experience rather than at the code in general, and both
+found defects that all 300-odd tests were green through. Static checks and tests tell you the code
+agrees with itself; only tracing a path tells you what the user meets.
 
 ### Round 15 — an audit aimed at the one thing that is actually blocked
 

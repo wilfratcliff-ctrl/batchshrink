@@ -1,10 +1,39 @@
 import Foundation
 
 /// Why a run stopped. The paused screen says which one happened.
-enum BatchPauseReason: Equatable, Sendable {
+enum BatchPauseReason: Equatable, Sendable, CaseIterable {
     case asked
     case leftApp
     case tooWarm
+    /// A refusal taken before anything about this video was measured.
+    ///
+    /// The run asks for one working reserve before it starts on a video at all, and that figure is
+    /// the same for every video in the run. Nothing the run does to one video changes it, so
+    /// failing each remaining item with the same sentence, once per item, says one thing many
+    /// times and answers nothing. It stops the run instead, and the paused screen names the figure
+    /// the check asked for.
+    ///
+    /// A refusal taken at a size the run *did* measure - the room for one video's copy - is not
+    /// this: a later video may be small enough, so that one still fails only its own video.
+    case storage
+
+    /// What the paused screen says about a stop the user did not ask for, or nil for the one they
+    /// did.
+    ///
+    /// The switch is exhaustive on purpose, with no `default`: a reason added later cannot come to
+    /// rest on a paused screen that explains nothing, because it will not compile without its
+    /// wording here.
+    var explanation: String? {
+        switch self {
+        case .asked: return nil
+        case .leftApp: return "BatchShrink paused when the app left the foreground."
+        case .tooWarm: return "Your iPhone got warm, so BatchShrink stopped. Let it cool, then continue."
+        case .storage:
+            // The check that stops the run asks for the working reserve and for no measured file,
+            // so the sentence names that figure rather than a copy nothing has measured yet.
+            return PipelineError.insufficientStorageSentence(needed: DiskHeadroom.neededToWrite(nil))
+        }
+    }
 }
 
 enum BatchItemState: Equatable, Sendable {
@@ -212,10 +241,9 @@ enum DiskHeadroom {
     ///
     /// This answers "how much space will these files take", which is deliberately not the same
     /// question as "how much space does this step still need free": the file a step is copying
-    /// from is part of this total but none of what it still needs. Size a step with
-    /// `neededToWrite(_:)`; this arithmetic is kept because the existing call sites and the pinned
-    /// arithmetic tests are written against it, and the two export checks still pass `copies: 2`,
-    /// which is one copy more than that step needs. See the free-space case in
+    /// from is part of this total but none of what it still needs. Every call site sizes its step
+    /// with `neededToWrite(_:)` instead, so this arithmetic has no production caller left: it
+    /// survives only because its arithmetic is pinned by test. See the free-space case in
     /// `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
     static func bytes(_ bytes: Int64, copies: Int64) -> Int64 {
         let (product, overflow) = bytes.multipliedReportingOverflow(by: copies)

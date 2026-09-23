@@ -992,14 +992,18 @@ struct BatchFinishedRow: View {
                 : "The copies BatchShrink made are in Photos, so none of them are run again. Nothing is left to check."
         }
         guard foundCopy > 0 else {
-            return "BatchShrink stopped while Photos was taking a copy. Look in Photos before running those again."
+            // Said of the copy rather than of the run: a save Photos did not confirm flags its
+            // video while the run itself carries on to the next one.
+            return awaitingUser == 1
+                ? "Photos may still have been taking the copy of this video. Look in Photos before running it again."
+                : "Photos may still have been taking the copies of these videos. Look in Photos before running them again."
         }
         let found = foundCopy == 1 ? "one of them" : "\(foundCopy) of them"
         let verdict = foundCopy == 1 ? "so that one is not run again." : "so those are not run again."
         let rest = awaitingUser == 1
             ? "The other one still needs a look in Photos."
             : "The other \(awaitingUser) still need a look in Photos."
-        return "BatchShrink stopped while Photos was taking a copy, and found the copy it made for \(found), \(verdict) \(rest)"
+        return "Photos kept the copy it made for \(found), \(verdict) \(rest)"
     }
 }
 
@@ -1010,14 +1014,9 @@ struct BatchPausedScreen: View {
 
     private var midSave: MidSaveReport { MidSaveReport(batch) }
 
-    /// Only the reasons worth putting on screen. A pause the user asked for needs no explanation.
-    private var pauseReasonText: String? {
-        switch batch.pauseReason {
-        case .tooWarm: return "Your iPhone got warm, so BatchShrink stopped. Let it cool, then continue."
-        case .leftApp: return "BatchShrink paused when the app left the foreground."
-        default: return nil
-        }
-    }
+    /// Only the reasons worth putting on screen. A pause the user asked for needs no explanation,
+    /// and every reason the user did not ask for brings its own wording with it.
+    private var pauseReasonText: String? { batch.pauseReason?.explanation }
 
     var body: some View {
         ScrollView {
