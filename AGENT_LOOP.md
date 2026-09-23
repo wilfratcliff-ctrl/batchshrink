@@ -27,11 +27,18 @@ checker catches both without a compiler:
 - **a bare optional parameter shadowing a non-optional stored property inside `init`** — it
   reported exactly the two `BatchViewModel` errors the compiler later confirmed.
 
-It is a scanner, not a compiler. It checks no types, no generics, no protocol conformance, no
+It also covers the failure mode that has cost this project the most: a protocol change that leaves
+a conformer behind. There are 8 protocols and 28 conformances here, 20 of them test doubles, and
+that exact break happened in rounds 1, 3 and 4. Rule C checks every conformer against every
+requirement; Rule D reports a declaration made twice in one scope.
+
+It is still a scanner, not a compiler. It checks no types, no generics, no availability, no
 argument counts, and nothing declared outside these files, so **a clean run is evidence and never
-proof.** It resolved 618 of 3,076 call sites and skipped the rest rather than guess, which is the
-trade that keeps it free of false positives: zero on the two trees the cloud compiler verified
-green, and zero on the current tree.
+proof.** It resolved 618 of 3,076 call sites and skipped the rest rather than guess — though it
+skipped no conformer at all — which is the trade that keeps it free of false positives: zero on
+the two trees the cloud compiler verified green, and zero on the current tree. Rules C and D were
+proved against injected mutations of the real tree in a temp directory, because no broken state
+survives in git history.
 
 `sync-native-sources.mjs` mirrors Swift under `VideoShrink/{Models,Services,Presentation}`
 into the Expo pod. Any Swift edit in those folders requires `npm run sync:native` or the
@@ -69,6 +76,14 @@ Consequences:
 - The route that costs no build minutes is the macOS CI job in `.github/workflows/ios-tests.yml`,
   which runs the same `scripts/verify-native-tests.mjs`. It needs a GitHub remote, which this
   repository does not have.
+
+**Status: the goal is blocked on this.** Every remaining backlog item needs a compile or a test
+run to be honest about, and there is no way to get one. The locally verifiable work — the
+guardrail scan, the Swift static checker, the CI workflow, the handoff documents — is done. Work
+resumes the moment one of these is true: the owner adds a git remote, the owner upgrades the EAS
+plan, or 1 October arrives and the free builds reset. Do not start another Swift round before
+then; `7c11f26` is still sitting unverified and adding to it would repeat the exact mistake that
+produced four compile errors this month.
 
 An EAS build compiles everything under `modules/videoshrink-native/ios/`, which includes
 `VideoShrinkCore/` — the mirror of `VideoShrink/{Models,Services,Presentation}` produced by
