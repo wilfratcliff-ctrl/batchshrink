@@ -4,6 +4,17 @@
 # slower -- and neither depends on the other, so one can never hide the other's failure.
 # Nothing here signs, deploys, submits or spends EAS build minutes.
 #
+# THREE JOBS, AND WHAT THEY COST. The third job, app-launch-smoke, was added in round 18 and all
+# three now run on every push to main. On 2026-09-23 the account's runners stopped starting
+# altogether, with no runner and no steps for any job including a throwaway Linux one, while
+# GitHub reported all systems operational -- and the arithmetic says why it happened here first:
+# private-repository runner minutes come from a monthly allowance, macOS runners are billed at
+# ten times the Linux rate, and these three jobs cost roughly 7 + 12 + 6 macOS minutes each time.
+# AGENT_LOOP.md has the evidence and the options. Before adding a fourth job, or a slower step to
+# an existing one, price it: a push costs about a quarter of a thousand billed minutes as it
+# stands. The duplicate `npm ci` in the launch job has already been removed for that reason --
+# that job needs no package from node_modules, only the generated mirror.
+#
 # JOB 1: verify-native-tests
 #
 # Compile and run the XCTest target on a macOS runner.
@@ -215,12 +226,16 @@ jobs:
           # this project is developed on locally.
           node-version: "24"
 
-      - name: Install dependencies
-        # npm ci runs the repo's postinstall, scripts/sync-native-sources.mjs, which writes the
-        # mirrored Swift under modules/videoshrink-native/ios/VideoShrinkCore/. This job builds
-        # the standalone project rather than the pod, but the mirror check inside the script
-        # runs either way and a stale mirror is worth failing for.
-        run: npm ci
+      - name: Write the mirrored Swift
+        # Deliberately NOT `npm ci`. This job runs two Node scripts that import nothing but Node's
+        # own built-ins, and it builds the standalone project through project.yml, so it needs no
+        # package from node_modules at all. What it does need is the generated mirror under
+        # modules/videoshrink-native/ios/VideoShrinkCore/, because verify-app-launch.mjs checks it
+        # is in sync first -- and that check exists for this job's benefit too, since a stale mirror
+        # is a source-control mistake worth catching everywhere. Generating it directly costs
+        # milliseconds where `npm ci` costs a minute and a half of a macOS runner, which on a
+        # private repository is billed at ten times the Linux rate. See the cost note at the top.
+        run: node scripts/sync-native-sources.mjs
 
       - name: Launch the app and look at the screen
         # One script: generate the project with XcodeGen, build the app for a simulator, boot
