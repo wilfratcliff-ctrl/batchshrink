@@ -36,10 +36,14 @@ current answer.
 
 Three rounds of Swift sit on `main` that **no compiler has ever seen** — every change after
 `31b6245`, because the account's Actions minutes ran out on 2026-09-23 and reset on 1 October. It is
-about 1,750 lines across fourteen files. The local gates pass and the call-site checker resolved
-6,132 call sites with no findings, but those are pattern scans: they check no types, no members, no
-generics and no availability. So the first green gate after 1 October is the first real reading of
-this work, and the point of this section is to make a failure cheap to attribute.
+about 1,900 lines across fifteen files. The local gates pass, and since round 22 the call-site
+checker resolves **7,623 call sites** with no findings — up from 6,190, because it now sees two
+shapes it could not before: enum cases with associated values, and calls written with a leading dot
+like `.planning(resolution:frameRate:)`, of which the scan scope holds 1,371. Everything the checker
+judges is still only *names and argument labels*: it checks no types, no members' types, no
+generics and no availability, and it leaves a member call alone when the name is ambiguous or the
+call writes no labels. So the first green gate after 1 October is the first real reading of this
+work, and the point of this section is to make a failure cheap to attribute.
 
 `git log --oneline 31b6245..HEAD` lists the commits; `git log -1 --format=%h -- <file>` names the
 commit that last touched a file a compiler complains about.

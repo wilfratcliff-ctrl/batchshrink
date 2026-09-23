@@ -589,6 +589,48 @@ const mutations = [
     replace: null,
     expect: '1024',
     patchByte: { offset: 23, value: 1 }
+  },
+
+  // --- The Swift call-site checker. Rules C and D were proved against injected faults in an
+  // earlier round and are not repeated here; these two prove Rule A on the shape that used to be
+  // invisible, and Rule E, which is new.
+  {
+    id: 'an enum case with an associated value is called with its labels out of order',
+    file: 'VideoShrinkTests/RulesTests.swift',
+    find: 'import XCTest',
+    replace: 'import XCTest\nprivate let ruleAProbe = BatchQueueRecord.State.saved(copyBytes: 2, originalBytes: 1)',
+    gate: 'callsites',
+    // The call has to be *qualified* - `BatchQueueRecord.State.saved(...)` rather than
+    // `.saved(...)` - because this scan deliberately leaves a leading-dot member call alone, since
+    // resolving one needs type inference it does not have. That is why the fault is written as a
+    // qualified call rather than by perturbing an existing one: the two calls to this case in the
+    // tree are both written with a leading dot.
+    //
+    // `saved` is declared only as a case with associated values, and until round 22 this scan
+    // collected none of those, so before the fix this call resolved to nothing at all and the
+    // fault was silent. That is what makes this a proof of the case-collection fix and not only of
+    // Rule A.
+    expect: 'must precede'
+  },
+  {
+    id: 'a leading-dot constructor is called with its labels out of order',
+    file: 'VideoShrink/Models/LibraryModels.swift',
+    find: '.planning(resolution: resolution, frameRate: frameRate)',
+    replace: '.planning(frameRate: frameRate, resolution: resolution)',
+    gate: 'callsites',
+    // This is the mutation that was MISSED first: a leading-dot member call used to be dropped by
+    // the collector entirely, so the fault was invisible even though `planning` was declared as a
+    // case. Round 22 collects that shape, and this is the proof of it - a call this codebase writes
+    // far more often than any other.
+    expect: 'must precede'
+  },
+  {
+    id: 'a static member that no declaration supplies is referenced',
+    file: 'VideoShrink/Presentation/BatchScreens.swift',
+    find: 'import SwiftUI',
+    replace: 'import SwiftUI\nprivate let ruleEProbe: String = BatchSelectionScreen.unaccountedHeading2',
+    gate: 'callsites',
+    expect: 'names a member that is declared nowhere in the scanned tree'
   }
 ];
 
@@ -689,7 +731,8 @@ function swiftFilesUnder(target) {
 const gates = {
   guardrails: { args: ['scripts/validate.mjs'] },
   mirror: { args: ['scripts/sync-native-sources.mjs', '--check'] },
-  prebuild: { args: ['scripts/verify-expo-build.mjs', '--check-only'] }
+  prebuild: { args: ['scripts/verify-expo-build.mjs', '--check-only'] },
+  callsites: { args: ['scripts/swift-call-site-check.mjs'] }
 };
 
 function runGate(directory, name) {

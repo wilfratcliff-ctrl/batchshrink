@@ -20,13 +20,13 @@ deletion and change requests appear only in `PhotoLibraryService.swift`.
 
 **One of those patterns was broken, and `npm run prove:guardrails` is why we know.**
 `scripts/prove-guardrails.mjs` injects one fault per assertion into a throwaway copy of the tree
-and requires the gate aimed at it to refuse it: sixty-one mutations across the three local gates
-(`validate.mjs`, the pod-mirror check, and the Expo prebuild's own preflight), each naming a file,
-the edit that should break exactly one assertion, and a fragment of the message that assertion
-should print.
+and requires the gate aimed at it to refuse it: **seventy mutations across all four local gates**
+(`validate.mjs`, the pod-mirror check, the Expo prebuild's own preflight, and the Swift call-site
+checker), each naming a file, the edit that should break exactly one assertion, and a fragment of
+the message that assertion should print.
 Only `CAUGHT` is proof; `MISSED` means the assertion is vacuous, `WRONG` that the failure was
 about a different assertion, and `NO MATCH` that the mutation itself has drifted. It is not part
-of `validate:native` (it copies the tree sixty-one times and takes half a minute) and it is
+of `validate:native` (it copies the tree seventy times and takes about a minute) and it is
 worth running whenever an assertion is added, changed or doubted.
 
 Its first run found this: the force-unwrap guardrail was written `/\btry!\b/`, and **that
@@ -384,6 +384,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 19 | see below | The two audits' nineteen findings, an early permission prompt the launch job found, twenty-two documents corrected against the code, and an independent read of the Swift nobody could compile | local gates PASS; **CI blocked, runners not starting** | 364 tests, none executed |
 | 20 | see below | Prove the guardrails guard (and fix the one that could never fire), then a deletion-journey audit and a restored-run audit, and their screen-truthfulness fixes | local gates PASS; `prove:guardrails` 54/54; **CI blocked** | 372 tests, none executed |
 | 21 | see below | The highest-value open finding from round 20's audits: a video that may already have a copy was bulk-selectable again | local gates PASS; `prove:guardrails` 67/67; **CI blocked** | 375 tests, none executed |
+| 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -791,6 +792,19 @@ The flow that had never been traced, written up in **[docs/AUDIT_SINGLE_VIDEO.md
 | SV7 | 3 | The welcome promised "your smaller copy" before anything had been measured | done, round 21, unverified |
 | SV8 | 3 | The shared quality sheet promises estimates the one-video flow cannot show | open, cosmetic |
 
+### Round 22's review findings — the tooling, and two in the app
+
+The whole-pile review's findings, beyond the three tooling gaps the round fixed:
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| PL1 | 1 | The call-site checker dropped every call written with a leading dot - 1,371 in scope, 429 labelled - so it could not judge the shape this codebase writes almost every enum case in | **done, round 22**, with a mutation proving the shape. A whole-pile review found it by watching the harness report MISSED then CAUGHT on the same fault written two ways |
+| PL2 | 1 | The checker collected no enum case with an associated value, so its labels were never recorded and a call to it was never order-checked | done, round 22 |
+| PL3 | 2 | No rule asked whether a member referenced by name exists at all, which is the class a large unverified pile is most likely to contain | done, round 22: Rule E, judging 986 references |
+| PL4 | 3 | The deletion flush's mode guard returned silently where the function beside it records a reason | done, round 22 |
+| PL5 | 3 | A grid tile for a video left out of Select all showed an ordinary estimate and a tick circle | done, round 22 |
+| PL6 | 3 | A round-19 case asserted a 150 ms signal against a 60 ms delay with a 10 ms margin | done, round 22: the delay is 150 ms |
+
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.
 
@@ -1015,3 +1029,50 @@ which is why the audit could rank its findings by compilation state at all.
 **Where the round leaves the project.** Six more Swift fixes than round 20, and the same caveat: the
 local gates pass, the proof harness is 67 of 67, and nothing since `31b6245` has been compiled. The
 verification handoff now carries a triage table for the moment that changes.
+
+### Round 22 — the gate could not see the shape this codebase writes most
+
+A whole-pile review — three rounds of unverified Swift read as one thing rather than round by round —
+found the most valuable defect of the day, and it was in the *tooling*, not the app.
+
+`scripts/swift-call-site-check.mjs` collected calls with a guard that dropped any call written with a
+leading dot: `.planning(resolution:frameRate:)`, `.saved(originalBytes:copyBytes:)`, and the rest of
+the shape this codebase uses for almost every enum case and member call. The guard's reasoning was
+that resolving `.member(...)` needs type inference the scan does not have - which is true about
+*which type* the member belongs to, and cost far more than it saved. There are **1,371 of them in the
+scan scope, 429 carrying at least one label, and not one was judged.** The one local substitute for
+the compiler could not see a mis-ordered argument in the most common constructor shape in the app.
+
+It was found by the harness proving it to itself: the first mutation written for the new Rule E fired
+and the Rule A one came back MISSED, because the call it mutated was written with a leading dot. The
+same call written qualified was CAUGHT. Both shapes are mutations now.
+
+**Three things were wrong with the checker, and all three are fixed.**
+
+- **Leading-dot calls are collected and resolved tree-wide** (a leading-dot call has no file-local
+  meaning, so it never takes the local-first step). Call sites read went from 6,190 to 7,623 and
+  judged calls from 1,982 to 2,058, with no findings on the tree - the same standard the checker
+  holds itself to.
+- **Rule E is new**: a member referenced through a type's own name, where no such member exists. This
+  is the class every reviewer of the last three rounds named as uncovered - Rules A to D never ask
+  whether the thing being called exists - and it is the class a 1,900-line unverified pile is most
+  likely to contain, because almost every change was a new static sentence or rule called by name.
+  It judges 986 references and reports the ones whose name exists nowhere.
+- **Enum cases with associated values were invisible to every rule.** The case scanner advanced while
+  a bracket-depth counter matched, and that counter counts `(` - so `case noSession(resolution:)`
+  arrived as the text `noSession(`, matched nothing, and produced no declaration at all. Its labels
+  were never recorded, a call to it was never order-checked, and Rule E is what surfaced it by
+  reporting 23 of them as names declared nowhere. Fixing it added 20 declarations and made 24 more
+  calls judgeable.
+
+Two smaller findings from the same review are fixed with it: the deletion flush's new mode guard
+returned silently, in a file whose neighbouring rule says exactly why that is wrong (the originals
+are now recorded as kept, with a sentence), and the selection grid's tile for a video left out of
+Select all shows an ordinary estimate and a tick circle - the caption now says so, which is what the
+comment beside it always said the row had to do. A case of round 19's that asserted a sample spans
+the retrieval had a 10 ms margin against a 60 ms delay; the margin is 100 ms now.
+
+**The lesson this round is the one the loop already carries, applied to its own tools**: `prove`
+covers four gates and seventy mutations, and everything it says is about what it was built to inject.
+The leading-dot hole survived two rounds of "local gates PASS" because nothing had tried to break
+that shape. A gate's numbers are evidence about the code; they are not evidence about the gate.

@@ -2089,7 +2089,10 @@ import SwiftUI
         let fixture = BatchFixture(assets: [asset("a", bytes: 20_000_000)])
         fixture.verifier.inspectBytes = 20_000_000
         fixture.verifier.outputs = [10_000_000]
-        fixture.photos.retrievalDelay = .milliseconds(60)
+        // Long enough that the bound below has a wide margin: the assertion is that the sample
+        // includes the retrieval, and a transcode-only sample is a fraction of a millisecond, so a
+        // 10 ms margin over 60 ms was a flake waiting for a loaded runner rather than a signal.
+        fixture.photos.retrievalDelay = .milliseconds(150)
         await scan(fixture)
         fixture.batch.beginSelecting()
         fixture.batch.selectAll()

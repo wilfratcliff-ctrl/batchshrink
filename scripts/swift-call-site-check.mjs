@@ -72,6 +72,27 @@
  *   file-scope name declared on both sides of that seam is a redeclaration even though the two
  *   files sit in different scanned target directories.
  *
+ * RULE E - a member referenced through a type's own name, where no such member exists.
+ *   Rules A to D cannot see this at all: A resolves call *labels* and never asks whether the thing
+ *   being called exists, and C and D compare declarations with each other. So `Self.pauseHeadline2`
+ *   or `BatchSelectionScreen.unaccountedHeading2` would pass this scan and be caught only by the
+ *   compiler. A reference is reported when its base is a type declared in the scanned tree - or
+ *   `Self`, inside a type this scan can place - AND the member name is declared *nowhere* in the
+ *   tree: not as a member of any type, not as a file-scope declaration, not as a protocol
+ *   requirement, not as a type, and not as an enum case.
+ *
+ *   It deliberately does not report the softer mistake - a member that exists, but on a different
+ *   type than the reference names. That needs the module and inheritance rules this scan does not
+ *   have, and a false report there would be worse than silence. Those references are counted so the
+ *   output says how much was looked at and not judged.
+ *
+ *   Enum cases with associated values are members too, and until round 22 this scan collected none
+ *   of them: the case text was read with a scanner that counted `(` as a nesting level, so
+ *   `case noSession(resolution:)` arrived as the text `noSession(` and produced no declaration at
+ *   all. Every such case was invisible to Rules A, C and D - its labels were never recorded, so a
+ *   call to it was never order-checked - and Rule E is what surfaced the gap. Fixing it makes 24
+ *   more call sites judgeable.
+ *
  * WHAT THIS DOES NOT COVER - do not mistake it for a compiler:
  *   - types, generics, availability, access control, actor isolation, effects, and overload
  *     resolution beyond the narrow uniqueness rules above;
@@ -80,6 +101,10 @@
  *     AVFoundation, XCTest, ExpoModulesCore, the standard library), so a wrong label on an
  *     external API is invisible;
  *   - string interpolation contents, macros, operators, subscripts and key paths;
+ *   - Rule E judges names, not types or visibility: a member that exists on the right type but
+ *     with the wrong access level, or that exists only in the test target while the reference is
+ *     in the app, is left alone; and a reference through `Self` is judged only where the enclosing
+ *     type could be placed.
  *   - Rule B only fires when the parameter and the stored property share an exact name and both
  *     live in a type this scan can parse.
  *   - Rule C checks only protocols declared in these files, and only member NAMES with argument
@@ -528,8 +553,20 @@ function collectDeclarations(clean, depths, types) {
       if (cm.index >= t.bodyEnd) break;
       if (depths[cm.index] !== interior) continue;
       if (innermostType(types, cm.index) !== t) continue;
+      // A case runs to the end of its line - or past it, while an associated value is still open.
+      // This used to advance while `depths[end] === interior`, and `depths` counts `(`, `[` and
+      // `{` together, so the scan stopped at the first parenthesis: `case noSession(resolution:)`
+      // arrived here as the text `noSession(`, matched nothing, and produced NO declaration at all.
+      // Every enum case with an associated value was therefore invisible to all four rules - its
+      // labels were never recorded, a call to it was never order-checked, and Rule E reported it as
+      // a name declared nowhere until this was found.
       let end = cm.index + cm[0].length;
-      while (end < t.bodyEnd && depths[end] === interior && clean[end] !== '\n') end++;
+      let open = 0;
+      while (end < t.bodyEnd && (clean[end] !== '\n' || open > 0)) {
+        if (clean[end] === '(' || clean[end] === '[') open++;
+        if (clean[end] === ')' || clean[end] === ']') open = Math.max(0, open - 1);
+        end++;
+      }
       for (const rawCase of splitTopLevel(clean.slice(cm.index + cm[0].length, end), ',')) {
         const ct = rawCase.trim();
         if (!ct) continue;
@@ -915,7 +952,18 @@ function collectCalls(clean) {
     const name = m[1].split('.').pop();
     if (SWIFT_KEYWORDS.has(name)) continue;
     const before = clean[m.index - 1];
-    if (before === '.' || before === '@' || before === '#') continue;
+    if (before === '@' || before === '#') continue;
+    // A call written `.member(...)` - a leading dot and no type name - is collected now, and is
+    // resolved tree-wide rather than against its own file. Until round 22 it was dropped here, on
+    // the reasonable-sounding grounds that resolving one needs type inference this scan does not
+    // have. That reasoning was about *which type* the member belongs to, and it cost far more than
+    // it saved: `.planning(resolution:frameRate:)`, `.saved(originalBytes:copyBytes:)` and the rest
+    // of this codebase's enum-case and member-call style were invisible. A count of the shape in
+    // the scanned files found 1,371 of them, 429 carrying at least one label, and not one was being
+    // judged. The name is enough to resolve one here, because the same guards that keep a framework
+    // call from being mistaken for a local declaration still apply: the labels must match exactly
+    // one declaration in the tree, and a call writing no labels is left alone.
+    const dotMember = before === '.';
     const pre = clean.slice(Math.max(0, m.index - 24), m.index);
     if (/\b(func|case)\s*$/.test(pre)) continue;
     const parenAt = m.index + m[0].length - 1;
@@ -928,7 +976,7 @@ function collectCalls(clean) {
         const am = /^([A-Za-z_][A-Za-z0-9_]*)\s*:(?!:)/.exec(a);
         return am ? am[1] : null;
       });
-    calls.push({ name, labels, index: m.index, parenAt, close });
+    calls.push({ name, labels, index: m.index, parenAt, close, dotMember });
   }
   return calls;
 }
@@ -1061,6 +1109,9 @@ function analyse(source, relPath) {
 
   return {
     findings, decls, calls, types, initsInspected, module,
+    // Rule E needs the cleared text and the original: the first to find references without
+    // matching inside a comment or a string, the second to quote the line it found one on.
+    clean, source,
     facts: {
       protocolFacts, declFacts, members, fileDecls,
       extensions: collectExtensions(clean, types),
@@ -1072,6 +1123,116 @@ function analyse(source, relPath) {
 // ---------------------------------------------------------------------------------------------
 // Rule A, which needs every file's declarations: a call is resolved against its own file first
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Rule E: a member referenced through a type's own name, where no such member exists.
+ *
+ * Every round of this project has added static sentences and rules that another part of the app
+ * reads by name - `BatchSelectionScreen.unaccountedHeading`, `Self.pauseHeadline(deletion:)`,
+ * `VideoReasonList.RowDescription` - and Rules A to D cannot see any of them. Rule A resolves call
+ * *labels*; it never asks whether the thing being called exists. Rules C and D compare declarations
+ * against each other. So `Self.pauseHeadline2(...)` would compile as far as this scan is concerned,
+ * and the first thing to notice would be the compiler, on a machine nobody has.
+ *
+ * WHAT IT JUDGES, AND WHAT IT DELIBERATELY DOES NOT
+ *   A reference is reported when the base is a type declared in the scanned tree (or `Self`, inside
+ *   a type this scan can place) AND the member name is declared *nowhere* in the tree - not as a
+ *   member of any type, not as a file-scope declaration, not as a protocol requirement, not as a
+ *   type. A name that exists nowhere cannot resolve to anything, so a reference to one is a defect
+ *   whatever the surrounding code is doing.
+ *
+ *   It does not report the softer and more common mistake - a member that exists, but on a
+ *   different type than the one the reference names. That needs the module and inheritance rules
+ *   this scan does not have, and a false report there would be worse than silence: the whole value
+ *   of this file is that a finding is worth acting on. Those references are counted instead, so the
+ *   output says how much was looked at and not judged.
+ *
+ *   Skipped rather than guessed, like everything else here: a base name that is not a declared type
+ *   (which is most of them - SwiftUI, UIKit and the standard library are outside this scan); a base
+ *   name declared more than once, so the reference could be to either; a member the compiler
+ *   synthesises rather than declares (`allCases` from `CaseIterable`, `rawValue` from
+ *   `RawRepresentable`); and `Self` outside a type this scan can place.
+ */
+function checkMemberReferences(files) {
+  const findings = [];
+  const stats = {
+    references: 0, onTheType: 0, declaredElsewhere: 0,
+    notATypeName: 0, ambiguousTypeName: 0, synthesized: 0,
+  };
+
+  const declaredNames = new Set();
+  const membersByScope = new Map();
+  const typeKeysByName = new Map();
+
+  for (const file of files) {
+    const module = file.facts.module;
+    for (const member of file.facts.members) {
+      declaredNames.add(member.name);
+      const scope = `${module}|${member.key}`;
+      if (!membersByScope.has(scope)) membersByScope.set(scope, new Set());
+      membersByScope.get(scope).add(member.name);
+    }
+    for (const decl of file.facts.fileDecls) declaredNames.add(decl.name);
+    for (const decl of file.facts.declFacts) {
+      declaredNames.add(decl.name);
+      if (!typeKeysByName.has(decl.name)) typeKeysByName.set(decl.name, new Set());
+      typeKeysByName.get(decl.name).add(`${module}|${decl.key}`);
+    }
+    for (const protocol of file.facts.protocolFacts) {
+      declaredNames.add(protocol.name);
+      for (const requirement of protocol.requirements) declaredNames.add(requirement.name);
+      for (const skipped of protocol.skipped) declaredNames.add(skipped.name);
+    }
+    for (const extension of file.facts.extensions) declaredNames.add(extension.name);
+  }
+
+  // Enum cases are members of their enum, but they are collected with the other declarations
+  // rather than with the members above, so `SomeEnum.someCase` would otherwise read as a name that
+  // exists nowhere - which is how the first run of this rule reported 170 of them.
+  for (const file of files) {
+    for (const decl of file.decls) {
+      if (decl.kind !== 'case') continue;
+      declaredNames.add(decl.name);
+      for (const key of typeKeysByName.get(decl.typeName) ?? []) {
+        if (!membersByScope.has(key)) membersByScope.set(key, new Set());
+        membersByScope.get(key).add(decl.name);
+      }
+    }
+  }
+
+  // Members the compiler writes for a declaration rather than taking them from one.
+  const synthesized = new Set(['allCases', 'rawValue', 'init', 'self', 'hashValue', 'description']);
+
+  for (const file of files) {
+    const clean = file.clean;
+    const reference = /(^|[^A-Za-z0-9_.])(Self|[A-Z][A-Za-z0-9_]*)\s*\.\s*([a-z_][A-Za-z0-9_]*)/g;
+    let hit;
+    while ((hit = reference.exec(clean))) {
+      const base = hit[2];
+      const member = hit[3];
+      const at = hit.index + hit[1].length;
+      let keys;
+      if (base === 'Self') {
+        const owner = innermostType(file.types, at);
+        keys = owner ? new Set([`${file.module}|${typeKey(owner)}`]) : null;
+      } else {
+        keys = typeKeysByName.get(base) ?? null;
+      }
+      if (!keys) { stats.notATypeName++; continue; }
+      stats.references++;
+      if (keys.size > 1) { stats.ambiguousTypeName++; continue; }
+      if (synthesized.has(member)) { stats.synthesized++; continue; }
+      const key = [...keys][0];
+      if ((membersByScope.get(key) ?? new Set()).has(member)) { stats.onTheType++; continue; }
+      if (declaredNames.has(member)) { stats.declaredElsewhere++; continue; }
+      findings.push({
+        rule: 'E', path: file.facts.relPath, line: lineAt(clean, at),
+        quote: quoteLine(file.source, at), base, member,
+      });
+    }
+  }
+  return { findings, stats };
+}
 
 /**
  * Order-check every call in the tree.
@@ -1087,7 +1248,7 @@ function checkCallOrder(files) {
   const findings = [];
   const stats = {
     judged: 0, crossFile: 0, crossFileInBridge: 0,
-    unresolved: 0, ambiguous: 0, noMatch: 0, unlabelled: 0,
+    unresolved: 0, ambiguous: 0, noMatch: 0, unlabelled: 0, memberJudged: 0,
   };
 
   const treeByName = new Map();
@@ -1105,7 +1266,9 @@ function checkCallOrder(files) {
       localByName.get(decl.name).push(decl);
     }
     for (const call of file.calls) {
-      const local = localByName.get(call.name);
+      // A leading-dot call has no file-local meaning, so it never gets the local-first step: the
+      // only thing that can resolve it is a declaration somewhere in the tree.
+      const local = call.dotMember ? undefined : localByName.get(call.name);
       let candidates = local;
       if (!candidates) {
         if (!call.labels.some(label => label !== null)) { stats.unlabelled++; continue; }
@@ -1118,6 +1281,7 @@ function checkCallOrder(files) {
       if (matching.length > 1) { stats.ambiguous++; continue; }
       const decl = matching[0];
       stats.judged++;
+      if (call.dotMember) stats.memberJudged++;
       if (!local) {
         stats.crossFile++;
         if (call.relPath.startsWith(`${BRIDGE_DIRECTORY}/`)) stats.crossFileInBridge++;
@@ -1439,12 +1603,14 @@ const findings = [];
 for (const file of files) {
   const relPath = displayPath(file);
   try {
-    const { findings: fileFindings, decls, calls, initsInspected, facts } =
+    const { findings: fileFindings, decls, calls, initsInspected, facts, types, clean, source } =
       analyse(readFileSync(file, 'utf8'), relPath);
     declCount += decls.length;
     callCount += calls.length;
     initCount += initsInspected;
-    analysed.push({ decls, calls });
+    // Rule E needs the whole analysis, not just the declarations and calls: the members a file
+    // declares, the types it declares, the text it was read from and the module it belongs to.
+    analysed.push({ decls, calls, facts, types, clean, source, module: facts.module });
     const inBridgeDirectory = relPath.startsWith(`${BRIDGE_DIRECTORY}/`);
     const mirroredIntoPod = MIRRORED_SOURCE_FOLDERS.some(folder => relPath.startsWith(`${folder}/`));
     for (const protocol of facts.protocolFacts) tree.protocols.push({ ...protocol, relPath });
@@ -1462,9 +1628,11 @@ for (const file of files) {
 }
 
 const callOrder = checkCallOrder(analysed);
+const memberRefs = checkMemberReferences(analysed);
 const conformance = checkConformance(tree);
 const duplicates = checkDuplicates(tree);
-findings.push(...callOrder.findings, ...conformance.findings, ...duplicates.findings);
+findings.push(...callOrder.findings, ...conformance.findings, ...duplicates.findings,
+              ...memberRefs.findings);
 findings.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
 
 for (const f of findings) {
@@ -1479,6 +1647,9 @@ for (const f of findings) {
   } else if (f.rule === 'C') {
     console.log(`FAIL ${f.path}:${f.line}: ${f.typeName} (${f.typeKind}) declares ${f.protocolName} but is missing ${describeRequirement(f.requirement)}`);
     console.log(`     the requirement is declared in ${f.requirementPath}:${f.requirementLine}`);
+  } else if (f.rule === 'E') {
+    console.log(`FAIL ${f.path}:${f.line}: '${f.base}.${f.member}' names a member that is declared nowhere in the scanned tree`);
+    console.log(`     a name that exists nowhere cannot resolve, whatever else is true of the code around it`);
   } else {
     console.log(`FAIL ${f.path}:${f.line}: '${f.name}' is declared a second time in ${f.scope}`);
     console.log(`     the first declaration is at ${f.firstPath}:${f.firstLine}`);
@@ -1491,11 +1662,17 @@ const scope = args.length > 0
   ? `scope: the ${files.length} Swift files named on the command line`
   : `scope: VideoShrink/, VideoShrinkTests/, VideoShrinkUITests/ and the Expo bridge files in ${BRIDGE_DIRECTORY}/`;
 const coverage = `coverage: ${callOrder.stats.judged} calls resolved to one declaration and were order-checked` +
-  (callOrder.stats.crossFile > 0 ? ` (${callOrder.stats.crossFile} of them resolved across files, ${callOrder.stats.crossFileInBridge} of those written in the two bridge files - the step that makes the bridge files checkable at all)` : '') +
+  (callOrder.stats.crossFile > 0 ? ` (${callOrder.stats.crossFile} of them resolved across files, ${callOrder.stats.crossFileInBridge} of those written in the two bridge files - the step that makes the bridge files checkable at all; ${callOrder.stats.memberJudged} written with a leading dot, which resolve only across files)` : '') +
   `; ${initCount} initialisers inspected for an optional shadow; ` +
   `${conformance.stats.protocols} protocols with ${conformance.stats.requirements} requirements checked against ${conformance.stats.conformers} conformers; ` +
   `${duplicates.stats.typeScopes} type scopes and ${duplicates.stats.fileScopes} file scopes checked for duplicates` +
-  (duplicates.stats.podSeam > 0 ? `, plus ${duplicates.stats.podSeam} name(s) of the bridge files checked against the app Swift the pod compiles them with` : '');
+  (duplicates.stats.podSeam > 0 ? `, plus ${duplicates.stats.podSeam} name(s) of the bridge files checked against the app Swift the pod compiles them with` : '') +
+  `; ${memberRefs.stats.onTheType} member references resolved to a member of the type they name, out of ${memberRefs.stats.references} made through a type name this scan knows`;
+const notMemberChecked = `not member-checked: ${memberRefs.stats.notATypeName} references whose base is not a type declared in the scanned tree ` +
+  `(SwiftUI, UIKit, Foundation, PhotoKit, AVFoundation, XCTest and the standard library are all outside it); ` +
+  `${memberRefs.stats.ambiguousTypeName} where the base name is declared more than once; ` +
+  `${memberRefs.stats.synthesized} to a member the compiler writes rather than one a declaration supplies; ` +
+  `${memberRefs.stats.declaredElsewhere} to a member that exists in the tree but not on the type this reference names, which needs the module and inheritance rules this scan does not have - so a typo that lands on another type's member is left alone rather than guessed at`;
 const notOrderChecked = `not order-checked: ${callOrder.stats.unresolved} call sites whose name is declared nowhere in the tree ` +
   `(SwiftUI, UIKit, PhotoKit, AVFoundation, ExpoModulesCore and the standard library are all outside it); ` +
   `${callOrder.stats.ambiguous} where several declarations could accept the labels written; ` +
@@ -1510,6 +1687,7 @@ const report = () => {
   console.log(scope);
   console.log(coverage);
   console.log(notOrderChecked);
+  console.log(notMemberChecked);
   for (const excluded of excludedDirectories) {
     console.log(`excluded: ${excluded}/ (a generated byte copy of Swift this scan already reads, written by npm run sync:native)`);
   }

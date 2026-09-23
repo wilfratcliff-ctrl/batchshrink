@@ -1546,6 +1546,14 @@ private enum RunAccess: Equatable, Sendable {
         // the one time it does fire, the safe direction is to keep the originals.
         guard activeDeletionMode.deletesOriginals else {
             guard !deletionBatch.isEmpty else { return }
+            // And it says so, for the same reason `deleteOriginalsNow` does: the tap that led here
+            // was meant to remove originals, so a silent return would leave someone looking at a
+            // control that appeared to do nothing at all. The sentence names what happened to *their*
+            // originals rather than the invariant that broke, because that is what they can act on -
+            // every one of them is still there.
+            for id in deletionBatch {
+                deletionOutcomes[id] = .skipped("This run isn't deleting originals, so the original stays.")
+            }
             deletionBatch.removeAll()
             log.error("Refused to flush deletions outside a run that deletes originals")
             return

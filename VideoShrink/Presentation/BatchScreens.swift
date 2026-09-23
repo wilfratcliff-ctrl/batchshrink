@@ -671,11 +671,19 @@ struct BatchSelectionScreen: View {
         // that was deliberately run through again is in both sets, and "made by" is the fact
         // that explains the row.
         let madeByApp = batch.createdCopyIdentifiers.contains(asset.id)
+        // A video this app has an open question about is left out of an automatic selection too, and
+        // the same rule applies to its row: without a caption it reads as an ordinary tile with an
+        // estimate and a tick circle, and the only statement that it is excluded is a card below the
+        // grid and a hint VoiceOver reads. Sighted and spoken alike get it now, and it wins over the
+        // other two captions because it is the fact that explains why the tile was not ticked.
+        let unaccounted = batch.unaccountedIdentifiers.contains(asset.id)
         let estimate = batch.savings(for: asset)
         // VoiceOver cannot see the lilac captions below, so the row's label repeats every fact
         // the card shows in words, choosing between the three in the same order the card does.
         var spoken = [rowLabel(asset)]
-        if madeByApp {
+        if unaccounted {
+            spoken.append("left out of Select all until you have looked at it in Photos")
+        } else if madeByApp {
             spoken.append("made by BatchShrink")
         } else if alreadyShrunk {
             spoken.append("previously shrunk")
@@ -714,7 +722,11 @@ struct BatchSelectionScreen: View {
                     }
                     Text(asset.creationDate?.formatted(date: .abbreviated, time: .omitted) ?? "Undated video")
                         .font(.caption).foregroundStyle(.secondary)
-                    if madeByApp {
+                    if unaccounted {
+                        Text("Left out of Select all")
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(.secondary)
+                    } else if madeByApp {
                         Text("Made by BatchShrink").font(.caption).foregroundStyle(ShrinkStyle.lilac)
                     } else if alreadyShrunk {
                         Text("Previously shrunk").font(.caption).foregroundStyle(ShrinkStyle.lilac)
