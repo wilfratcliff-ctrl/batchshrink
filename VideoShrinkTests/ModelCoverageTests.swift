@@ -173,7 +173,8 @@ import Photos
         XCTAssertEqual(estimate.conservativeBytes, 80_000_000)
         XCTAssertEqual(estimate.optimisticBytes, 140_000_000)
         XCTAssertEqual(estimate.likelyNoReductionCount, 1)
-        XCTAssertEqual(estimate.likelyShrinkCount, 1)
+        XCTAssertEqual(estimate.mayShrinkCount, 2,
+                       "both videos have room at the top of the band, so both may get a copy")
         // Only the 200 MB original is expected to get a copy, so the copy figure is its 90 MB
         // midpoint and not the 140 MB that counting the skipped video's original produced.
         XCTAssertEqual(estimate.copiedBytes, 200_000_000)
@@ -194,13 +195,51 @@ import Photos
         let estimate = SavingsEstimate.make(assets: [borderline], settings: TranscodeSettings(),
                                             measured: [])
         XCTAssertEqual(estimate.likelyNoReductionCount, 1)
-        XCTAssertEqual(estimate.likelyShrinkCount, 0)
+        XCTAssertEqual(estimate.mayShrinkCount, 1,
+                       "the loose end of the band is what says whether there is anything here")
         XCTAssertEqual(estimate.copiedBytes, 70_000_000, "a copy may still be made for it")
         // 70 MB less the 5 MB of average saving at the middle of its own band.
         XCTAssertEqual(estimate.estimatedCopyBytes, 65_000_000)
         XCTAssertLessThan(estimate.estimatedCopyBytes, 70_000_000,
                           "the copy figure is never larger than the original it copies")
         XCTAssertFalse(estimate.predictsNoSaving, "one end of the band still has room")
+    }
+
+    /// The headline and the card under it are about the same estimate, so they must agree.
+    ///
+    /// They read opposite ends of the band for a round. A single borderline video - one whose band
+    /// straddles its own size, which the case above builds - counts as "no reduction" at the
+    /// conservative end and as a copy at the optimistic one, so the headline announced "Nothing
+    /// here is likely to get lighter" directly above a card reading "up to 10 MB". Both now read the
+    /// optimistic end, and the conservative end is what decides the qualifier in the sentence.
+    func testTheSummaryHeadlineAgreesWithTheCardBeneathIt() {
+        let borderline = coverageAsset("borderline", bytes: 70_000_000)
+        let estimate = SavingsEstimate.make(assets: [borderline], settings: TranscodeSettings(),
+                                            measured: [])
+        XCTAssertFalse(estimate.predictsNoSaving)
+
+        let headline = BatchSummaryScreen.summaryHeadline(eligibleCount: 1, estimate: estimate)
+        XCTAssertEqual(headline, "One video might get lighter.",
+                       "the card below shows a figure, so the headline cannot deny one")
+        XCTAssertFalse(headline.contains("Nothing"),
+                       "the headline must not contradict a card that has a saving to show")
+
+        // The other direction, for the same reason: when every video's conservative end is above
+        // zero too, there is nothing left to qualify and the sentence says so plainly.
+        let clear = SavingsEstimate.make(assets: [coverageAsset("big", bytes: 200_000_000)],
+                                         settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 1, estimate: clear),
+                       "One video can get lighter.")
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 9, estimate: clear),
+                       "One video can get lighter.",
+                       "the count is the estimate's, not the library's: one video was sized, so the "
+                           + "headline is about one whatever the library holds")
+
+        // And the case the card has nothing to show for at all.
+        let none = SavingsEstimate.make(assets: [coverageAsset("small", bytes: 50_000_000)],
+                                        settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(BatchSummaryScreen.summaryHeadline(eligibleCount: 1, estimate: none),
+                       "Nothing here is likely to get lighter.")
     }
 
     /// A selection whose whole band is at or above its originals has nothing to save, and the two
@@ -215,7 +254,7 @@ import Photos
         XCTAssertEqual(estimate.conservativeBytes, 0)
         XCTAssertEqual(estimate.optimisticBytes, 0)
         XCTAssertEqual(estimate.estimatedCopyBytes, 0, "no copy is expected, so no bytes are")
-        XCTAssertEqual(estimate.likelyShrinkCount, 0)
+        XCTAssertEqual(estimate.mayShrinkCount, 0)
 
         // An estimate with no videos in it at all is a different thing, and the cards say
         // something different about it: nothing has been measured rather than nothing being saved.
@@ -945,12 +984,17 @@ import Photos
 
     // MARK: - What the app plays
 
-    /// The one haptics switch covers every moment the app plays, the quality pills included.
+    /// What the haptics switch's own type promises: one stored key, and every moment it names
+    /// answering to the switch.
     ///
-    /// It was named for the end of a run and only the end of a run read it, so the two controls this
-    /// app taps most - the picture size and smoothness pills - buzzed for someone who had turned it
-    /// off. The switch is now named for what it does. What a case can hold is the coverage: off is
-    /// silent at every moment, and every moment has something to play when it is on.
+    /// **What this does not prove, and must not be read as proving.** A9's defect was that the
+    /// quality pills never asked this type at all - they played `.selection` directly - and no case
+    /// here can catch that, because the fault is at a *call site* in a view body. Reverting
+    /// `QualitySelector` to a bare `.sensoryFeedback(.selection, trigger:)` leaves this test green.
+    /// Only a render, or a UI test that can toggle the setting, could hold the call sites; what is
+    /// held here is the vocabulary they call into, which is the part that can drift silently: a
+    /// moment that plays nothing when the switch is on, or a stored key renamed along with the row
+    /// (which would be a different preference, and would find everyone's off choice turned back on).
     func testTheOneHapticsSwitchCoversEveryMomentTheAppPlays() {
         XCTAssertEqual(ShrinkHaptics.Moment.allCases, [.qualityChoice, .finished, .failed],
                        "choosing a pill is a haptic moment like the end of a run")

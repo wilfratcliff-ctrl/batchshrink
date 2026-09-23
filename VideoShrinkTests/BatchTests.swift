@@ -1712,6 +1712,40 @@ import SwiftUI
         XCTAssertEqual(fixture.batch.summary.savedCount, 1)
     }
 
+    /// An export that runs out of room *after* the copy-room check passed is not described with
+    /// that check's figure.
+    ///
+    /// The check asks for one file plus the reserve, and `DiskHeadroom` says in its own words that a
+    /// copy larger than its source "can still run the device out of room inside the encoder". So
+    /// this is reachable: the check passes, the encoder then reports the volume full, and the run
+    /// holds a figure the phone demonstrably met. Naming it would tell the user this iPhone did not
+    /// have room it did have, which is the same class of false attribution the round was fixing. The
+    /// figure is dropped the moment the check lets the step through, exactly as the one-video flow
+    /// drops its own.
+    func testAnExportThatRunsOutOfRoomAfterTheCheckIsNotDescribedWithTheChecksFigure() async throws {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 20_000_000)])
+        fixture.verifier.inspectBytes = 20_000_000
+        fixture.transcoder.error = .insufficientStorage
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertNil(fixture.batch.storageDemands["a"],
+                     "a check that already passed is not what this failure was about")
+        let failed = try XCTUnwrap(fixture.batch.items.first { $0.id == "a" })
+        let row = BatchFinishedRow(item: failed, storageDemand: fixture.batch.storageDemands["a"])
+        XCTAssertEqual(row.detail, PipelineError.insufficientStorage.localizedDescription)
+        XCTAssertNotEqual(
+            row.detail,
+            PipelineError.insufficientStorageSentence(
+                needed: DiskHeadroom.neededToWrite(20_000_000)),
+            "the sentence may not name a figure this device met"
+        )
+    }
+
     /// The time sample covers the whole attempt, which is what the elapsed subtraction measures.
     ///
     /// The sample used to be the export alone while the elapsed ran from the moment the run started

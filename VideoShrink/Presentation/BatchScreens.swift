@@ -273,7 +273,12 @@ struct BatchSummaryScreen: View {
                         batch.beginSelecting()
                     }
                     .accessibilityIdentifier("chooseBatchVideos")
-                    Button("Select the \(batch.selectableCount) worth shrinking") {
+                    // What this does is pick every video that may be chosen, so it says that. It used
+                    // to read "Select the \(count) worth shrinking" while selecting whatever was
+                    // selectable, which is the over-claim the headline above it was just corrected
+                    // for - and the selection screen already offers the narrower action by name,
+                    // "Select likely to shrink", for anyone who wants it.
+                    Button("Select all \(batch.selectableCount)") {
                         batch.beginSelecting()
                         batch.selectAll()
                     }
@@ -297,13 +302,27 @@ struct BatchSummaryScreen: View {
     /// The headline used to count every eligible video: it promised "\(count) videos can get
     /// lighter" including the videos the estimate beside it says will not shrink, and it promised
     /// it even when nothing had been measured at all, while the card below read "No sizes yet".
-    /// Static and internal so a case can state the sentence rather than re-derive it.
+    ///
+    /// It now reads the same end of the band the card does - the optimistic one, which is what
+    /// decides whether the card has a figure to show at all. Reading the conservative end here
+    /// produced its own contradiction: one video whose band straddles its original is "no
+    /// reduction" at the bottom and a copy at the top, so the headline announced nothing to get
+    /// lighter over a card reading "up to 10 MB". Where the two ends disagree the sentence says
+    /// "might" or "up to" rather than "can", which is the same qualification the card's range
+    /// carries. Static and internal so a case can state the sentence rather than re-derive it.
     static func summaryHeadline(eligibleCount: Int, estimate: SavingsEstimate?) -> String {
         guard eligibleCount > 0 else { return "Nothing to shrink yet." }
         guard let estimate, estimate.hasNumbers else { return "No sizes to estimate from yet." }
-        let lighter = estimate.likelyShrinkCount
-        if lighter == 0 { return "Nothing here is likely to get lighter." }
-        return lighter == 1 ? "One video can get lighter." : "\(lighter) videos can get lighter."
+        let possible = estimate.mayShrinkCount
+        if possible == 0 { return "Nothing here is likely to get lighter." }
+        // Some of them may not shrink after all: the conservative end of the band is zero for at
+        // least one video. That is the estimate's own uncertainty, so the sentence carries it.
+        let uncertain = estimate.likelyNoReductionCount > 0
+        if possible == 1 {
+            return uncertain ? "One video might get lighter." : "One video can get lighter."
+        }
+        return uncertain ? "Up to \(possible) videos can get lighter."
+                         : "\(possible) videos can get lighter."
     }
 
     private var subhead: String {

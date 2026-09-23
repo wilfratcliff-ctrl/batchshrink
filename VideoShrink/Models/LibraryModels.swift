@@ -187,22 +187,27 @@ struct SavingsEstimate: Equatable, Sendable {
     let copiedBytes: Int64
     let conservativeBytes: Int64
     let optimisticBytes: Int64
+    /// How many of the sized videos the band gives any room at all: the optimistic end is above
+    /// zero, so a copy of that video may come out smaller.
+    ///
+    /// This is deliberately the *loose* end of the band, and it is the end both "is there anything
+    /// here" questions read - `predictsNoSaving` and the summary's headline. They read different
+    /// ends for a round, and one borderline video was enough to make the summary say "Nothing here
+    /// is likely to get lighter" over a card reading "up to 10 MB": it counts as no reduction at the
+    /// conservative end and as a copy at the optimistic one. One value, two readers, no contradiction.
+    let mayShrinkCount: Int
     let likelyNoReductionCount: Int
     let basis: CopySizeModel.Basis
 
     var hasNumbers: Bool { sizedCount > 0 }
 
-    /// How many of the sized videos the conservative end of the band still shrinks: the ones the
-    /// summary can name as able to get lighter.
-    var likelyShrinkCount: Int { sizedCount - likelyNoReductionCount }
-
-    /// True when the band predicts no saving at all, even at its bottom, so a run is expected to
-    /// skip every video in the estimate.
+    /// True when no video in the estimate has room at even the generous end of its band, so a run
+    /// is expected to skip every one of them.
     ///
     /// The two cards that draw the band say what they found rather than setting a zero in their
     /// largest type: `ShrinkFormat.byteRange(low: 0, high: 0)` renders "Zero KB", which is true
     /// and tells the user nothing.
-    var predictsNoSaving: Bool { hasNumbers && optimisticBytes == 0 }
+    var predictsNoSaving: Bool { hasNumbers && mayShrinkCount == 0 }
 
     /// Bytes the copies are expected to take, from the same band.
     ///
@@ -220,6 +225,7 @@ struct SavingsEstimate: Equatable, Sendable {
         var copiedBytes: Int64 = 0
         var conservative: Int64 = 0
         var optimistic: Int64 = 0
+        var mayShrink = 0
         var noReduction = 0
         // The caption drawn from `basis` describes the numbers above, which are byte totals, so
         // each band is credited with the original bytes of the videos that used it and the band
@@ -249,11 +255,15 @@ struct SavingsEstimate: Equatable, Sendable {
             if !saving.likelyShrinks { noReduction += 1 }
             // A video the band predicts no saving for at all is one the estimate expects the run
             // to skip, so it is not one of the originals the copy figure describes.
-            if saving.optimisticBytes > 0 { copiedBytes += bytes }
+            if saving.optimisticBytes > 0 {
+                copiedBytes += bytes
+                mayShrink += 1
+            }
         }
         return SavingsEstimate(sizedCount: sized, sizedBytes: sizedBytes,
                                copiedBytes: copiedBytes,
                                conservativeBytes: conservative, optimisticBytes: optimistic,
+                               mayShrinkCount: mayShrink,
                                likelyNoReductionCount: noReduction,
                                basis: dominantBand(bands)
                                    ?? .planning(resolution: settings.resolution,

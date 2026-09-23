@@ -1170,6 +1170,12 @@ private enum RunAccess: Equatable, Sendable {
             let copyRoom = DiskHeadroom.neededToWrite(original.bytes)
             demandedStorage = copyRoom
             try temporary.requireCapacity(for: copyRoom)
+            // Dropped the moment the check lets the step through, as the one-video flow does. The
+            // figure is what a refusal would have been about; a later failure is not about a check
+            // that already passed, and `DiskHeadroom`'s own note says the encoder can still run the
+            // device out of room afterwards. Keeping it would describe that failure with a demand
+            // this iPhone demonstrably met.
+            demandedStorage = nil
             setState(.transcoding(nil), for: id)
             currentStage = .transcoding
             let written = try await transcoder.transcode(retrieved, metadata: original,
@@ -1192,6 +1198,7 @@ private enum RunAccess: Equatable, Sendable {
                 let saveRoom = DiskHeadroom.neededToWrite(output.bytes)
                 demandedStorage = saveRoom
                 try temporary.requireCapacity(for: saveRoom)
+                demandedStorage = nil
                 // The sizes this run measured go down with the intent, so a launch that finds the
                 // copy in Photos afterwards can say what was saved instead of asking the user to
                 // work it out.
