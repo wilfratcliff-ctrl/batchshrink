@@ -141,5 +141,40 @@ while (offset < png.length) {
   offset += length + 12;
 }
 assert.equal(inflateSync(Buffer.concat(idat)).length, (1024 * 3 + 1) * 1024);
-console.log(`PASS: repository guardrails; ${swift.length} app Swift files; ${testCount} XCTest cases present; icon/JSON valid.`);
+// Two surfaces describe the product's version and two describe a build number, and they are not
+// the same kind of fact. `app.json`'s `expo.version` is the version the shipping Expo app
+// carries, which is the one App Store Connect shows; `project.yml`'s MARKETING_VERSION is the
+// version of the standalone harness - the Xcode project CI generates to compile and test the same
+// Swift under the placeholder bundle identifier com.example.VideoShrink. Those two name one
+// product version and must agree.
+//
+// The build numbers are deliberately different facts. `app.json`'s `ios.buildNumber` is what the
+// next TestFlight/App Store upload carries: docs/RELEASE_10.md records build 10 as the last one
+// to reach testers, so 11 is the next one, and EAS refuses a number App Store Connect has already
+// seen. `project.yml`'s CURRENT_PROJECT_VERSION counts nothing but the harness's own compiles. The
+// harness is never shipped, so pinning its counter to the shipped number would make it stale again
+// on the next upload and would claim the harness is build 11 when it is not. It is therefore not
+// compared, and the line below the PASS says so with both numbers named.
+const appConfig = JSON.parse(read('app.json'));
+const expoVersion = appConfig?.expo?.version;
+const expoBuildNumber = appConfig?.expo?.ios?.buildNumber;
+assert.equal(typeof expoVersion, 'string',
+  'app.json must declare expo.version, the version the shipping app carries');
+assert.equal(typeof expoBuildNumber, 'string',
+  'app.json must declare expo.ios.buildNumber, the build number the next upload carries');
+assert(/^\d+\.\d+\.\d+$/.test(expoVersion), `expo.version must be a semantic version, saw ${expoVersion}`);
+assert(/^\d+$/.test(expoBuildNumber), `expo.ios.buildNumber must be digits, saw ${expoBuildNumber}`);
+const projectYml = read('project.yml');
+const versionKeys = [...projectYml.matchAll(/^\s*(MARKETING_VERSION|CURRENT_PROJECT_VERSION):\s*"?([^"\s]+)"?\s*$/gm)];
+for (const key of ['MARKETING_VERSION', 'CURRENT_PROJECT_VERSION']) {
+  assert.equal(versionKeys.filter(k => k[1] === key).length, 1,
+    `project.yml must declare ${key} exactly once, in the base settings, so this check cannot be bypassed by a target-level override`);
+}
+const harnessVersion = versionKeys.find(k => k[1] === 'MARKETING_VERSION')[2];
+const harnessBuild = versionKeys.find(k => k[1] === 'CURRENT_PROJECT_VERSION')[2];
+assert(/^\d+$/.test(harnessBuild), `CURRENT_PROJECT_VERSION must be digits, saw ${harnessBuild}`);
+assert.equal(harnessVersion, expoVersion,
+  `The version the shipping app carries (app.json expo.version ${expoVersion}) and the version of the harness that compiles the same Swift (project.yml MARKETING_VERSION ${harnessVersion}) are the same fact and must agree`);
+console.log(`PASS: repository guardrails; ${swift.length} app Swift files; ${testCount} XCTest cases present; icon/JSON valid; product version ${expoVersion} agrees between app.json and project.yml.`);
 console.log('NOT RUN: XcodeGen generation, Swift compilation, XCTest execution, simulator, signing, Photos/iCloud/device tests.');
+console.log(`NOT CHECKED: that the two build numbers agree. They are not the same fact: app.json's ios.buildNumber ${expoBuildNumber} is what the shipping app uploads, while project.yml's CURRENT_PROJECT_VERSION ${harnessBuild} counts only the standalone harness (bundle id com.example.VideoShrink), which CI compiles and never ships.`);

@@ -114,6 +114,44 @@ import UIKit
         try manager.remove(removed)
     }
 
+    /// The two flows own different directories, so one flow's sweep cannot delete the other's work.
+    ///
+    /// This is the guard on a defect that a shared workspace produced for a whole round: the user
+    /// finishes a one-video export, leaves it on "Save copy to Photos", runs a batch, comes back,
+    /// and the copy the screen is still offering to save has been deleted by the batch's own
+    /// cleanup. The copy is unverified against a real Photos library here, but which directory a
+    /// sweep reaches is a fact about this class and is settled exactly.
+    func testASweepOnlyRemovesTheWorkspaceItsOwnManagerOwns() throws {
+        let oneVideo = TemporaryFileManager(workspace: .oneVideo)
+        let batch = TemporaryFileManager(workspace: .batch)
+        defer {
+            try? oneVideo.cleanup()
+            try? batch.cleanup()
+        }
+
+        let keptCopy = try oneVideo.outputURL()
+        try Data("a copy waiting to be saved".utf8).write(to: keptCopy)
+        let batchScratch = try batch.outputURL()
+        try Data("a run's working file".utf8).write(to: batchScratch)
+
+        // The two directories are genuinely different places, not a shared one reached by two names.
+        XCTAssertNotEqual(keptCopy.deletingLastPathComponent(), batchScratch.deletingLastPathComponent())
+
+        // What the batch flow does on launch and again at the end of every run.
+        try batch.cleanup()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keptCopy.path),
+                      "a batch sweep must not remove the one-video flow's directory")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: batchScratch.path))
+
+        // And the reverse, so neither flow's cleanup can be the other's, whichever runs first.
+        let secondBatchScratch = try batch.outputURL()
+        try Data("another run's working file".utf8).write(to: secondBatchScratch)
+        try oneVideo.cleanup()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: secondBatchScratch.path),
+                      "the one-video flow's cleanup must not remove the batch's directory")
+    }
+
     func testAnExportThatFailsMidWriteRemovesItsOwnPartialOutput() async {
         // The encoder writes into the destination itself, so an attempt that fails can leave bytes
         // behind - a stop can interrupt one mid-write. Nothing outside the transcoder is ever

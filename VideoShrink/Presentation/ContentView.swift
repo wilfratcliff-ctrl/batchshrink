@@ -34,8 +34,14 @@ struct ContentView: View {
 
     private func switchTo(_ next: Flow) {
         guard flow != next else { return }
-        // Each flow stays in charge of its own run: never walk away from work in progress.
-        guard model.canChoose, batch.canLeaveFlow else { return }
+        // Each flow stays in charge of its own run: never walk away from work in progress. A
+        // finished copy that has not been saved is not work in progress either - it is kept on
+        // purpose, and the one-video screen is the only place it can be saved, so that screen has
+        // to stay reachable.
+        let decision = FlowRouting.decision(oneVideoCanChoose: model.canChoose,
+                                            stage: model.stage,
+                                            batchCanLeaveFlow: batch.canLeaveFlow)
+        guard decision == .maySwitch else { return }
         flow = next
     }
 }

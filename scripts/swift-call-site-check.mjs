@@ -6,14 +6,36 @@
  * where the minutes are rationed. Every mechanical mistake this project has actually made is
  * visible by reading the source, so the four classes below are checked here instead.
  *
+ * WHAT IS READ, AND THE ONE TREE THAT IS DELIBERATELY NOT READ.
+ *   Four trees by default: VideoShrink/ (the app's own Swift), VideoShrinkTests/ (the unit-test
+ *   target), VideoShrinkUITests/ (the one target that launches the app rather than reading it)
+ *   and the Expo bridge directory modules/videoshrink-native/ios/. The bridge files are the
+ *   Swift that makes this an Expo app, and until this change nothing on this machine read them
+ *   at all.
+ *   The pod's VideoShrinkCore/ directory is NOT read: it is a byte-for-byte mirror of
+ *   VideoShrink/{Models,Services,Presentation}, written by scripts/sync-native-sources.mjs and
+ *   git-ignored, so reading it would declare every type in that module twice and turn every
+ *   judged call into an ambiguous skip. The source it is copied from is read instead, and the
+ *   exclusion is named in the output so the file count can be reconciled.
+ *   The bridge files import ExpoModulesCore, UIKit and SwiftUI. Everything those frameworks
+ *   declare is outside the scanned set, so calls into them are skipped exactly as calls into
+ *   Apple's APIs always were. That skip is counted and printed; it is not coverage.
+ *
  * RULE A - argument label order.
  *   Swift requires a call's labelled arguments to appear in the declaration's order. For every
  *   `func`, explicit `init`, synthesised struct memberwise initialiser and enum case in the
- *   scanned tree, the ordered parameter labels are recorded. A call is only judged when exactly
- *   one declaration of that name can accept the labels the call supplies; if none or several
- *   can, the call is skipped rather than guessed. When a supplied label exists in the resolved
- *   declaration but sits before a label the call already consumed, that is the definite compile
- *   error "argument 'x' must precede argument 'y'".
+ *   scanned tree, the ordered parameter labels are recorded. A call is resolved against the
+ *   declarations in its own file first, and only against the rest of the scanned tree when its
+ *   own file declares nothing of that name. That second step is what lets the bridge files be
+ *   checked at all, because almost every call in them constructs a type declared in VideoShrink/
+ *   and they declare almost nothing themselves. Because an all-unlabelled call can never violate
+ *   the ordering rule, the cross-file step is taken only for calls that write at least one
+ *   argument label; that also keeps a framework call like Expo's `View(_:)` from being resolved
+ *   to a same-named declaration in the app. A call is judged only when exactly one declaration
+ *   can accept the labels the call supplies; if none or several can, the call is skipped rather
+ *   than guessed, and every skip is counted by reason in the output. When a supplied label exists
+ *   in the resolved declaration but sits before a label the call already consumed, that is the
+ *   definite compile error "argument 'x' must precede argument 'y'".
  *
  * RULE B - an optional parameter shadowing a non-Optional stored property inside `init`.
  *   Inside an init body a bare name resolves to the parameter, not the stored property, so
@@ -44,14 +66,19 @@
  *   parameter types, for properties the same type. Two top-level declarations of one name in
  *   the same scanned target directory are reported when neither is `private`/`fileprivate` and
  *   both are types, or when they are functions or properties of identical shape. A pair in
- *   different `#if` branches is never compared.
+ *   different `#if` branches is never compared. One comparison crosses directories, for the one
+ *   seam where the directory rule would be wrong: the Expo pod compiles its two bridge files and
+ *   its mirrored copy of VideoShrink/{Models,Services,Presentation} into ONE module, so a
+ *   file-scope name declared on both sides of that seam is a redeclaration even though the two
+ *   files sit in different scanned target directories.
  *
  * WHAT THIS DOES NOT COVER - do not mistake it for a compiler:
  *   - types, generics, availability, access control, actor isolation, effects, and overload
  *     resolution beyond the narrow uniqueness rules above;
  *   - argument COUNT: a call that omits a required parameter, or passes too many, is silent;
- *   - anything not declared in the scanned tree (SwiftUI, Foundation, XCTest, the standard
- *     library), so a wrong label on an external API is invisible;
+ *   - anything not declared in the scanned tree (SwiftUI, UIKit, Foundation, PhotoKit,
+ *     AVFoundation, XCTest, ExpoModulesCore, the standard library), so a wrong label on an
+ *     external API is invisible;
  *   - string interpolation contents, macros, operators, subscripts and key paths;
  *   - Rule B only fires when the parameter and the stored property share an exact name and both
  *     live in a type this scan can parse.
@@ -65,12 +92,20 @@
  *     parameter type are legal overloads and are left alone, as is a declaration inside `#if`
  *     compared with one outside it, so a genuine duplicate of that shape is a miss. Two
  *     top-level type names in DIFFERENT scanned target directories are assumed to live in
- *     different modules and are left alone.
+ *     different modules and are left alone, EXCEPT across the one seam named above; that
+ *     assumption is wrong for exactly that pair of directories and is applied deliberately
+ *     everywhere else.
+ *   - Rule A's cross-file step can only ever ADD a judgment, never remove one: a call whose own
+ *     file declares something of that name is resolved exactly as it was before the step
+ *     existed. It is still a guess in one direction, though: a call to a framework API that
+ *     shares its name with the only declaration of that name in the scanned tree is judged
+ *     against that declaration. The counts printed below say how much was judged and how much
+ *     was left alone.
  *   A clean run is evidence, never proof. A finding is a very strong hint.
  */
 
 import { readFileSync, readdirSync, statSync } from 'node:fs';
-import { resolve, relative, dirname } from 'node:path';
+import { resolve, relative, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -956,41 +991,24 @@ function analyse(source, relPath) {
   const { types, unparsed } = collectTypes(clean);
   const { decls, properties } = collectDeclarations(clean, depths, types);
   const calls = collectCalls(clean);
+  const module = relPath.split('/')[0];
 
-  const byName = new Map();
   for (const d of decls) {
-    if (!byName.has(d.name)) byName.set(d.name, []);
-    byName.get(d.name).push(d);
+    d.relPath = relPath;
+    d.module = module;
+    d.line = lineAt(clean, d.index);
+    d.quote = quoteLine(source, d.index);
+  }
+  for (const call of calls) {
+    call.relPath = relPath;
+    call.line = lineAt(clean, call.index);
+    call.quote = quoteLine(source, call.index);
   }
 
   const findings = [];
-  let judged = 0;
   let initsInspected = 0;
 
-  // Rule A
-  for (const call of calls) {
-    const candidates = byName.get(call.name);
-    if (!candidates) continue;
-    const supplied = new Set(call.labels.filter(l => l !== null));
-    const matching = candidates.filter(d => [...supplied].every(l => d.labels.includes(l)));
-    if (matching.length !== 1) continue;
-    const decl = matching[0];
-    judged++;
-    const result = checkOrder(decl.labels, call.labels);
-    if (result.ok || result.skip) continue;
-    findings.push({
-      rule: 'A',
-      path: relPath,
-      line: lineAt(clean, call.index),
-      quote: quoteLine(source, call.index),
-      name: call.name,
-      label: result.label,
-      decl,
-      callLabels: call.labels,
-    });
-  }
-
-  // Rule B
+  // Rule B. Rule A needs the declarations of every file, so it lives in checkCallOrder below.
   for (const decl of decls) {
     if (decl.kind !== 'init' || !decl.body) continue;
     const stored = (properties.get(decl.typeName) ?? []).filter(p => !p.isOptional);
@@ -1025,7 +1043,6 @@ function analyse(source, relPath) {
   findings.sort((a, b) => a.line - b.line);
 
   const protocolFacts = collectProtocolFacts(clean, depths, types);
-  const module = relPath.split('/')[0];
   const members = collectMembers(clean, depths, cond, types)
     .map(m => ({ ...m, module, relPath, quote: quoteLine(source, m.index) }));
   const declFacts = [];
@@ -1043,13 +1060,83 @@ function analyse(source, relPath) {
     .map(d => ({ ...d, module, relPath, quote: quoteLine(source, d.index) }));
 
   return {
-    findings, decls, calls, types, judged, initsInspected,
+    findings, decls, calls, types, initsInspected, module,
     facts: {
       protocolFacts, declFacts, members, fileDecls,
       extensions: collectExtensions(clean, types),
       unparsed: unparsed.length, relPath,
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rule A, which needs every file's declarations: a call is resolved against its own file first
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Order-check every call in the tree.
+ *
+ * A call's own file is consulted first, and the rest of the tree only when that file declares
+ * nothing of the call's name. That order matters twice: it keeps every judgment this scan made
+ * before the cross-file step existed (so the step can only add coverage), and it keeps a
+ * framework call like Expo's `View(_:)` out of a same-named declaration elsewhere in the app,
+ * because such a call writes no argument label and the cross-file step ignores those - an
+ * all-unlabelled call can never violate the ordering rule anyway.
+ */
+function checkCallOrder(files) {
+  const findings = [];
+  const stats = {
+    judged: 0, crossFile: 0, crossFileInBridge: 0,
+    unresolved: 0, ambiguous: 0, noMatch: 0, unlabelled: 0,
+  };
+
+  const treeByName = new Map();
+  for (const file of files) {
+    for (const decl of file.decls) {
+      if (!treeByName.has(decl.name)) treeByName.set(decl.name, []);
+      treeByName.get(decl.name).push(decl);
+    }
+  }
+
+  for (const file of files) {
+    const localByName = new Map();
+    for (const decl of file.decls) {
+      if (!localByName.has(decl.name)) localByName.set(decl.name, []);
+      localByName.get(decl.name).push(decl);
+    }
+    for (const call of file.calls) {
+      const local = localByName.get(call.name);
+      let candidates = local;
+      if (!candidates) {
+        if (!call.labels.some(label => label !== null)) { stats.unlabelled++; continue; }
+        candidates = treeByName.get(call.name);
+      }
+      if (!candidates) { stats.unresolved++; continue; }
+      const supplied = new Set(call.labels.filter(l => l !== null));
+      const matching = candidates.filter(d => [...supplied].every(l => d.labels.includes(l)));
+      if (matching.length === 0) { stats.noMatch++; continue; }
+      if (matching.length > 1) { stats.ambiguous++; continue; }
+      const decl = matching[0];
+      stats.judged++;
+      if (!local) {
+        stats.crossFile++;
+        if (call.relPath.startsWith(`${BRIDGE_DIRECTORY}/`)) stats.crossFileInBridge++;
+      }
+      const result = checkOrder(decl.labels, call.labels);
+      if (result.ok || result.skip) continue;
+      findings.push({
+        rule: 'A',
+        path: call.relPath,
+        line: call.line,
+        quote: call.quote,
+        name: call.name,
+        label: result.label,
+        decl,
+        callLabels: call.labels,
+      });
+    }
+  }
+  return { findings, stats };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1203,7 +1290,7 @@ function checkConformance(facts) {
 
 function checkDuplicates(facts) {
   const findings = [];
-  const stats = { typeScopes: 0, fileScopes: 0, conditional: 0 };
+  const stats = { typeScopes: 0, fileScopes: 0, conditional: 0, podSeam: 0 };
 
   const byScope = new Map();
   for (const member of facts.members) {
@@ -1253,12 +1340,48 @@ function checkDuplicates(facts) {
       }
     }
   }
+
+  // One comparison crosses directories, for the one seam where the rule above would be wrong.
+  // The Expo pod compiles its two bridge files and its own mirrored copy of
+  // VideoShrink/{Models,Services,Presentation} into ONE module, so a file-scope name declared on
+  // both sides of that seam is a redeclaration even though the two files sit in different
+  // scanned target directories. Only a same-kind, same-shape pair is reported, and a file-private
+  // declaration is left alone, exactly as in the per-directory check.
+  const podSwift = facts.fileDecls.filter(d => d.mirroredIntoPod && !d.isFilePrivate);
+  if (podSwift.length > 0) {
+    for (const decl of facts.fileDecls) {
+      if (!decl.bridgeFile || decl.isFilePrivate) continue;
+      stats.podSeam++;
+      const twin = podSwift.find(other => other.name === decl.name &&
+        other.condition === decl.condition && other.kind === decl.kind &&
+        (decl.kind === 'type' ? true : sameShape(other, decl)));
+      if (!twin) continue;
+      findings.push({
+        rule: 'D', path: decl.relPath, line: decl.line, quote: decl.quote,
+        name: decl.name,
+        scope: `the Expo pod's compilation unit, which compiles the bridge files with the app Swift`,
+        firstPath: twin.relPath, firstLine: twin.line,
+      });
+    }
+  }
   return { findings, stats };
 }
 
 // ---------------------------------------------------------------------------------------------
 // Driver
 // ---------------------------------------------------------------------------------------------
+
+// The two Expo bridge files, and the one generated tree this scan must not read. The podspec's
+// source_files glob compiles both bridge files together with the pod's copy of
+// VideoShrink/{Models,Services,Presentation}, which is what makes them one compilation unit. Those
+// three folders are the ones scripts/sync-native-sources.mjs mirrors; if that script ever mirrors
+// another folder, add it here too, or the seam comparison below will quietly stop covering it.
+const BRIDGE_DIRECTORY = 'modules/videoshrink-native/ios';
+const GENERATED_MIRROR_DIRECTORY = 'VideoShrinkCore';
+const MIRRORED_SOURCE_FOLDERS = [
+  'VideoShrink/Models', 'VideoShrink/Services', 'VideoShrink/Presentation',
+];
+const excludedDirectories = [];
 
 function collectSwiftFiles(target) {
   const stat = statSync(target);
@@ -1267,7 +1390,13 @@ function collectSwiftFiles(target) {
   for (const entry of readdirSync(target, { withFileTypes: true })) {
     if (entry.name === 'node_modules' || entry.name.startsWith('.')) continue;
     const full = resolve(target, entry.name);
-    if (entry.isDirectory()) out.push(...collectSwiftFiles(full));
+    if (entry.isDirectory()) {
+      // The pod's mirror of the app's own Swift is a byte copy of files this scan already reads.
+      // Reading it as well would declare every one of those types twice, which makes every call
+      // to them ambiguous and silently turns judgments into skips.
+      if (entry.name === GENERATED_MIRROR_DIRECTORY) { excludedDirectories.push(displayPath(full)); continue; }
+      out.push(...collectSwiftFiles(full));
+    }
     else if (entry.name.endsWith('.swift')) out.push(full);
   }
   return out;
@@ -1279,35 +1408,51 @@ function displayPath(file) {
 }
 
 const args = process.argv.slice(2).filter(a => !a.startsWith('--'));
-const targets = args.length > 0 ? args : [resolve(repoRoot, 'VideoShrink'), resolve(repoRoot, 'VideoShrinkTests')];
+const targets = args.length > 0 ? args : [
+  resolve(repoRoot, 'VideoShrink'),
+  resolve(repoRoot, 'VideoShrinkTests'),
+  resolve(repoRoot, 'VideoShrinkUITests'),
+  resolve(repoRoot, BRIDGE_DIRECTORY),
+];
 
 const files = [];
 for (const target of targets) {
   const resolved = resolve(process.cwd(), target);
+  // The same exclusion, for the same reason, when the mirror is named on the command line: a run
+  // that read it could only produce fewer judgments than the source it was copied from, under a
+  // PASS line that would look like coverage of the pod.
+  if (basename(resolved) === GENERATED_MIRROR_DIRECTORY) {
+    excludedDirectories.push(displayPath(resolved));
+    continue;
+  }
   for (const file of collectSwiftFiles(resolved)) if (!files.includes(file)) files.push(file);
 }
 files.sort();
 
 let declCount = 0;
 let callCount = 0;
-let judgedCount = 0;
 let initCount = 0;
 let unparsedCount = 0;
 const tree = { protocols: [], decls: [], members: [], fileDecls: [], extensions: [] };
+const analysed = [];
 const findings = [];
 for (const file of files) {
   const relPath = displayPath(file);
   try {
-    const { findings: fileFindings, decls, calls, judged, initsInspected, facts } =
+    const { findings: fileFindings, decls, calls, initsInspected, facts } =
       analyse(readFileSync(file, 'utf8'), relPath);
     declCount += decls.length;
     callCount += calls.length;
-    judgedCount += judged;
     initCount += initsInspected;
+    analysed.push({ decls, calls });
+    const inBridgeDirectory = relPath.startsWith(`${BRIDGE_DIRECTORY}/`);
+    const mirroredIntoPod = MIRRORED_SOURCE_FOLDERS.some(folder => relPath.startsWith(`${folder}/`));
     for (const protocol of facts.protocolFacts) tree.protocols.push({ ...protocol, relPath });
     tree.decls.push(...facts.declFacts);
     tree.members.push(...facts.members);
-    tree.fileDecls.push(...facts.fileDecls);
+    tree.fileDecls.push(...facts.fileDecls.map(d => ({
+      ...d, bridgeFile: inBridgeDirectory, mirroredIntoPod,
+    })));
     tree.extensions.push(...facts.extensions);
     unparsedCount += facts.unparsed;
     findings.push(...fileFindings);
@@ -1316,15 +1461,17 @@ for (const file of files) {
   }
 }
 
+const callOrder = checkCallOrder(analysed);
 const conformance = checkConformance(tree);
 const duplicates = checkDuplicates(tree);
-findings.push(...conformance.findings, ...duplicates.findings);
+findings.push(...callOrder.findings, ...conformance.findings, ...duplicates.findings);
 findings.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
 
 for (const f of findings) {
   if (f.rule === 'A') {
     console.log(`FAIL ${f.path}:${f.line}: argument '${f.label}' must precede the labels written before it`);
-    console.log(`     declared as  ${describeDeclaration(f.decl)}`);
+    const where = f.decl.relPath === f.path ? '' : ` in ${f.decl.relPath}:${f.decl.line}`;
+    console.log(`     declared as  ${describeDeclaration(f.decl)}${where}`);
     console.log(`     call labels  (${f.callLabels.map(l => l ?? '_').join(', ')})`);
   } else if (f.rule === 'B') {
     console.log(`FAIL ${f.path}:${f.line}: bare use of optional parameter '${f.name}: ${f.paramType}' in ${f.owner}'s init`);
@@ -1340,25 +1487,49 @@ for (const f of findings) {
 }
 
 const scanned = `scanned ${files.length} Swift files, ${declCount} declarations, ${callCount} call sites`;
-const coverage = `coverage: ${judgedCount} calls resolved to one declaration and were order-checked; ${initCount} initialisers inspected for an optional shadow; ` +
+const scope = args.length > 0
+  ? `scope: the ${files.length} Swift files named on the command line`
+  : `scope: VideoShrink/, VideoShrinkTests/, VideoShrinkUITests/ and the Expo bridge files in ${BRIDGE_DIRECTORY}/`;
+const coverage = `coverage: ${callOrder.stats.judged} calls resolved to one declaration and were order-checked` +
+  (callOrder.stats.crossFile > 0 ? ` (${callOrder.stats.crossFile} of them resolved across files, ${callOrder.stats.crossFileInBridge} of those written in the two bridge files - the step that makes the bridge files checkable at all)` : '') +
+  `; ${initCount} initialisers inspected for an optional shadow; ` +
   `${conformance.stats.protocols} protocols with ${conformance.stats.requirements} requirements checked against ${conformance.stats.conformers} conformers; ` +
-  `${duplicates.stats.typeScopes} type scopes and ${duplicates.stats.fileScopes} file scopes checked for duplicates`;
+  `${duplicates.stats.typeScopes} type scopes and ${duplicates.stats.fileScopes} file scopes checked for duplicates` +
+  (duplicates.stats.podSeam > 0 ? `, plus ${duplicates.stats.podSeam} name(s) of the bridge files checked against the app Swift the pod compiles them with` : '');
+const notOrderChecked = `not order-checked: ${callOrder.stats.unresolved} call sites whose name is declared nowhere in the tree ` +
+  `(SwiftUI, UIKit, PhotoKit, AVFoundation, ExpoModulesCore and the standard library are all outside it); ` +
+  `${callOrder.stats.ambiguous} where several declarations could accept the labels written; ` +
+  `${callOrder.stats.noMatch} where the name is declared but no declaration accepts the labels written; ` +
+  `${callOrder.stats.unlabelled} calls written with no argument labels that their own file does not declare, which the cross-file step leaves alone because an unlabelled call cannot break the ordering rule`;
 const skips = [...conformance.stats.conformerReasons].map(([reason, n]) => `${n} x ${reason}`);
 const detail = [];
 for (const [reason, n] of conformance.stats.reasons) detail.push(`${n} x ${reason}`);
 if (unparsedCount > 0) detail.push(`${unparsedCount} type declaration(s) whose body could not be read`);
 if (duplicates.stats.conditional > 0) detail.push(`${duplicates.stats.conditional} member(s) inside #if, only compared within their own branch`);
-if (findings.length === 0) {
-  console.log(`PASS: swift call-site check; ${scanned}, 0 findings.`);
+const report = () => {
+  console.log(scope);
   console.log(coverage);
+  console.log(notOrderChecked);
+  for (const excluded of excludedDirectories) {
+    console.log(`excluded: ${excluded}/ (a generated byte copy of Swift this scan already reads, written by npm run sync:native)`);
+  }
   if (skips.length > 0) console.log(`skipped: ${skips.join('; ')}`);
   if (detail.length > 0) console.log(`not judged: ${detail.join('; ')}`);
-  console.log(`NOT CHECKED: types, generics, availability, argument counts, requirement types or effects, or any call to something not declared in these files.`);
+};
+if (files.length === 0) {
+  // A run that read nothing is not a clean run. The only way to get here is to name targets that
+  // resolve to the generated mirror this scan excludes, or to no Swift at all, and a green line
+  // over zero files would be read as the opposite of what happened.
+  console.log(`NOT RUN: swift call-site check; the target list resolved to no Swift files to read.`);
+  report();
+  process.exitCode = 1;
+} else if (findings.length === 0) {
+  console.log(`PASS: swift call-site check; ${scanned}, 0 findings.`);
+  report();
+  console.log(`NOT CHECKED: types, generics, availability, argument counts, requirement types or effects, or any call to something not declared in these files - including the bridge files' calls into ExpoModulesCore, which are counted as not order-checked above rather than guessed at.`);
   process.exitCode = 0;
 } else {
   console.log(`FAIL: swift call-site check found ${findings.length} problem(s); ${scanned}.`);
-  console.log(coverage);
-  if (skips.length > 0) console.log(`skipped: ${skips.join('; ')}`);
-  if (detail.length > 0) console.log(`not judged: ${detail.join('; ')}`);
+  report();
   process.exitCode = 1;
 }

@@ -76,6 +76,19 @@ jobs:
         # would make a failing run harder to trust.
         run: npm ci
 
+      - name: Check the repository guardrails
+        # The three checks README.md tells a human to run on Windows, which until now no CI
+        # job ran at all: the repository guardrails, the Swift call-site scan and the
+        # native-source mirror check. They are pattern scans and never proof, but they are the
+        # only gate that reads the *whole* tree - the version facts shared between app.json and
+        # project.yml, the Photos-deletion confinement rule, the forbidden-pattern list - and
+        # they cost a few seconds. Leaving them to a human meant they were the checks most
+        # likely to be skipped on exactly the push that broke one of them.
+        run: |
+          npm run typecheck
+          npm run validate:native
+          node scripts/sync-native-sources.mjs --check
+
       - name: Compile and run the XCTest cases
         run: node scripts/verify-native-tests.mjs
 
@@ -133,6 +146,33 @@ jobs:
         # stale cache would make both a pass and a failure harder to trust.
         run: npm ci
 
+      - name: Select an Xcode that ships Swift 6.2 or newer
+        # Expo SDK 57's module tree resolves a Swift package that declares
+        # swift-tools-version 6.2, and this image's *default* Xcode is 16.4, whose Swift is
+        # 6.1. `xcodebuild` therefore refuses before it compiles a line of ours:
+        #
+        #   package 'apple' is using Swift tools version 6.2.0 but the installed version is 6.1.0
+        #
+        # That single line is the whole of run 35877195086's build-expo-app failure. The same
+        # image also installs Xcode 26.0.1 through 26.3, so the fix is to choose one of those
+        # rather than to move the job to a different runner image: job 1 compiles green on this
+        # image, and it should not have to move for a problem that belongs to job 2. The newest
+        # installed Xcode 26 is picked rather than a hardcoded patch version, so an image update
+        # that adds Xcode 26.4 keeps working and one that removes them all fails loudly here
+        # instead of quietly reverting to Swift 6.1 and failing again further down.
+        run: |
+          set -euo pipefail
+          chosen="$(ls -d /Applications/Xcode_26*.app 2>/dev/null | sort -V | tail -n 1)"
+          if [ -z "${chosen}" ] || [ ! -d "${chosen}" ]; then
+            echo "::error::No Xcode 26 image is installed on this runner, so the Swift 6.2 toolchain this build needs is not available. Installed Xcode images:"
+            ls -d /Applications/Xcode*.app || true
+            exit 1
+          fi
+          echo "Selecting ${chosen}"
+          sudo xcode-select --switch "${chosen}"
+          xcodebuild -version
+          swift --version
+
       - name: Build the shipping app
         # One script, five steps: assert the native-source mirror is in sync (the check
         # EAS makes from eas-build-post-install), assert ios/ does not already exist,
@@ -141,3 +181,55 @@ jobs:
         # signing off. Any failure exits non-zero under a FAILED banner and prints the
         # tool's own error immediately above it.
         run: node scripts/verify-expo-build.mjs
+
+  # JOB 3: app-launch-smoke
+  #
+  # Every status statement in this repository says the same thing: the app has never run and
+  # no screen has ever been rendered. That is still true, and it is the largest gap in the
+  # project -- but it is no longer unobservable. The standalone harness project.yml describes
+  # is pure SwiftUI with no React Native and no Metro in front of it, so a macOS runner can
+  # boot a simulator, install it, launch it and look at what the phone is actually showing.
+  #
+  # This job answers one question and no other: does the app launch, stay up, and put its own
+  # interface on the screen? It does not run the unit tests (job 1 does that), it does not
+  # compile the shipping Expo app (job 2 does that), and it proves nothing about Photos, iCloud,
+  # video export, deletion or anything else that needs a real device. A pass here means the
+  # first screen rendered and the process was still alive afterwards. Nothing more, and the
+  # script says so in its own output.
+  #
+  # macos-15 is used for the same reason job 1 uses it, and the default Xcode 16.x is the right
+  # one here: this job compiles the standalone harness through project.yml, exactly as job 1
+  # does, and does not touch the Expo dependency tree that needs Swift 6.2.
+  app-launch-smoke:
+    name: Launch the app on a simulator and check a screen renders
+    runs-on: macos-15
+    # The compile is the same size as job 1's, plus a simulator boot and a short wait. 45
+    # minutes is headroom for a cold runner rather than an expectation.
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # The same line as the other two jobs, and for the same reason: the repo's
+          # packageManager pin npm@11.19.0 needs Node 20.17+ or 22.9+, and 24.x is the line
+          # this project is developed on locally.
+          node-version: "24"
+
+      - name: Install dependencies
+        # npm ci runs the repo's postinstall, scripts/sync-native-sources.mjs, which writes the
+        # mirrored Swift under modules/videoshrink-native/ios/VideoShrinkCore/. This job builds
+        # the standalone project rather than the pod, but the mirror check inside the script
+        # runs either way and a stale mirror is worth failing for.
+        run: npm ci
+
+      - name: Launch the app and look at the screen
+        # One script: generate the project with XcodeGen, build the app for a simulator, boot
+        # that simulator, install, launch, wait, and compare a screenshot of the app's screen
+        # against a screenshot of the home screen taken before it launched. A crash on launch
+        # leaves the home screen where the app's interface should be, so the comparison is what
+        # turns "a process started" into "a screen rendered". The same script runs unchanged on
+        # a human's Mac.
+        run: node scripts/verify-app-launch.mjs

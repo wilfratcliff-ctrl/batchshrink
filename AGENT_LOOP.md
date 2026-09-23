@@ -34,11 +34,24 @@ requirement; Rule D reports a declaration made twice in one scope.
 
 It is still a scanner, not a compiler. It checks no types, no generics, no availability, no
 argument counts, and nothing declared outside these files, so **a clean run is evidence and never
-proof.** It resolved 618 of 3,076 call sites and skipped the rest rather than guess — though it
-skipped no conformer at all — which is the trade that keeps it free of false positives: zero on
-the two trees the cloud compiler verified green, and zero on the current tree. Rules C and D were
-proved against injected mutations of the real tree in a temp directory, because no broken state
-survives in git history.
+proof.** It order-checked 1,776 of 5,673 call sites and skipped the rest rather than guess —
+though it skipped no conformer at all — which is the trade that keeps it free of false positives:
+zero on the two trees the cloud compiler verified green, and zero on the current tree. Rules C and
+D were proved against injected mutations of the real tree in a temp directory, because no broken
+state survives in git history.
+
+As of round 18 it reads **four** trees: `VideoShrink/`, `VideoShrinkTests/`, `VideoShrinkUITests/`
+and the Expo bridge directory `modules/videoshrink-native/ios/` (excluding the generated
+`VideoShrinkCore/` mirror, which is named in the output so the file count reconciles). Reading the
+bridge files was not enough on its own: Rule A originally resolved a call only against
+declarations in the same file, and the bridge files declare almost nothing — every call in them
+constructs a type declared in `VideoShrink/`. So Rule A now falls back to the rest of the tree
+when the call's own file declares nothing of that name, for calls that write at least one
+argument label. That restriction is load-bearing rather than an approximation: an unlabelled call
+cannot break the ordering rule, and without it a framework call such as Expo's `View(_:)` would
+resolve to the same-named helper `View` extension this project declares. The step is additive:
+no call site the old scan judged stopped being judged, and 715 new ones are judged now. The counts
+move whenever a file is added, so read the current run's own numbers rather than these.
 
 `sync-native-sources.mjs` mirrors Swift under `VideoShrink/{Models,Services,Presentation}`
 into the Expo pod. Any Swift edit in those folders requires `npm run sync:native` or the
@@ -260,10 +273,13 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N31 | 2 | A cancelled item was retried immediately, forever, and a failed export left its partial output behind | done, round 16 |
 | N32 | 2 | `.notDetermined` access with a restored queue reached Continue and a per-video failure | **done, round 17.** The run now asks for access at its first read, which is the app's existing rule, and a refusal leaves the restored run intact |
 | N33 | 2 | `makeSession` threw the generic `.unsupported` list when Apple would not build an export | done, round 17: a new `exportUnavailable(reason:)` carries the transcoder's own sentence |
-| N34 | 2 | After a reload with a finished copy waiting at `.readyToSave`, `ContentView`'s flow resets to the batch and `switchTo(.single)` needs `canChoose`, which is false in that stage — so the kept copy is unreachable and "Just one video" is a silent no-op until restart | open |
-| N35 | 3 | `project.yml` pins `CURRENT_PROJECT_VERSION: "1"` while `app.json` ships build 11 — two surfaces disagreeing about the same fact | open |
-| N36 | 1 | The shipping target now has a CI job, but **no local gate compiles the two Expo bridge files**; the interface call-site checker scans only `VideoShrink/` and `VideoShrinkTests/` | open |
-| N37 | 1 | **The new `build-expo-app` CI job fails on the runner's toolchain, not on our code.** `macos-15`'s default Xcode 16.4 ships Swift 6.1, and a Swift package in the Expo module tree declares tools version 6.2, so `xcodebuild` fails with "Could not resolve package dependencies" before compiling anything of ours. EAS builds the same project fine, so its image is new enough. The fix is a newer runner image or selecting a newer Xcode — the failed run is `35877195086`, job `build-expo-app`. The existing `verify-native-tests` job is green (336 tests) and must stay that way | open, highest priority |
+| N34 | 2 | After a reload with a finished copy waiting at `.readyToSave`, `ContentView`'s flow resets to the batch and `switchTo(.single)` needs `canChoose`, which is false in that stage — so the kept copy is unreachable and "Just one video" is a silent no-op until restart | **done, round 18.** A new pure rule, `FlowRouting`, asks the model's own "no task is running" answer *and* the stage together, in both directions, and both flow switches use it. Asking the stage alone would have been the near-miss: `.choosing` has no task running while the picker sheet is up, so a stage-only rule would let a user walk away mid-choice. The eight new cases include a sweep over `PipelineStage.allCases`, so a stage added later fails the suite rather than quietly acquiring an answer |
+| N35 | 3 | `project.yml` pins `CURRENT_PROJECT_VERSION: "1"` while `app.json` ships build 11 — two surfaces disagreeing about the same fact | **done, round 18.** Decided from the code and the records, not from the numbers: the product *version* is the shared fact and `scripts/validate.mjs` now fails when `app.json`'s `expo.version` and `project.yml`'s `MARKETING_VERSION` drift apart (both read 0.1.0, and both are required to be present exactly once so a target-level override cannot bypass the check). The two *build numbers* are different facts and are deliberately not compared: `app.json`'s 11 is the shipped build number, which `docs/RELEASE_10.md` records as the next upload after build 10, while `project.yml`'s 1 counts only the standalone harness, whose bundle id is `com.example.VideoShrink` and which CI compiles and never ships. `validate.mjs` prints a `NOT CHECKED:` line naming both numbers and that reason, so the difference is stated rather than silent. Proved by drifting `app.json` to 0.2.0 in a temp copy of the tree: the check fails with both numbers named, and passes again when restored |
+| N36 | 1 | The shipping target now has a CI job, but **no local gate compiles the two Expo bridge files**; the interface call-site checker scans only `VideoShrink/` and `VideoShrinkTests/` | **done, round 18.** `scripts/swift-call-site-check.mjs` now reads `modules/videoshrink-native/ios/` as a third tree. The generated `VideoShrinkCore/` mirror is excluded by name (it is a byte copy of `VideoShrink/Models`, `Services` and `Presentation`, so reading it would make every judged call ambiguous) and the exclusion is printed with its reason. Rule A had to change to make the bridge files mean anything: a call is resolved against its own file first and the rest of the tree only when its own file declares nothing of that name, and only when it writes at least one argument label. That step is strictly additive - 1010 call sites were judged before, 1724 are judged now, and no call judged before is skipped now - and 13 of the new ones are in the bridge files, where a label-order mistake in `BatchViewModel(...)` had been invisible. The output now counts what was NOT order-checked and why, and names the ExpoModulesCore calls as skips rather than coverage. Proved by injecting four faults into a temp copy: a reversed `history:`/`queueStore:` in the bridge file, an optional parameter shadowing a stored property in a bridge initialiser, a bridge type declared twice in one scope, and a type declared on both sides of the pod's own seam. The old scan reported 0 findings on all four; the new one reports each |
+| N37 | 1 | **The new `build-expo-app` CI job fails on the runner's toolchain, not on our code.** `macos-15`'s default Xcode 16.4 ships Swift 6.1, and a Swift package in the Expo module tree declares tools version 6.2, so `xcodebuild` fails with "Could not resolve package dependencies" before compiling anything of ours. EAS builds the same project fine, so its image is new enough. The fix is a newer runner image or selecting a newer Xcode — the failed run is `35877195086`, job `build-expo-app`. The existing `verify-native-tests` job is green (336 tests) and must stay that way | **done, round 18.** The job was still failing the same way on `ea1740e` when this round started, so the row was accurate. `macos-15` also installs Xcode 26.0.1 to 26.3, and the job now selects the newest of those before building rather than moving runner image - job 1 compiles green on that image and should not have to move for job 2's problem. A hardcoded patch version was rejected for the reason the row implies: `ls -d /Applications/Xcode_26*.app \| sort -V \| tail -1` survives an image update, and fails loudly at the selection step if the images ever lose Xcode 26 |
+| N38 | 1 | **No CI job ran the local gates at all.** `npm run typecheck`, `npm run validate:native` and the mirror check were documented for a human to run on Windows and were run by nothing else, so the one gate that reads the *whole* tree was the one most likely to be skipped on the push that broke it | done, round 18: job 1 runs all three, for a few seconds |
+| N39 | 2 | **A batch run's workspace sweep deleted the one-video flow's kept copy.** Both flows shared one temporary directory and `cleanWorkspace()` removes the whole root, so after a batch run the one-video screen could still offer "Save copy to Photos" over a file that no longer existed, and the save would fail its own re-verify. Found by the round-18 agent that made the flow switch legal, and it was reachable before that too: a reload lands on the batch flow with the copy kept | done, round 18: `TemporaryWorkspace` gives each flow its own directory inside the app's temporary area, each manager can remove only its own, and a test pins both directions |
+| N40 | 1 | **The app had never rendered a screen, and nothing could observe a launch.** Every status block in the repository says so, and no instrument existed that could change it without a device or EAS build minutes | done, round 18: a `VideoShrinkUITests` target launches the standalone app on a simulator, waits for the introduction, taps Skip and waits for the batch screen. Job 3 runs it on every push. It proves a screen renders and one navigation works; it proves nothing about Photos, iCloud or any pipeline step |
 
 ## Round log
 
@@ -287,6 +303,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 15 | see below | A first-sixty-seconds device audit and its findings | local gates PASS | 307 tests |
 | 16 | see below | A pipeline audit of one video's real journey, and its findings | local gates PASS | 331 tests |
 | 17 | see below | The shipping path: an audit of the Expo bridge, CI that builds it, and the last code items | local gates PASS | 336 tests |
+| 18 | see below | Make the shipping target compile again, observe the first rendered screen, close the kept-copy flow and the seam it opened, move the local gates into CI, and two read-only audits | local gates PASS | 345 tests |
 
 ### Round 17 — the path that actually ships
 
@@ -535,3 +552,96 @@ other rounds trustworthy.
   added to `LibraryScanning` or `ShrinkHistoryStoring` must update the mocks in the same edit.
 - The parent added the "Made by BatchShrink" row caption and corrected the "Select the N not yet
   shrunk" button, which had become inaccurate once copies were excluded from the count.
+
+## Round 18 — the round that made the shipping target verifiable, and the first screen
+
+Baseline re-measured from a clean checkout before any edit: `npm run typecheck` PASS,
+`npm run validate:native` PASS, the mirror check PASS. The live CI run for `ea1740e` was still
+going, and the previous completed run (`57a4227`, run `35877195086`) had `verify-native-tests`
+**success** and `build-expo-app` **failure**, so N37 was real and not stale. A second failure on
+`ea1740e` confirmed it.
+
+The round's premise, and the reason for its shape: this project's bottleneck was never
+throughput, it was *verification*. Two of the three things that could prove anything about the
+app were broken or missing — the shipping target did not compile in CI, and nothing had ever
+observed the app doing anything. So the round spent its parent-owned workstream on the
+verification path itself, and its delegated workstreams on the defects and the audits that
+path made worth doing.
+
+**The shipping target compiles again (N37).** The job log names the exact cause: `package 'apple'
+is using Swift tools version 6.2.0 but the installed version is 6.1.0`, from
+`/Applications/Xcode_16.4.app`. `macos-15`'s *default* Xcode is 16.4, but the same image also
+ships Xcode 26.0.1 through 26.3 (read from `actions/runner-images`' own `macos-15-Readme.md`,
+not guessed), so the job now selects the newest installed Xcode 26 before building. The image
+was deliberately not changed: job 1 compiles green on it, and should not have to move for a
+problem that belongs to job 2. A hardcoded patch version was rejected because an image update
+would break it; `ls -d /Applications/Xcode_26*.app | sort -V | tail -n 1` survives one, and
+fails loudly at the selection step if the images ever lose Xcode 26, instead of quietly
+reverting to Swift 6.1 and failing again further down.
+
+**The local gates run in CI now (N38).** This was found by an agent, not by the round's brief,
+and it is the kind of gap this file exists to catch: `typecheck`, `validate:native` and the
+mirror check were documented in README.md for a human to run on Windows, and **no CI job ran
+any of them**. The one gate that reads the whole tree was the one most likely to be skipped on
+the push that broke it. Job 1 now runs all three before the tests, for a few seconds.
+
+**A screen renders (N40).** Every status block in this repository says the app has never run and
+no screen has ever been rendered. That was true, and it was the largest gap in the project.
+The *standalone* harness is pure SwiftUI with no Metro in front of it, so a macOS runner can
+build it, install it on a simulator and ask it what is on screen — no EAS minutes, no device.
+The first attempt at this was a screenshot comparison, and it was abandoned mid-round in favour
+of a UI test, because "the pixels changed" is a weaker and more brittle claim than "the
+introduction drew and Skip reached the batch screen". `VideoShrinkUITests` is in a scheme of its
+own, deliberately not in the `VideoShrink` scheme's test action, so the unit-test job keeps its
+exact meaning and runtime. A pass is a real observation and covers exactly one navigation; the
+script's own output says so, and says what it does not cover.
+
+**The seam (N39), which is why the parent does an integration pass every round.** The agent that
+made the flow switch legal reported, outside its file list, that `BatchViewModel`'s
+`cleanWorkspace()` removes the whole shared temporary root — so the copy it had just made
+reachable could still be deleted out from under the screen offering to save it. That is exactly
+the "built but not wired" failure this file warns about, one layer down: not a mechanism nobody
+constructed, but a rule nobody could safely use. `TemporaryWorkspace` now gives each flow its
+own directory, each manager removes only its own, and a test pins both directions. Reachable
+before this round too — a reload lands on the batch flow with the copy already kept.
+
+**N34 and N36 and N35** closed as described in the backlog table.
+
+**The two audits.** Both were read-only and both paid, which is now four rounds running. The
+numbers audit traced every user-facing figure to the arithmetic behind it and found nine defects,
+four of them P2 and three of those *overclaims* — the summary saying every video can get lighter,
+the confirmation promising copies "at 4K" for videos that will be copied smaller, and the basis
+caption naming an fps scaling that did not happen while hiding the one that did. The
+accessibility audit found two P1s, including a VoiceOver figure that is hidden from the very
+announcement it was added for. Their findings are listed below and are round 19's backlog.
+
+### Round 19 candidates — the two round-18 audits
+
+Numbering is new and local to these lists: `E` for the numbers audit, `A` for the accessibility
+audit. Each is a finding with a file and a line in the agent's report, which is worth re-reading
+rather than re-deriving; what is recorded here is only what the next round must not lose.
+
+| ID | Priority | Item |
+|----|----------|------|
+| E1 | 2 | The scan summary's headline says every eligible video "can get lighter", including the ones the estimate its own screen shows says will not shrink. `SavingsEstimate.likelyNoReductionCount` is computed and read by nothing but a test |
+| E2 | 2 | The basis caption names a frame-rate scaling that did not happen (30 fps is a ×1.0 no-op) and hides the one that did (a measured band at 24 fps is 0.8×) |
+| E3 | 2 | The confirmation before a batch promises copies "at 4K" for videos that will be copied smaller, on the last screen read before work starts |
+| E4 | 2 | A per-video space refusal in a batch names no figure, although the run computed one and the one-video flow already has the sentence for it |
+| E5 | 3 | The time estimate's two clocks measure different spans: the sample is transcode-only, the elapsed subtraction includes retrieval |
+| E6 | 3 | "copies about X" counts a copy for every sized video, including ones the run will skip entirely |
+| E7 | 3 | A selection that will not shrink renders as the bold figure "Zero KB" |
+| E8 | 3 | A stored non-shrinking saving renders as "--1.2 GB" in a finished row |
+| E9 | 3 | "N selected · X of originals" pairs the full selection count with a subtotal of the sized ones only |
+| A1 | 1 | The batch working screen's saved-so-far figure is `.accessibilityHidden(true)` inside a `.combine` container, so VoiceOver never reads the number the comment says it reads |
+| A2 | 1 | The finished screen's action bar can stack five controls — about 304pt, and more at accessibility sizes — against a landscape viewport of roughly 330pt, crushing the screen it exists to show |
+| A3 | 2 | The quality estimate reads as a bare number with its explanation as a separate element |
+| A4 | 2 | The word mark cannot fit beside "Skip" at accessibility sizes |
+| A5 | 2 | The selection header keeps the sort pill beside a `.largeTitle` headline at accessibility sizes, truncating the order the user cannot otherwise read |
+| A6 | 3 | Five section headings inside cards are not VoiceOver headers, unlike every title above them |
+| A7 | 3 | The working screen can announce the same percentage three times |
+| A8 | 3 | Two surfaces bypass `ShrinkHairline`, so Increase Contrast misses the two things a user must distinguish |
+| A9 | 3 | The app's haptics switch does not cover the quality pills |
+| A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert |
+
+Everything that compiles is still unverified until CI is green. A clean local gate run is
+evidence, never proof.

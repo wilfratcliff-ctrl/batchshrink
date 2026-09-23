@@ -4,12 +4,16 @@ import UIKit
 
 // One native session survives React reloads. Creating two view models would let
 // one model's startup cleanup remove the other's active output - and the session is
-// the thing a reload has to leave standing: the settings, the shared temporary
-// workspace, the history, the batch's queue and its paused phase, a save Photos has
-// accepted, and a finished single-video copy that was waiting to be saved.
+// the thing a reload has to leave standing: the settings, the history, the batch's
+// queue and its paused phase, a save Photos has accepted, and a finished
+// single-video copy that was waiting to be saved.
 @MainActor enum VideoShrinkNativeSession {
   static let settings = ShrinkSettings()
-  static let temporary = TemporaryFileManager()
+  // Two workspaces, not one, exactly as the app target has: the batch sweeps its own
+  // directory at the start and end of every run, and a one-video copy the user has not
+  // saved yet must not be in it. See `TemporaryWorkspace`.
+  static let oneVideoWorkspace = TemporaryFileManager(workspace: .oneVideo)
+  static let batchWorkspace = TemporaryFileManager(workspace: .batch)
   // The same store for both flows, exactly as the app target shares one: a copy saved in the
   // one-video flow is this app's own output, and the batch flow's "Select all" can only leave it
   // alone if both flows read and write the same device-local memory.
@@ -17,9 +21,9 @@ import UIKit
 
   static let model = CompressionViewModel(
     photos: PhotoLibraryService(),
-    transcoder: VideoTranscodingService(temporary: temporary),
+    transcoder: VideoTranscodingService(temporary: oneVideoWorkspace),
     verifier: VideoVerificationService(),
-    temporary: temporary,
+    temporary: oneVideoWorkspace,
     history: history,
     settings: settings
   )
@@ -27,9 +31,9 @@ import UIKit
   static let batch = BatchViewModel(
     photos: PhotoLibraryService(),
     scanner: PhotoLibraryScanService(),
-    transcoder: VideoTranscodingService(temporary: temporary),
+    transcoder: VideoTranscodingService(temporary: batchWorkspace),
     verifier: VideoVerificationService(),
-    temporary: temporary,
+    temporary: batchWorkspace,
     history: history,
     queueStore: FileBatchQueueStore(),
     screenAwake: ScreenAwakeController(),
@@ -47,11 +51,11 @@ import UIKit
   ///   into `.saved`, and the copy Photos made is written to the shared history;
   /// - a *finished*, unsaved single-video export is kept. It cost the user a whole export, and a
   ///   view being removed is not the user asking to lose it, so the model stays on `.readyToSave`
-  ///   and the copy stays in the session's temporary workspace. That workspace is the app's own
-  ///   and is cleared at the next launch (and by the batch flow's own cleanup), so the copy can
-  ///   still be lost - by the app's own cleanup, never by this call. Whether the flow offers that
-  ///   screen again is the flow's own concern; this file's rule is only that teardown must not be
-  ///   the thing that deletes the copy;
+  ///   and the copy stays in the one-video flow's own temporary workspace. That workspace is the
+  ///   app's own and is cleared at the next launch, so the copy can still be lost - by the app's
+  ///   own startup cleanup, never by this call and never by a batch run, which sweeps only its own
+  ///   directory. Whether the flow offers that screen again is the flow's own concern; this
+  ///   file's rule is only that teardown must not be the thing that deletes the copy;
   /// - the picker sheet is the one thing that cannot survive, because a sheet has no life without
   ///   the view that presents it. Its stage (`.choosing`) is closed rather than reopened, which
   ///   loses nothing: no video has been chosen yet.

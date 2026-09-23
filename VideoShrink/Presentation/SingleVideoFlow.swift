@@ -71,7 +71,10 @@ struct SingleVideoFlow: View {
                 Button("Batch") { useBatch() }
                     .font(.subheadline.weight(.medium))
                     .frame(minHeight: 44)
-                    .disabled(!model.canChoose)
+                    // A finished copy waiting to be saved is not work in flight, so it does not
+                    // hold the user here either; see FlowRouting.
+                    .disabled(!FlowRouting.oneVideoIsAtRest(canChoose: model.canChoose,
+                                                            stage: model.stage))
                     .accessibilityHint("Go back to shrinking several videos at once.")
             }
             ToolbarItem(placement: .topBarTrailing) {

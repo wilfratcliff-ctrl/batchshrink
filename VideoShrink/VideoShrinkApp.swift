@@ -7,10 +7,13 @@ struct VideoShrinkApp: App {
     @StateObject private var batch: BatchViewModel
 
     init() {
-        // One settings object, one temporary workspace and one history store are shared by both
-        // flows.
+        // One settings object and one history store are shared by both flows. The temporary
+        // workspace is deliberately not: a finished, unsaved one-video copy has to survive a
+        // batch run, and the batch sweeps its own directory at the start and end of every run.
+        // See `TemporaryWorkspace` for what went wrong while the two shared one.
         let settings = ShrinkSettings()
-        let temporary = TemporaryFileManager()
+        let oneVideoWorkspace = TemporaryFileManager(workspace: .oneVideo)
+        let batchWorkspace = TemporaryFileManager(workspace: .batch)
         // The same store for both, rather than one each. A copy saved in the one-video flow is this
         // app's own output, and the batch flow's "Select all" can only leave it alone if the two
         // flows write to and read from the same device-local memory. Both would still see the other
@@ -20,18 +23,18 @@ struct VideoShrinkApp: App {
         _settings = StateObject(wrappedValue: settings)
         _model = StateObject(wrappedValue: CompressionViewModel(
             photos: PhotoLibraryService(),
-            transcoder: VideoTranscodingService(temporary: temporary),
+            transcoder: VideoTranscodingService(temporary: oneVideoWorkspace),
             verifier: VideoVerificationService(),
-            temporary: temporary,
+            temporary: oneVideoWorkspace,
             history: history,
             settings: settings
         ))
         _batch = StateObject(wrappedValue: BatchViewModel(
             photos: PhotoLibraryService(),
             scanner: PhotoLibraryScanService(),
-            transcoder: VideoTranscodingService(temporary: temporary),
+            transcoder: VideoTranscodingService(temporary: batchWorkspace),
             verifier: VideoVerificationService(),
-            temporary: temporary,
+            temporary: batchWorkspace,
             history: history,
             queueStore: FileBatchQueueStore(),
             screenAwake: ScreenAwakeController(),

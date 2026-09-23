@@ -1,5 +1,22 @@
 import Foundation
 
+/// The two directories this app owns inside its own temporary area, one for each flow.
+///
+/// They are separate because the two flows' work has different lifetimes, and one shared
+/// directory could not express that. The batch flow's directory is scratch: it is swept when a
+/// run starts and again when one ends, because nothing in it is wanted once the run is over. The
+/// one-video flow's directory is not scratch in that sense: a finished, unsaved copy sits in it
+/// while the user decides whether to save it, and that decision can easily outlive a batch run.
+/// While both flows used one directory, finishing a batch deleted a copy whose owner was still
+/// offering to save it - the screen promised a file that a different flow had already removed.
+///
+/// The names are the ones the documentation has always used, so the one-video directory keeps
+/// the name the privacy and cleanup notes describe.
+enum TemporaryWorkspace: String {
+    case oneVideo = "VideoShrink-Phase0"
+    case batch = "VideoShrink-Phase0-batch"
+}
+
 @MainActor final class TemporaryFileManager: TemporaryFileManaging {
     private let root: URL
     private let files: FileManager
@@ -9,12 +26,16 @@ import Foundation
     /// produce.
     private let capacity: (URL) throws -> Int64?
 
-    init(files: FileManager = .default,
+    /// `workspace` names the directory this manager owns and is allowed to remove. It is a value
+    /// type with a nonisolated case, so it is safe as a default argument - which is evaluated
+    /// outside the main actor, a trap this project has hit before with `ShrinkHistoryStoring`.
+    init(workspace: TemporaryWorkspace = .oneVideo,
+         files: FileManager = .default,
          capacity: @escaping (URL) throws -> Int64? = TemporaryFileManager.volumeCapacity) {
         self.files = files
         self.capacity = capacity
         // Only this app-owned directory may be removed. Never accept a source URL for cleanup.
-        root = files.temporaryDirectory.appendingPathComponent("VideoShrink-Phase0", isDirectory: true)
+        root = files.temporaryDirectory.appendingPathComponent(workspace.rawValue, isDirectory: true)
     }
 
     func ensureWorkspace() throws {

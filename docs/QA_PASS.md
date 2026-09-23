@@ -70,6 +70,7 @@ recorded in [VALIDATION.md](VALIDATION.md); they are not covered by the route wa
   rather than repeated.
 - Leaving the app pauses; a save already accepted by Photos is allowed to settle; the pause reason
   is shown.
-- The temporary workspace holds at most one output, is excluded from backup, and cleanup is
-  confined to the app's own directory.
+- The app owns two temporary directories, one per flow, both excluded from backup. Each flow's
+  cleanup reaches only its own, so a batch run cannot remove the one-video flow's copy while the
+  user is still deciding whether to save it.
 - The library scan never downloads an original, and thumbnails are the only preview traffic.

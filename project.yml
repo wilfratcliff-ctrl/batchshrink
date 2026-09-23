@@ -36,6 +36,21 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.VideoShrink.Tests
         GENERATE_INFOPLIST_FILE: YES
+  # The one target that runs the app rather than reading it. It is in its own scheme, and
+  # deliberately not in the VideoShrink scheme's test action, so the unit-test job that has
+  # been green for several rounds keeps its exact meaning and its exact runtime, and a UI test
+  # can never hide a unit-test failure or be hidden by one.
+  VideoShrinkUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [VideoShrinkUITests]
+    dependencies:
+      - target: VideoShrink
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.VideoShrink.UITests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: VideoShrink
 schemes:
   VideoShrink:
     build:
@@ -47,3 +62,10 @@ schemes:
       gatherCoverageData: true
     archive:
       config: Release
+  VideoShrinkUITests:
+    build:
+      targets:
+        VideoShrink: all
+        VideoShrinkUITests: [test]
+    test:
+      targets: [VideoShrinkUITests]
