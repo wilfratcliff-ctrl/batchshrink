@@ -550,16 +550,29 @@ import Photos
 
     func testAFormatReadIsGivenUpAtOnceWhenThePassIsStopped() async {
         let stops = ScanScaleCountBox()
+        let madeRequest = ScanScaleCountBox()
         let started = Date()
         let read = Task { () -> Bool in
             let handed: NSObject? = await PhotoLibraryScanService.boundedAnswer(
                 timeout: .seconds(30),
                 start: { _ in
+                    madeRequest.count += 1
                     let cancelRequest: () -> Void = { stops.count += 1 }
                     return cancelRequest
                 })
             return handed == nil
         }
+
+        // Wait until that read really has a request outstanding. Cancelling before it does is a
+        // different case, and a better one - the read then gives up without ever asking PhotoKit
+        // for anything, so there is nothing to cancel. This test is about the request already
+        // being in flight, so it has to have been made first.
+        var spins = 0
+        while madeRequest.count == 0 && spins < 400 {
+            try? await Task.sleep(for: .milliseconds(5))
+            spins += 1
+        }
+        XCTAssertEqual(madeRequest.count, 1, "the read must have made its request first")
 
         // The user taps Stop while that read is still waiting.
         read.cancel()

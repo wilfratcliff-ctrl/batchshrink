@@ -153,7 +153,10 @@ import UIKit
         // demands room the step will never need, and that is how a phone with space to finish an
         // export gets told there is not enough space to start one.
         let original: Int64 = 3_000_000_000
-        let phoneWithRoomToFinish: Int64 = 3_100_000_000
+        // Enough for the one file an export writes plus the reserve, and nowhere near enough for
+        // two copies of the original. The reserve is most of the difference, so a figure only just
+        // above the original does not separate the two rules.
+        let phoneWithRoomToFinish: Int64 = 3_300_000_000
 
         XCTAssertEqual(DiskHeadroom.neededToWrite(original), DiskHeadroom.bytes(original, copies: 1))
         XCTAssertLessThan(DiskHeadroom.neededToWrite(original), DiskHeadroom.bytes(original, copies: 2))
