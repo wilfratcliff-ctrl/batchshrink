@@ -1,0 +1,117 @@
+import AVFoundation
+import CoreMedia
+
+/// Runs Apple's HEVC and H.264 presets, with a video composition only when the preset alone
+/// cannot reach the requested size or frame rate.
+@MainActor final class VideoTranscodingService: VideoTranscoding {
+    private let temporary: any TemporaryFileManaging
+    private var active: AVAssetExportSession?
+
+    init(temporary: any TemporaryFileManaging) {
+        self.temporary = temporary
+    }
+
+    func transcode(_ source: RetrievedVideo,
+                   metadata: VideoMetadata,
+                   settings: TranscodeSettings,
+                   progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        try Task.checkCancellation()
+        let destination = try temporary.outputURL()
+        let composition = settings.needsComposition(sourceLongEdge: metadata.longEdge,
+                                                    sourceFrameRate: metadata.nominalFrameRate)
+            ? await makeComposition(asset: source.asset, metadata: metadata, settings: settings)
+            : nil
+        let preserved = await preservedMetadata(of: source.asset)
+        var plans = [TranscodePlan(composition: composition, metadata: preserved)]
+        if composition != nil {
+            plans.append(TranscodePlan(composition: nil, metadata: preserved))
+        }
+        if !preserved.isEmpty {
+            plans.append(TranscodePlan(composition: nil, metadata: []))
+        }
+        var lastError: Error = PipelineError.export
+        for (index, plan) in plans.enumerated() {
+            if index > 0 { try? temporary.remove(destination) }
+            do {
+                let session = try makeSession(asset: source.asset, settings: settings)
+                session.videoComposition = plan.composition
+                session.metadata = plan.metadata
+                try await run(session, to: destination, progress: progress)
+                return destination
+            } catch {
+                if Task.isCancelled { throw error }
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
+    func cancel() { active?.cancelExport() }
+
+    /// One way of writing the copy. Later plans give up the extras so a stubborn file still
+    /// produces something, and every attempt starts from a clean destination.
+    private struct TranscodePlan {
+        let composition: AVVideoComposition?
+        let metadata: [AVMetadataItem]
+    }
+
+    private func makeSession(asset: AVURLAsset, settings: TranscodeSettings) throws -> AVAssetExportSession {
+        guard let session = AVAssetExportSession(asset: asset, presetName: settings.resolution.presetName)
+        else { throw PipelineError.unsupported }
+        guard session.supportedFileTypes.contains(.mov) else { throw PipelineError.unsupported }
+        session.shouldOptimizeForNetworkUse = false
+        return session
+    }
+
+    /// Descriptive metadata the original exposes, camera and location tags included, is written
+    /// into the copy rather than dropped. AVFoundation decides what a given container can carry,
+    /// and nothing is invented here.
+    private func preservedMetadata(of asset: AVAsset) async -> [AVMetadataItem] {
+        if let all = try? await asset.load(.metadata), !all.isEmpty { return all }
+        return (try? await asset.load(.commonMetadata)) ?? []
+    }
+
+    private func run(_ session: AVAssetExportSession, to url: URL,
+                     progress: @escaping @MainActor (Double) -> Void) async throws {
+        active = session
+        let observer = Task { @MainActor in
+            for await state in session.states(updateInterval: 0.25) {
+                guard !Task.isCancelled else { break }
+                if case let .exporting(value) = state { progress(value.fractionCompleted) }
+            }
+        }
+        defer {
+            observer.cancel()
+            active = nil
+        }
+        // The iOS 18 async API handles task cancellation; cancel() stops the session explicitly.
+        try await session.export(to: url, as: .mov)
+        try Task.checkCancellation()
+    }
+
+    private func makeComposition(asset: AVURLAsset, metadata: VideoMetadata,
+                                 settings: TranscodeSettings) async -> AVVideoComposition? {
+        guard let composition = try? await AVMutableVideoComposition.videoComposition(withPropertiesOf: asset)
+        else { return nil }
+        if let size = renderSize(metadata: metadata, settings: settings) {
+            composition.renderSize = size
+        }
+        if let frames = settings.targetFrameRate(sourceFrameRate: metadata.nominalFrameRate) {
+            composition.frameDuration = CMTime(value: 1, timescale: CMTimeScale(frames.rounded()))
+        }
+        // Keep HDR display metadata on the rendered frames instead of dropping it quietly.
+        composition.perFrameHDRDisplayMetadataPolicy = .propagate
+        return composition
+    }
+
+    /// The size to render at: the requested long edge, never larger than the source, always
+    /// with even dimensions because encoders require them.
+    private func renderSize(metadata: VideoMetadata, settings: TranscodeSettings) -> CGSize? {
+        guard metadata.width > 0, metadata.height > 0, metadata.longEdge > 0 else { return nil }
+        let longEdge = settings.renderLongEdge(sourceLongEdge: metadata.longEdge)
+        let scale = min(1, Double(longEdge) / Double(metadata.longEdge))
+        let width = (Double(metadata.width) * scale / 2).rounded() * 2
+        let height = (Double(metadata.height) * scale / 2).rounded() * 2
+        return CGSize(width: max(2, width), height: max(2, height))
+    }
+}

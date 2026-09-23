@@ -1,0 +1,298 @@
+# Batch shrinking and the library prescan
+
+This phase makes the batch the main way into VideoShrink: look through the library, choose
+videos, watch a running count with a time estimate, and read an honest summary. The
+single-video path with a preview before saving is still there, one tap away.
+
+A smaller copy is added to Photos as a separate item, and only after it passes the existing
+checks. Deleting an original is opt-in, applies to batch runs, and is described below.
+
+## What the prescan can see
+
+The scan is built from PhotoKit metadata. It downloads nothing.
+
+| Fact | Source |
+| --- | --- |
+| Count of videos, dates, durations, pixel sizes, favourite/hidden flags | `PHAsset` |
+| Slow-motion, time-lapse and spatial flags | `PHAssetMediaSubtype` |
+| Edited assets and Live Photo video pairs | `PHAssetResource` resource types |
+| Original byte size | `PHAssetResource.dataSize`, public API from iOS 27 |
+
+`dataSize` is the only supported way to read an original's size without fetching it. Apple
+exposes no equivalent on earlier systems, and VideoShrink does not use undocumented
+key-value lookups to guess one.
+
+On a system that does not report sizes, the scan falls back to measuring the videos that
+are already on the iPhone: it asks PhotoKit for the original with network access disabled,
+and reads the size of the file it is handed. Videos that live only in iCloud cannot answer
+that request, so they are counted, listed and left out of the estimate instead of being
+downloaded during a scan. The pass is capped at the 400 newest videos so a large library
+cannot turn a scan into an unbounded wait, and it can be stopped at any time.
+
+With limited Photos access, the allowlist *is* the library. Totals are labelled accordingly.
+
+## How the savings estimate works
+
+Every sized video gives a measured source bitrate: `bytes × 8 ÷ duration`. The unknown is
+the size of the copy, so the estimate uses a band for it:
+
+- **Planning band:** 4-8 Mbps for a 1080p HEVC copy. Apple does not publish the bitrate of
+  `AVAssetExportPresetHEVC1920x1080`, so this is a published-range planning assumption
+  rather than a quoted figure.
+- **Measured band:** once this iPhone has finished three or more compressions, the band is
+  replaced by the copy bitrates those runs produced, widened by 10% either side.
+
+For each video the app reports the saving if the copy lands at the top of the band
+(conservative) and at the bottom (optimistic). A video whose conservative saving is zero is
+counted separately as "may not shrink" and is still offered, because only a real run can
+settle it. Copies that do not shrink are skipped, never saved.
+
+This is an estimate, not a measurement. The summary says so, and the completion screen
+reports measured bytes only.
+
+## How the time estimate works
+
+The estimate is built from videos this run has actually finished: processing seconds per
+second of video, plus a fixed per-video overhead, with a band taken from the spread of the
+observed samples. Before the first video finishes the app shows no number at all.
+
+Time spent downloading a video from iCloud is deliberately excluded, because it depends on
+the network rather than on the iPhone. The interface says so next to the estimate.
+
+## Quality options
+
+| Option | Preset | Codec |
+| --- | --- | --- |
+| 720p | `AVAssetExportPreset1280x720` | H.264 |
+| 1080p (default) | `AVAssetExportPresetHEVC1920x1080` | HEVC |
+| 4K | `AVAssetExportPresetHEVC3840x2160` | HEVC |
+
+Apple ships HEVC size presets for 1080p and 4K only, so 720p uses the documented H.264 preset
+rather than a hand-built encoder configuration. Smoothness offers every frame (the default),
+30 fps or 24 fps. A frame rate is only ever lowered, never raised, and a clip that is already
+at or below the chosen rate is left alone.
+
+The app never encodes larger than the original. If the chosen size is larger than a source,
+the export runs at the source size instead and the estimate uses that smaller band. A video
+composition is applied only when the preset alone cannot do the job: to hold a small source
+at its own size, or to lower the frame rate. Composed exports set
+`perFrameHDRDisplayMetadataPolicy` so HDR display metadata is carried through instead of
+being dropped. If a composed export fails, the transcoder retries once without the
+composition, and the result screens report the measured size and frame rate rather than the
+requested ones.
+
+Every copy is checked before saving: playable, one video track, duration within tolerance,
+matching audio track count, matching display shape, the expected codec, no more pixels than
+the original and no more frames than the original. Receiving HEVC when the smaller H.264 copy
+was requested is treated as a better result, not a failure.
+
+The chooser estimates each resolution for the current selection before anything runs. That
+estimate is a range from the same band model as the library summary.
+
+## Thumbnails
+
+The list shows a thumbnail per video. Thumbnails are the one thing this app fetches without
+the user starting a job: Photos can hand over a cached preview for a video whose original
+lives in iCloud, and only that preview is requested. Originals are never downloaded for a
+scan or a list, and the on-device size pass still asks PhotoKit with network access disabled.
+
+Thumbnails are sized to be recognisable rather than decorative, and each carries the video's
+length. Tapping one opens a player you can scrub through before deciding, because choosing what
+to delete from a still frame is guesswork. That preview asks PhotoKit for a player item, which
+lets Photos stream or buffer rather than pulling an export-grade original down first. It is the
+one place in the app where looking at an iCloud video can start a fetch, and the sheet says so.
+
+## Checking a copy
+
+Before a copy is saved, and again immediately before the save, VideoShrink checks:
+
+- it is a real, non-empty file that plays;
+- exactly one video track, with a duration within 0.25 s or 0.1% of the original;
+- the same audio track count, and non-empty audio when the original had sound;
+- the same display shape within 2%;
+- the expected codec, no more pixels than the original, and no more frames than the original;
+- a frame decodes near the start, the middle and the end of the track.
+
+After Photos accepts the save, the app asks for the new item back and inspects that. This is what
+turns "Photos said yes" into "the copy is there and readable". A copy Photos cannot hand back yet
+is not treated as a failure: the finished screen reports how many copies were read back and how
+many were not.
+
+None of this is an end-to-end playback proof. Three decoded frames are not a decoded file, audio
+presence is not audio fidelity, and reading a copy back on this iPhone says nothing about whether
+iCloud has finished uploading it.
+
+## What travels with a copy
+
+A copy keeps what Photos knows about the original:
+
+- the creation date;
+- the filename, through `PHAssetResourceCreationOptions.originalFilename`;
+- the location, through `PHAssetChangeRequest.location`;
+- the favourite and hidden flags.
+
+The transcoder also writes the original's own descriptive metadata into the file, camera and
+location tags included, wherever the container can carry it. Captions, keywords and ratings are
+newer Photos metadata that this build does not copy yet. Album membership is not copied either:
+Photos treats a new item as a new item, and adding it to every album the original belonged to
+would be a separate feature with its own risks.
+
+## Deleting originals
+
+Deleting is off until the user turns it on, and it applies to batch runs. There are two modes:
+
+| Mode | Behaviour |
+| --- | --- |
+| Keep every original | Nothing is ever deleted. |
+| Delete as it goes | Each original is removed after its copy is saved and read back. |
+| Delete at the end | Originals wait until the run finishes, then the user reviews and confirms. |
+
+Every deletion goes through one gate, `DeletionPolicy`. It answers "delete" only when all of
+these hold:
+
+- deleting is switched on;
+- a copy was saved and it is smaller than the original;
+- that copy passed verification;
+- Photos handed the copy back when the app asked for it;
+- the original has not already been dealt with.
+
+Anything else returns a reason, the original stays, and the reason appears in the run's list. The
+app never deletes on the strength of an export alone: a copy that cannot be read back keeps its
+original.
+
+Deleted items go to Photos' Recently Deleted, which keeps them for 30 days. That is also when the
+space comes back, and only once the devices have synced. The interface says so before the setting
+can be turned on, on the finished screen, and in the help sheet.
+
+**Photos confirms a transaction, not a video.** Every call to `PHAssetChangeRequest.deleteAssets`
+produces one system alert, and no app can pre-authorise it or suppress it. The only lever is how
+many originals go into one call, so deletions are batched: five at a time while "delete as it
+goes" is running, with the remainder sent when the run finishes, and a single transaction for
+the whole run in "delete at the end". That turns one confirmation per video into one per batch,
+or one for the entire job.
+
+Because iOS needs the app in front to show that alert, a paused run leaves its pending batch
+alone. The originals stay eligible, and they are sent the next time the run finishes or the user
+confirms from the finished screen.
+
+Because this is the one irreversible thing the app can do, intent is written to the queue before
+the call. An item recorded as `deleting` that is still there on the next launch comes back as
+`uncertain` and is never retried automatically; the user checks Photos first.
+
+## Leaving it alone
+
+A long batch is meant to be started and left. Two things decide how far that goes:
+
+- **The app has to stay in front.** iOS suspends background work, and this app takes no background
+  entitlement, so locking the phone or leaving the app pauses the batch rather than pretending to
+  continue. It comes back where it left off.
+- **The screen can be held awake.** "Keep screen awake while working" in the help sheet stops the
+  display sleeping while a run is active. It is off by default, it is released the moment work
+  stops or the app leaves the foreground, and it uses more battery and runs warmer.
+
+With deleting set to "at the end", that combination is: connect power, start the batch, leave the
+phone face down, and come back to one confirmation for the whole job.
+
+## Heat and power
+
+Encoding for an hour heats a phone. Before each video the batch reads the device's thermal state
+and stops with an explanation when iOS reports `critical`, instead of being killed mid-export.
+Low Power Mode is not a reason to stop, so the working screen simply says that things will take
+longer.
+
+## Queue behaviour
+
+- One video at a time, in the order chosen. Retrieval, preparation, compression and
+  verification keep their existing stage rules and cancellation checks.
+- A verified, smaller copy is saved to Photos immediately, and its temporary file is deleted
+  straight afterwards, so only one output exists at a time.
+- A failure records a readable reason and the run continues with the next video.
+- Leaving the app pauses the run: the in-flight video returns to the waiting list, and copies
+  already saved stay in Photos.
+- The final screen reports saved, skipped, failed and unattempted counts, plus measured
+  original and copy bytes for the videos that were actually saved.
+
+## Surviving a close
+
+The queue is written to a small JSON file in the app's own Application Support directory,
+excluded from backup and behind file protection. It holds library identifiers, the sizes
+Photos reported, the settings the run used and what happened to each item. No media, filename,
+location or thumbnail is stored.
+
+It is written between steps rather than on progress ticks: when a video starts, at each stage
+change, at each result, and on pause or finish. On the next launch the stored queue is
+reconciled:
+
+- Anything waiting or in flight had produced no copy, so it waits again.
+- An item that was *mid-save* is different. Photos may have committed that copy after the app
+  stopped, so it is flagged as "check in Photos" rather than run again. Running it again could
+  make a second copy, and the app will not do that on its own.
+- Items already saved, skipped or failed keep their recorded outcome.
+
+A restored run opens on the paused screen with what finished so far. "Continue" picks up the
+waiting videos; check-in-Photos items are only requeued when the user says they have looked.
+"Done" clears the stored queue by writing an empty one, and nothing is ever deleted.
+
+This is a durable *list*, not exactly-once execution. A stop between Photos committing a copy
+and the app recording it can still leave one real copy plus one flagged item. The flag exists
+so the user decides what happens to it.
+
+## On-device history
+
+The app records the local Photos identifiers it has successfully shrunk, and the copy
+bitrate of each result, in its own `UserDefaults` (declared as reason `CA92.1` in the
+privacy manifest). This marks already-shrunk videos in the list, keeps them out of the bulk
+shortcuts (individual rows can still be chosen deliberately), and sharpens the estimate. It
+stores no media, filename, location or date, and nothing leaves the device.
+
+The list is capped at the 2,000 most recent identifiers and 60 measured bitrates.
+
+## Not claimed by this phase
+
+- No iCloud storage is freed, and no subscription tier is lowered. Keeping both copies uses
+  more storage until the user manages the originals themselves.
+- No background or overnight processing. There is no background entitlement, the screen is
+  not kept awake, and leaving the foreground pauses the run.
+- The stored queue survives a close, but there is still no exactly-once guarantee: a save that
+  Photos committed just before the app stopped is flagged for the user to check rather than
+  reconciled automatically.
+- No prediction of a copy's exact size, and no promise that every video gets smaller.
+- Deletion is opt-in and gated. There is no bulk "delete everything" action, nothing is deleted
+  without a copy that Photos handed back, and the one-video flow never deletes at all.
+- No supported media beyond ordinary, unedited, single-video, at-most-one-audio-track files.
+
+## What still needs a device
+
+1. Confirm the scan reports sizes on a device running iOS 27, and that it degrades to counts
+   with no sizes on an older system instead of failing.
+2. Confirm with the on-device measure pass that no bytes are downloaded: watch network use
+   while scanning a library that has iCloud-only videos, and check with connectivity off.
+3. Compare the estimate against real results for a mix of 1080p and 4K clips, then confirm
+   the band tightens after the first three finishes.
+4. Time a batch of five to ten videos and compare the reported estimate with the clock,
+   including one failure, one skip and one pause/resume.
+5. Compare the three quality options on one 4K clip: confirm 1080p and 720p are smaller than
+   4K, that the 720p copy is H.264, and that no copy is ever larger than its source.
+6. Check a reduced frame rate on a 60 fps clip: picture smoothness, audio sync and the
+   measured frame rate shown in the details. Confirm the composed path either works or falls
+   back without saving anything broken.
+7. Confirm thumbnails appear for every row, including videos whose originals are in iCloud,
+   and that scrolling a large library stays responsive.
+8. Re-run the existing device matrix from [PHYSICAL_DEVICE_TEST_PLAN.md](PHYSICAL_DEVICE_TEST_PLAN.md)
+   for the single-video path, which this phase moved but did not change.
+9. Force-quit mid-batch, reopen and confirm the run is offered back with the right counts.
+   Repeat while a save is in flight and confirm the item is flagged for a look in Photos
+   rather than run again.
+10. Run a long batch on a warm device and confirm the app stops with the heat message rather
+    than being killed, and that continuing after it cools works.
+11. Confirm the finished screen's read-back line matches what is actually in Photos, and that a
+    copy Photos cannot hand back is reported as not read back rather than as a failure.
+12. With deleting off, confirm no original is ever removed, whatever happens.
+13. With deleting on, confirm nothing is removed without a confirmed copy, then check Photos'
+    Recently Deleted to see the originals sitting there, and check the app's own report.
+14. Force-quit while an original is being deleted and confirm it comes back as uncertain rather
+    than being deleted twice.
+15. Count the system confirmations in "delete as it goes": one per five originals, not one per
+    original, plus a final one for the remainder.
+16. Leave a batch running with the screen-awake option on and confirm the display stays on, then
+    that it is released when the batch finishes or the app is backgrounded.

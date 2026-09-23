@@ -1,0 +1,988 @@
+import XCTest
+import AVFoundation
+@testable import VideoShrink
+
+@MainActor final class BatchTests: XCTestCase {
+
+    // MARK: - Quality options
+
+    func testPlanningBandFollowsTheChosenResolution() {
+        let hd = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
+        XCTAssertEqual(hd.lowBitsPerSecond, 4_000_000, accuracy: 1)
+        XCTAssertEqual(hd.highBitsPerSecond, 8_000_000, accuracy: 1)
+        XCTAssertEqual(hd.basis, .planning(resolution: .hd1080))
+        XCTAssertEqual(CopySizeModel.make(for: .uhd4k, frameRate: .original, measured: []).lowBitsPerSecond,
+                       12_000_000, accuracy: 1)
+        XCTAssertEqual(CopySizeModel.make(for: .hd720, frameRate: .original, measured: []).highBitsPerSecond,
+                       5_000_000, accuracy: 1)
+    }
+
+    func testFewerFramesLowerTheEstimate() {
+        let original = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
+        let thirty = CopySizeModel.make(for: .hd1080, frameRate: .fps30, measured: [])
+        let twentyFour = CopySizeModel.make(for: .hd1080, frameRate: .fps24, measured: [])
+        XCTAssertEqual(thirty.highBitsPerSecond, original.highBitsPerSecond, accuracy: 1)
+        XCTAssertEqual(twentyFour.highBitsPerSecond, original.highBitsPerSecond * 0.8, accuracy: 1)
+    }
+
+    func testMeasuredCopiesOnlyRefineTheSizeTheyWereMadeAt() {
+        let measurements = [CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1920),
+                            CopyMeasurement(bitsPerSecond: 5_400_000, longEdge: 1920),
+                            CopyMeasurement(bitsPerSecond: 5_200_000, longEdge: 1920)]
+        let hd = CopySizeModel.make(for: .hd1080, frameRate: .original, measured: measurements)
+        XCTAssertEqual(hd.basis, .measured(samples: 3))
+        XCTAssertEqual(hd.lowBitsPerSecond, 4_500_000, accuracy: 1)
+        XCTAssertEqual(hd.highBitsPerSecond, 5_940_000, accuracy: 1)
+        XCTAssertEqual(CopySizeModel.make(for: .uhd4k, frameRate: .original, measured: measurements).basis,
+                       .planning(resolution: .uhd4k))
+        // Two samples are not enough to retune the band.
+        XCTAssertEqual(CopySizeModel.make(for: .hd1080, frameRate: .original,
+                                          measured: [CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1920)]).basis,
+                       .planning(resolution: .hd1080))
+    }
+
+    func testResolutionIsNeverRaisedAndNeverExceedsTheSource() {
+        let fourK = TranscodeSettings(resolution: .uhd4k, frameRate: .original)
+        XCTAssertEqual(fourK.renderLongEdge(sourceLongEdge: 3840), 3840)
+        XCTAssertEqual(fourK.renderLongEdge(sourceLongEdge: 1920), 1920)
+        XCTAssertEqual(fourK.effectiveResolution(sourceLongEdge: 1920), .hd1080)
+        XCTAssertEqual(fourK.effectiveResolution(sourceLongEdge: 3840), .uhd4k)
+
+        let hd = TranscodeSettings(resolution: .hd1080, frameRate: .original)
+        XCTAssertEqual(hd.effectiveResolution(sourceLongEdge: 1280), .hd720)
+        XCTAssertEqual(hd.effectiveResolution(sourceLongEdge: 3840), .hd1080)
+    }
+
+    func testACompositionIsOnlyUsedWhenThePresetCannotDoIt() {
+        let hd = TranscodeSettings(resolution: .hd1080, frameRate: .original)
+        // 4K down to 1080p: the preset alone does it.
+        XCTAssertFalse(hd.needsComposition(sourceLongEdge: 3840, sourceFrameRate: 30))
+        // A 720p source would be upscaled by the preset, so a composition fixes the size.
+        XCTAssertTrue(hd.needsComposition(sourceLongEdge: 1280, sourceFrameRate: 30))
+        // A lower frame rate needs a composition too.
+        let twentyFour = TranscodeSettings(resolution: .hd1080, frameRate: .fps24)
+        XCTAssertTrue(twentyFour.needsComposition(sourceLongEdge: 3840, sourceFrameRate: 30))
+        XCTAssertFalse(twentyFour.needsComposition(sourceLongEdge: 3840, sourceFrameRate: 24))
+    }
+
+    func testFrameRateIsNeverRaised() {
+        let thirty = TranscodeSettings(resolution: .hd1080, frameRate: .fps30)
+        XCTAssertNil(thirty.targetFrameRate(sourceFrameRate: 24))
+        XCTAssertEqual(thirty.targetFrameRate(sourceFrameRate: 60), 30)
+        XCTAssertNil(TranscodeSettings(resolution: .hd1080, frameRate: .original)
+            .targetFrameRate(sourceFrameRate: 60))
+    }
+
+    func testSavingsFollowTheChosenResolution() throws {
+        // Ten minutes of 4K at roughly 40 Mbps.
+        let clip = asset("a", bytes: 3_000_000_000)
+        let fourK = try XCTUnwrap(clip.savings(settings: TranscodeSettings(resolution: .uhd4k,
+                                                                          frameRate: .original), measured: []))
+        let hd = try XCTUnwrap(clip.savings(settings: TranscodeSettings(resolution: .hd1080,
+                                                                       frameRate: .original), measured: []))
+        XCTAssertGreaterThan(hd.conservativeBytes, fourK.conservativeBytes)
+        XCTAssertGreaterThan(hd.optimisticBytes, fourK.optimisticBytes)
+    }
+
+    func testASmallFileForItsLengthIsFlaggedAsUnlikelyToShrink() throws {
+        // Two minutes at roughly 1 Mbps: already smaller than anything the bands predict.
+        let saving = try XCTUnwrap(asset("a", bytes: 15_000_000, duration: 120)
+            .savings(settings: TranscodeSettings(), measured: []))
+        XCTAssertFalse(saving.likelyShrinks)
+        XCTAssertEqual(saving.conservativeBytes, 0)
+    }
+
+    func testScanEstimateCountsOnlyVideosWithAReportedSize() {
+        let result = LibraryScanResult(assets: [asset("a", bytes: 3_000_000_000), asset("b", bytes: nil)],
+                                       videoCount: 4, unsupportedCount: 2, unknownSizeCount: 1,
+                                       sizeSource: .reportedByPhotos, measuredOnDeviceCount: 0)
+        let estimate = result.estimate(settings: TranscodeSettings(), measured: [])
+        XCTAssertEqual(estimate.sizedCount, 1)
+        XCTAssertEqual(estimate.sizedBytes, 3_000_000_000)
+        XCTAssertGreaterThan(estimate.conservativeBytes, 0)
+        XCTAssertEqual(estimate.basis, .planning(resolution: .hd1080))
+        XCTAssertLessThan(estimate.estimatedCopyBytes, estimate.sizedBytes)
+    }
+
+    func testImpossibleDurationsCannotProduceAnEstimate() {
+        XCTAssertNil(CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
+            .savings(sourceBytes: 1_000_000, duration: 0))
+        XCTAssertNil(CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
+            .copyBytes(forDuration: .nan))
+        XCTAssertNil(CopySizeModel.make(for: .hd1080, frameRate: .original, measured: [])
+            .savings(sourceBytes: 0, duration: 120))
+    }
+
+    // MARK: - Time estimate
+
+    func testEstimatorStaysSilentUntilAVideoHasFinished() {
+        var estimator = ProcessingEstimator()
+        XCTAssertFalse(estimator.hasEstimate)
+        XCTAssertNil(estimator.remainingSeconds(pendingContentSeconds: [60], activeContentSeconds: nil,
+                                                activeElapsedSeconds: 0))
+    }
+
+    func testEstimatorScalesWithTheContentStillToGo() throws {
+        var estimator = ProcessingEstimator()
+        estimator.record(processingSeconds: 30, contentSeconds: 60)
+        let estimate = try XCTUnwrap(estimator.remainingSeconds(pendingContentSeconds: [120, 120],
+                                                               activeContentSeconds: nil,
+                                                               activeElapsedSeconds: 0))
+        XCTAssertTrue(estimate.contains(120))
+    }
+
+    func testShortestBandComesFromASingleSample() throws {
+        var estimator = ProcessingEstimator()
+        estimator.record(processingSeconds: 20, contentSeconds: 40)
+        let estimate = try XCTUnwrap(estimator.remainingSeconds(pendingContentSeconds: [40],
+                                                               activeContentSeconds: nil,
+                                                               activeElapsedSeconds: 0))
+        XCTAssertEqual(estimate.lowerBound, 12, accuracy: 0.5)
+        XCTAssertEqual(estimate.upperBound, 36, accuracy: 0.5)
+    }
+
+    func testObservedSpreadWidensTheBandWithMoreSamples() throws {
+        var estimator = ProcessingEstimator()
+        estimator.record(processingSeconds: 30, contentSeconds: 60)
+        estimator.record(processingSeconds: 60, contentSeconds: 60)
+        let estimate = try XCTUnwrap(estimator.remainingSeconds(pendingContentSeconds: [60],
+                                                               activeContentSeconds: nil,
+                                                               activeElapsedSeconds: 0))
+        XCTAssertTrue(estimate.contains(52.5))
+        XCTAssertLessThan(estimate.lowerBound, 52.5)
+        XCTAssertGreaterThan(estimate.upperBound, 52.5)
+    }
+
+    func testElapsedTimeOnTheActiveVideoIsSubtracted() throws {
+        var estimator = ProcessingEstimator()
+        estimator.record(processingSeconds: 60, contentSeconds: 60)
+        let estimate = try XCTUnwrap(estimator.remainingSeconds(pendingContentSeconds: [],
+                                                               activeContentSeconds: 60,
+                                                               activeElapsedSeconds: 45))
+        XCTAssertTrue(estimate.contains(15))
+    }
+
+    // MARK: - Eligibility rules
+
+    func testAssetRulesRejectSpecialFormats() {
+        XCTAssertNil(AssetRules.unsupportedReason(AssetRules.Traits()))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(isVideo: false)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(isHighFrameRate: true)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(isTimeLapse: true)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(isSpatial: true)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(hasAdjustmentData: true)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(hasFullSizeVideo: true)))
+        XCTAssertNotNil(AssetRules.unsupportedReason(AssetRules.Traits(hasPairedVideo: true)))
+    }
+
+    func testOnlyEligibleVideosWithSizesGetAPerRowEstimate() {
+        let settings = TranscodeSettings()
+        XCTAssertNotNil(asset("sized", bytes: 3_000_000_000).savings(settings: settings, measured: []))
+        XCTAssertNil(asset("unsized", bytes: nil).savings(settings: settings, measured: []))
+        XCTAssertNil(asset("unsupported", bytes: 3_000_000_000, unsupported: "Edited videos aren’t supported yet.")
+            .savings(settings: settings, measured: []))
+    }
+
+    // MARK: - Running a batch
+
+    func testBatchSavesSmallerCopiesAndSkipsOnesThatGrew() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.verifier.outputs = [600, 2_000]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.skippedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 0)
+        // Each finished video had its temporary copy removed, saved or not.
+        XCTAssertEqual(fixture.files.removed.count, 2)
+        // History records only the copy Photos actually confirmed, with its measured size.
+        XCTAssertEqual(fixture.history.records, ["a"])
+        XCTAssertEqual(fixture.history.identifiers, ["a"])
+        XCTAssertEqual(fixture.history.measurements.count, 1)
+    }
+
+    func testTheRunUsesTheQualityThatWasChosen() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.resolution = .hd720
+        fixture.settings.frameRate = .fps24
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.transcoder.receivedSettings.first?.resolution, .hd720)
+        XCTAssertEqual(fixture.transcoder.receivedSettings.first?.frameRate, .fps24)
+        XCTAssertEqual(fixture.verifier.receivedCodecs.first, .h264)
+    }
+
+    func testChangingQualityMidRunLeavesWorkInFlightAlone() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+
+        fixture.settings.resolution = .uhd4k
+        fixture.transcoder.hold = false
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.transcoder.receivedSettings.map(\.resolution), [.hd1080, .hd1080])
+    }
+
+    func testBatchContinuesAfterOneVideoFails() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000),
+                                            asset("c", bytes: 1_000)])
+        fixture.photos.retrievalFailures = ["b": .retrieval]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.savedCount, 2)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.photos.saveCount, 2)
+        XCTAssertEqual(fixture.history.records.count, 2)
+    }
+
+    func testAFailedSaveLeavesTheVideoUnmarked() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.saveError = .save
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 0)
+        XCTAssertTrue(fixture.history.records.isEmpty)
+        XCTAssertTrue(fixture.history.identifiers.isEmpty)
+    }
+
+    func testPausingKeepsUnfinishedWorkAndResumingFinishesIt() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+        fixture.batch.pause()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .paused }
+
+        XCTAssertEqual(fixture.batch.remainingCount, 2)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 0)
+        XCTAssertTrue(fixture.transcoder.cancelCalled)
+
+        fixture.transcoder.hold = false
+        fixture.batch.resume()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.photos.saveCount, 2)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 2)
+    }
+
+    func testFinishingEarlyLeavesTheRestUntouched() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+        fixture.batch.finishNow()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.pendingCount, 2)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertGreaterThan(fixture.batch.remainingCount, 0)
+    }
+
+    func testEnteringTheBackgroundPausesANetworkBoundRun() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.transcoder.hold = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+        fixture.batch.enteredBackground()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .paused }
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    func testLowStorageStopsTheFirstVideoWithoutSaving() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.files.capacityError = .insufficientStorage
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.summary.failedCount, 1)
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    // MARK: - Scanning and selection
+
+    func testCancellingAScanReturnsToWhereItStarted() async {
+        let fixture = BatchFixture(assets: [])
+        fixture.scanner.hold = true
+        fixture.batch.scan()
+        await eventually { fixture.scanner.gate != nil }
+        fixture.batch.cancelScan()
+        await eventually { fixture.batch.phase == .start }
+        XCTAssertNil(fixture.batch.scanProgress)
+    }
+
+    func testAFailedScanOffersRecoveryWithoutChangingAnything() async {
+        let fixture = BatchFixture(assets: [])
+        fixture.scanner.error = .libraryScan
+        fixture.batch.scan()
+        await eventually { fixture.batch.phase == .failed }
+        XCTAssertEqual(fixture.batch.message, PipelineError.libraryScan.localizedDescription)
+        XCTAssertNil(fixture.batch.scanResult)
+    }
+
+    func testSelectingEverythingSkipsNothingTheScanOffered() async {
+        // "a" is ten minutes of 4K, so it looks like it will shrink. "b" has no reported size.
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000), asset("b", bytes: nil)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selection, ["a", "b"])
+        fixture.batch.clearSelection()
+        XCTAssertTrue(fixture.batch.selection.isEmpty)
+        fixture.batch.selectLikelyToShrink()
+        XCTAssertEqual(fixture.batch.selection, ["a"])
+    }
+
+    func testBulkShortcutsLeaveOutVideosThisIPhoneAlreadyShrunk() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000), asset("b", bytes: 3_000_000_000)])
+        fixture.history.identifiers = ["a"]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        XCTAssertEqual(fixture.batch.selection, ["b"])
+        XCTAssertEqual(fixture.batch.selectableCount, 1)
+        fixture.batch.toggle("a")
+        XCTAssertEqual(fixture.batch.selection, ["a", "b"])
+    }
+
+    func testTheChooserEstimatesEachResolutionForTheSelection() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 3_000_000_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        let hd = fixture.batch.estimate(for: .hd1080)
+        let fourK = fixture.batch.estimate(for: .uhd4k)
+        XCTAssertNotNil(hd)
+        XCTAssertNotNil(fourK)
+        XCTAssertGreaterThan(hd?.conservativeBytes ?? 0, fourK?.conservativeBytes ?? 0)
+    }
+
+    // MARK: - On-device history
+
+    // MARK: - Restoring a stored queue
+
+    func testTheCopyCarriesTheOriginalsIdentity() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.photos.receivedIdentities.first?.originalFilename, "a.mov")
+    }
+
+    // MARK: - Deleting originals
+
+    func testAPreviewAsksForAPlayerItemForThatVideo() async throws {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        _ = try await fixture.batch.previewItem(for: "a")
+        XCTAssertEqual(fixture.photos.previewedIdentifiers, ["a"])
+    }
+
+    func testAFailedPreviewExplainsItselfInsteadOfCrashing() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.previewError = .retrieval
+        do {
+            _ = try await fixture.batch.previewItem(for: "a")
+            XCTFail("A preview that fails must throw so the sheet can say so")
+        } catch {
+            XCTAssertEqual(error as? PipelineError, .retrieval)
+        }
+    }
+
+    func testDeletingIsOffUntilItIsTurnedOn() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.deletionOutcomes.count, 0)
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        XCTAssertTrue(fixture.batch.deletableItemIDs.isEmpty)
+    }
+
+    func testAnOriginalIsDeletedOnlyAfterTheCopyIsReadBack() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.photos.deletedIdentifiers, ["a"])
+        XCTAssertEqual(fixture.batch.deletionOutcomes["a"], .deleted)
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 1)
+        XCTAssertEqual(fixture.queue.stored?.items.first?.deletion, .deleted)
+    }
+
+    func testAnOriginalStaysWhenItsCopyCannotBeReadBack() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        fixture.photos.readBackURL = nil
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        XCTAssertEqual(fixture.batch.deletionReport.skipped, 1)
+        XCTAssertTrue(fixture.batch.deletableItemIDs.isEmpty)
+    }
+
+    func testAnOriginalStaysWhenTheCopyIsNotSmaller() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        fixture.verifier.outputs = [5_000]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        XCTAssertEqual(fixture.batch.summary.skippedCount, 1)
+    }
+
+    func testAfterRunModeWaitsForTheUserToConfirm() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterRun
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        XCTAssertEqual(Set(fixture.batch.deletableItemIDs), ["a", "b"])
+
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+        XCTAssertEqual(Set(fixture.photos.deletedIdentifiers), ["a", "b"])
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 2)
+    }
+
+    func testDeletingAtTheEndIsOnePhotosTransaction() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000),
+                                            asset("c", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterRun
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+        // One transaction means one system confirmation, however many originals are in it.
+        XCTAssertEqual(fixture.photos.deleteBatches.count, 1)
+        XCTAssertEqual(Set(fixture.photos.deleteBatches[0]), ["a", "b", "c"])
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 3)
+    }
+
+    func testDeletingAsItGoesBatchesInsteadOfPromptingEachTime() async {
+        let fixture = BatchFixture(assets: (0..<7).map { asset("v\($0)", bytes: 1_000) })
+        fixture.settings.deletionMode = .afterEachCopy
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // Seven videos, batches of five: five on the way through, the remainder when the run ends.
+        XCTAssertEqual(fixture.photos.deleteBatches.map(\.count), [5, 2])
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 7)
+    }
+
+    func testAnOriginalPhotosCannotFindIsKeptAndSaidSo() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterRun
+        fixture.photos.missingFromLibrary = ["b"]
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 1)
+        XCTAssertEqual(fixture.batch.deletionReport.skipped, 1)
+    }
+
+    func testTheScreenIsHeldAwakeOnlyWhenAskedAndOnlyWhileWorking() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.keepScreenAwake = true
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        XCTAssertEqual(fixture.screenAwake.values.last, true)
+
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.screenAwake.values.last, false)
+    }
+
+    func testTheScreenIsLeftAloneWhenTheSettingIsOff() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertTrue(fixture.screenAwake.values.allSatisfy { $0 == false })
+    }
+
+    func testADeleteThatWasInFlightComesBackUncertain() {
+        let fixture = BatchFixture(assets: [])
+        var record = queuedRecord([queuedItem("a", .saved(originalBytes: 1_000, copyBytes: 600))])
+        record.items[0].readBack = .confirmed
+        record.items[0].deletion = .deleting
+        record.settings.deletion = DeletionMode.afterRun.rawValue
+        fixture.queue.stored = record
+
+        XCTAssertEqual(fixture.batch.deletionOutcomes["a"], .uncertain)
+        // It is not offered again: Photos may already have removed it.
+        XCTAssertTrue(fixture.batch.deletableItemIDs.isEmpty)
+    }
+
+    func testAFailedDeleteIsReportedAndCanBeTriedAgain() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterRun
+        fixture.photos.deleteError = .assetUnavailable
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+        XCTAssertEqual(fixture.batch.deletionReport.failed, 1)
+        XCTAssertEqual(Set(fixture.batch.deletableItemIDs), ["a"])
+
+        fixture.photos.deleteError = nil
+        fixture.batch.deleteOriginalsNow()
+        await eventually { !fixture.batch.deletionInProgress }
+        XCTAssertEqual(fixture.photos.deletedIdentifiers, ["a"])
+    }
+
+    func testACopyIsReadBackFromPhotosAfterSaving() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.readBackOutcomes["a"], .confirmed)
+        XCTAssertEqual(fixture.batch.readBackReport.confirmed, 1)
+        XCTAssertEqual(fixture.batch.readBackReport.unavailable, 0)
+        XCTAssertEqual(fixture.queue.stored?.items.first?.readBack, .confirmed)
+    }
+
+    func testACopyPhotosCannotHandBackIsReportedRatherThanFailed() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        fixture.photos.readBackURL = nil
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        // The save still counts: Photos confirmed it, the copy just could not be checked yet.
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.batch.summary.failedCount, 0)
+        XCTAssertEqual(fixture.batch.readBackOutcomes["a"], .unavailable)
+        XCTAssertEqual(fixture.batch.readBackReport.unavailable, 1)
+    }
+
+    func testReadBackOutcomesSurviveARestore() {
+        let fixture = BatchFixture(assets: [])
+        var record = queuedRecord([queuedItem("a", .saved(originalBytes: 1_000, copyBytes: 600)),
+                                   queuedItem("b", .saved(originalBytes: 2_000, copyBytes: 900))])
+        record.items[1].readBack = .unavailable
+        record.items[0].readBack = .confirmed
+        fixture.queue.stored = record
+        XCTAssertEqual(fixture.batch.readBackReport.confirmed, 1)
+        XCTAssertEqual(fixture.batch.readBackReport.unavailable, 1)
+    }
+
+    func testAStoredQueueIsPickedUpAsPaused() {
+        let fixture = BatchFixture(assets: [])
+        fixture.queue.stored = queuedRecord([queuedItem("a", .pending), queuedItem("b", .pending)])
+        XCTAssertEqual(fixture.batch.phase, .paused)
+        XCTAssertEqual(fixture.batch.remainingCount, 2)
+        XCTAssertTrue(fixture.batch.restoredRun)
+    }
+
+    func testAMidSaveItemIsFlaggedRatherThanRunAgain() async {
+        let fixture = BatchFixture(assets: [])
+        fixture.queue.stored = queuedRecord([queuedItem("a", .saving)])
+        XCTAssertEqual(fixture.batch.phase, .finished)
+        XCTAssertEqual(fixture.batch.summary.needsCheckCount, 1)
+        XCTAssertFalse(fixture.batch.hasPendingWork)
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+
+        // Only an explicit "I checked Photos" puts it back in the queue.
+        fixture.batch.requeueUncertain()
+        XCTAssertEqual(fixture.batch.phase, .paused)
+        XCTAssertTrue(fixture.batch.hasPendingWork)
+        fixture.batch.resume()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        XCTAssertEqual(fixture.history.records, ["a"])
+    }
+
+    func testFinishedWorkIsNeverRunAgainAfterARestore() async {
+        let fixture = BatchFixture(assets: [])
+        fixture.queue.stored = queuedRecord([queuedItem("a", .saved(originalBytes: 1_000, copyBytes: 600)),
+                                             queuedItem("b", .pending)])
+        XCTAssertEqual(fixture.batch.phase, .paused)
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.batch.remainingCount, 1)
+
+        fixture.batch.resume()
+        await eventually { fixture.batch.phase == .finished }
+        // Only the waiting video was fetched.
+        XCTAssertEqual(fixture.photos.retrieveCount, 1)
+    }
+
+    func testTheQueueIsWrittenWhileWorkRunsAndClearedAtTheEnd() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.queue.stored?.items.count, 1)
+        XCTAssertEqual(fixture.queue.stored?.items.first?.state,
+                       .saved(originalBytes: 1_000, copyBytes: 600))
+        fixture.batch.reset()
+        XCTAssertNil(fixture.queue.stored)
+        XCTAssertGreaterThan(fixture.queue.clearCount, 0)
+    }
+
+    func testAQueueThatCannotBeWrittenIsReported() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
+        await scan(fixture)
+        fixture.queue.saveError = PipelineError.temporaryFiles
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        XCTAssertNotNil(fixture.batch.queueWarning)
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertNotNil(fixture.batch.queueWarning)
+    }
+
+    // MARK: - On-device history
+
+    func testHistoryStoreKeepsItsOwnListAndCapsWhatItRemembers() throws {
+        let name = "videoshrink.tests.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let store = UserDefaultsShrinkHistoryStore(defaults: defaults)
+
+        XCTAssertTrue(store.completedIdentifiers().isEmpty)
+        XCTAssertTrue(store.copyMeasurements().isEmpty)
+
+        store.record(identifier: "one", measurement: CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1920))
+        store.record(identifier: "two", measurement: nil)
+        XCTAssertEqual(store.completedIdentifiers(), ["one", "two"])
+        XCTAssertEqual(store.copyMeasurements().count, 1)
+
+        store.record(identifier: "one", measurement: CopyMeasurement(bitsPerSecond: 6_000_000, longEdge: 1280))
+        XCTAssertEqual(store.completedIdentifiers(), ["one", "two"])
+        XCTAssertEqual(store.copyMeasurements().count, 2)
+        XCTAssertEqual(store.copyMeasurements().last?.longEdge, 1280)
+
+        // A measurement that cannot be trusted is never stored.
+        store.record(identifier: "three", measurement: CopyMeasurement(bitsPerSecond: 0, longEdge: 1920))
+        XCTAssertEqual(store.copyMeasurements().count, 2)
+
+        for index in 0..<120 {
+            store.record(identifier: "id-\(index)",
+                         measurement: CopyMeasurement(bitsPerSecond: 5_000_000, longEdge: 1920))
+        }
+        XCTAssertEqual(store.copyMeasurements().count, UserDefaultsShrinkHistoryStore.measurementLimit)
+        XCTAssertEqual(store.completedIdentifiers().count, 123)
+    }
+
+    // MARK: - Helpers
+
+    private func scan(_ fixture: BatchFixture) async {
+        fixture.scanner.result = LibraryScanResult(assets: fixture.assets,
+                                                   videoCount: fixture.assets.count,
+                                                   unsupportedCount: 0,
+                                                   unknownSizeCount: fixture.assets.filter { $0.bytes == nil }.count,
+                                                   sizeSource: .reportedByPhotos,
+                                                   measuredOnDeviceCount: 0)
+        fixture.batch.scan()
+        await eventually { fixture.batch.phase == .scanned }
+    }
+
+    private func eventually(_ predicate: () -> Bool, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<500 {
+            if predicate() { return }
+            try? await Task.sleep(for: .milliseconds(2))
+        }
+        XCTFail("Timed out waiting for the batch", file: file, line: line)
+    }
+}
+
+private func asset(_ id: String, bytes: Int64?, duration: Double = 120,
+                   unsupported: String? = nil) -> LibraryAsset {
+    LibraryAsset(id: id, creationDate: Date(timeIntervalSince1970: 1_700_000_000), duration: duration,
+                 pixelWidth: 3840, pixelHeight: 2160, bytes: bytes, unsupportedReason: unsupported)
+}
+
+private func queuedItem(_ id: String, _ state: BatchQueueRecord.State) -> BatchQueueRecord.Item {
+    BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
+                          pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000, state: state)
+}
+
+private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord {
+    BatchQueueRecord(settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                                         frameRate: FrameRateOption.original.rawValue),
+                     items: items)
+}
+
+@MainActor private final class BatchFixture {
+    let assets: [LibraryAsset]
+    let photos = BatchMockPhotos()
+    let scanner = BatchMockScanner()
+    let transcoder = BatchMockTranscoder()
+    let verifier = BatchMockVerifier()
+    let files = BatchMockFiles()
+    let history = BatchMockHistory()
+    let queue = BatchMockQueue()
+    let screenAwake = BatchMockScreenAwake()
+    let settings = ShrinkSettings(defaults: UserDefaults(suiteName: "videoshrink.tests.\(UUID().uuidString)")
+                                  ?? .standard)
+    lazy var batch = BatchViewModel(photos: photos, scanner: scanner, transcoder: transcoder,
+                                    verifier: verifier, temporary: files, history: history,
+                                    queueStore: queue, screenAwake: screenAwake, settings: settings)
+
+    init(assets: [LibraryAsset]) { self.assets = assets }
+}
+
+@MainActor private final class BatchMockScreenAwake: ScreenAwakeControlling {
+    var values: [Bool] = []
+    func hold(_ hold: Bool) { values.append(hold) }
+}
+
+@MainActor private final class BatchMockQueue: BatchQueueStoring {
+    var stored: BatchQueueRecord?
+    var saveCount = 0
+    var clearCount = 0
+    var saveError: Error?
+
+    func load() -> BatchQueueRecord? { stored }
+
+    func save(_ record: BatchQueueRecord) throws {
+        if let saveError { throw saveError }
+        saveCount += 1
+        stored = record
+    }
+
+    func clear() {
+        clearCount += 1
+        stored = nil
+    }
+}
+
+@MainActor private final class BatchMockPhotos: PhotoLibraryServing {
+    var retrievalFailures: [String: PipelineError] = [:]
+    var saveError: PipelineError?
+    var deleteError: PipelineError?
+    var retrieveCount = 0
+    var saveCount = 0
+    var deletedIdentifiers: [String] = []
+    var previewError: PipelineError?
+    var previewedIdentifiers: [String] = []
+    var stubItem = AVPlayerItem(url: URL(fileURLWithPath: "/mock-preview.mov"))
+    /// One entry per Photos transaction, which is one system confirmation.
+    var deleteBatches: [[String]] = []
+    /// Identifiers Photos could not find, for checking partial batches.
+    var missingFromLibrary: Set<String> = []
+    var receivedIdentities: [AssetIdentity] = []
+    /// What Photos hands back when the app asks for the copy it just saved.
+    var readBackURL: URL? = URL(fileURLWithPath: "/photos/readback.mov")
+
+    func requestAccess() async throws -> Bool { false }
+
+    func retrieve(identifier: String, progress: @escaping @MainActor (Double) -> Void) async throws -> RetrievedVideo {
+        retrieveCount += 1
+        if let failure = retrievalFailures[identifier] { throw failure }
+        try Task.checkCancellation()
+        return RetrievedVideo(asset: AVURLAsset(url: URL(fileURLWithPath: "/mock-\(identifier).mov")),
+                              identity: AssetIdentity(originalFilename: "\(identifier).mov"))
+    }
+
+    func cancelRetrieval() {}
+
+    func save(videoAt url: URL, identity: AssetIdentity) async throws -> String? {
+        if let saveError { throw saveError }
+        saveCount += 1
+        receivedIdentities.append(identity)
+        return "created-\(saveCount)"
+    }
+
+    func localFileURL(identifier: String) async -> URL? { readBackURL }
+
+    func playerItem(identifier: String) async throws -> AVPlayerItem {
+        previewedIdentifiers.append(identifier)
+        if let previewError { throw previewError }
+        return stubItem
+    }
+
+    func deleteOriginals(identifiers: [String]) async throws -> [String] {
+        if let deleteError { throw deleteError }
+        deleteBatches.append(identifiers)
+        deletedIdentifiers.append(contentsOf: identifiers)
+        return identifiers.filter { !missingFromLibrary.contains($0) }
+    }
+}
+
+@MainActor private final class BatchMockScanner: LibraryScanning {
+    var result = LibraryScanResult(assets: [], videoCount: 0, unsupportedCount: 0, unknownSizeCount: 0,
+                                   sizeSource: .reportedByPhotos, measuredOnDeviceCount: 0)
+    var error: PipelineError?
+    var hold = false
+    var gate: CheckedContinuation<Void, Error>?
+    private var cancelled = false
+
+    func scan(progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> LibraryScanResult {
+        cancelled = false
+        progress(LibraryScanProgress(phase: .listing, scanned: 0, total: result.assets.count))
+        if hold { try await withCheckedThrowingContinuation { gate = $0 } }
+        if cancelled { throw PipelineError.cancelled }
+        if let error { throw error }
+        return result
+    }
+
+    func cancel() {
+        cancelled = true
+        gate?.resume(throwing: PipelineError.cancelled)
+        gate = nil
+    }
+}
+
+@MainActor private final class BatchMockTranscoder: VideoTranscoding {
+    var error: PipelineError?
+    var hold = false
+    var cancelCalled = false
+    var gate: CheckedContinuation<Void, Never>?
+    var receivedSettings: [TranscodeSettings] = []
+    var written = URL(fileURLWithPath: "/mock-root/output.mov")
+
+    func transcode(_ source: RetrievedVideo, metadata: VideoMetadata, settings: TranscodeSettings,
+                   progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
+        receivedSettings.append(settings)
+        if let error { throw error }
+        if hold { await withCheckedContinuation { gate = $0 } }
+        try Task.checkCancellation()
+        return written
+    }
+
+    func cancel() { cancelCalled = true }
+    func release() { gate?.resume(); gate = nil }
+}
+
+// The batch model waits for this fake on the main actor; production uses an actor.
+private final class BatchMockVerifier: VideoVerifying {
+    var inspectBytes: Int64 = 1_000
+    var inspectWidth = 3840
+    var inspectHeight = 2160
+    var outputs: [Int64] = [600]
+    var receivedCodecs: [VideoCodec?] = []
+    private var verifications = 0
+
+    func inspect(_ url: URL) async throws -> VideoMetadata {
+        VideoMetadata(duration: 120, width: inspectWidth, height: inspectHeight, bytes: inspectBytes,
+                      fileType: "MOV", audioTrackCount: 1, isPlayable: true, codec: .hevc,
+                      nominalFrameRate: 30)
+    }
+
+    func verify(_ url: URL, source: VideoMetadata, expecting codec: VideoCodec?) async throws -> VideoMetadata {
+        receivedCodecs.append(codec)
+        let bytes = outputs[min(verifications, outputs.count - 1)]
+        verifications += 1
+        return VideoMetadata(duration: source.duration, width: 1920, height: 1080, bytes: bytes,
+                             fileType: "MOV", audioTrackCount: 1, isPlayable: true,
+                             codec: codec ?? .hevc, nominalFrameRate: 30)
+    }
+}
+
+@MainActor private final class BatchMockFiles: TemporaryFileManaging {
+    var capacityError: PipelineError?
+    var cleanups = 0
+    var removed: [String] = []
+    private var counter = 0
+
+    func ensureWorkspace() throws {}
+    func outputURL() throws -> URL {
+        counter += 1
+        return URL(fileURLWithPath: "/mock-root/\(counter).mov")
+    }
+    func remove(_ url: URL) throws { removed.append(url.lastPathComponent) }
+    func requireCapacity(for bytes: Int64) throws { if let capacityError { throw capacityError } }
+    func cleanup() throws { cleanups += 1 }
+}
+
+@MainActor private final class BatchMockHistory: ShrinkHistoryStoring {
+    var identifiers: Set<String> = []
+    var measurements: [CopyMeasurement] = []
+    var records: [String] = []
+
+    func completedIdentifiers() -> Set<String> { identifiers }
+    func copyMeasurements() -> [CopyMeasurement] { measurements }
+    func record(identifier: String, measurement: CopyMeasurement?) {
+        records.append(identifier)
+        identifiers.insert(identifier)
+        if let measurement, measurement.isValid { measurements.append(measurement) }
+    }
+}

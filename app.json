@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "BatchShrink",
+    "slug": "videoshrink",
+    "version": "0.1.0",
+    "scheme": "videoshrink",
+    "platforms": [
+      "ios"
+    ],
+    "orientation": "default",
+    "userInterfaceStyle": "dark",
+    "icon": "./VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png",
+    "ios": {
+      "supportsTablet": false,
+      "bundleIdentifier": "com.wilfr.videoshrink",
+      "buildNumber": "10",
+      "infoPlist": {
+        "NSPhotoLibraryUsageDescription": "BatchShrink reads your video library to estimate savings and make smaller copies on your iPhone. Originals are kept unless you enable deletion.",
+        "NSPhotoLibraryAddUsageDescription": "BatchShrink saves smaller videos as separate copies in Photos when you save a video or start a batch.",
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    },
+    "plugins": [
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "deploymentTarget": "18.0"
+          }
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "c6920080-775a-4e18-8067-f4995b9fd103"
+      }
+    },
+    "owner": "wilfrat1"
+  }
+}

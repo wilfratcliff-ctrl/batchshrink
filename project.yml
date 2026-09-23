@@ -1,0 +1,49 @@
+name: VideoShrink
+options:
+  minimumXcodeGenVersion: 2.44.0
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    SWIFT_STRICT_CONCURRENCY: targeted
+    SWIFT_DEFAULT_ACTOR_ISOLATION: nonisolated
+    IPHONEOS_DEPLOYMENT_TARGET: "18.0"
+    TARGETED_DEVICE_FAMILY: "1"
+    CODE_SIGN_STYLE: Automatic
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+targets:
+  VideoShrink:
+    type: application
+    platform: iOS
+    sources:
+      - path: VideoShrink
+        excludes: [Resources/Info.plist]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.VideoShrink
+        INFOPLIST_FILE: VideoShrink/Resources/Info.plist
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        GENERATE_INFOPLIST_FILE: NO
+  VideoShrinkTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources: [VideoShrinkTests]
+    dependencies:
+      - target: VideoShrink
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.VideoShrink.Tests
+        GENERATE_INFOPLIST_FILE: YES
+schemes:
+  VideoShrink:
+    build:
+      targets:
+        VideoShrink: all
+        VideoShrinkTests: [test]
+    test:
+      targets: [VideoShrinkTests]
+      gatherCoverageData: true
+    archive:
+      config: Release
