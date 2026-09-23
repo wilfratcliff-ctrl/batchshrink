@@ -32,6 +32,36 @@ Git state at the time this document was written: branch `main`, HEAD `dcd0695`, 
 configured remote. All four of those have since changed; `git log` and `git remote -v` are the
 current answer.
 
+## What has never been compiled, and where a failure would show
+
+Three rounds of Swift sit on `main` that **no compiler has ever seen** — every change after
+`31b6245`, because the account's Actions minutes ran out on 2026-09-23 and reset on 1 October. It is
+about 1,750 lines across fourteen files. The local gates pass and the call-site checker resolved
+6,132 call sites with no findings, but those are pattern scans: they check no types, no members, no
+generics and no availability. So the first green gate after 1 October is the first real reading of
+this work, and the point of this section is to make a failure cheap to attribute.
+
+`git log --oneline 31b6245..HEAD` lists the commits; `git log -1 --format=%h -- <file>` names the
+commit that last touched a file a compiler complains about.
+
+Ranked by how likely a compile error is to be in them, with the narrowest revert for each:
+
+| Area | Files | What to look for first |
+|------|-------|------------------------|
+| Round 19's haptics (`A9`) | `ShrinkStyle.swift`, `QualitySelector.swift`, `BatchFlow.swift`, `SingleVideoFlow.swift` | `ShrinkHaptics.feedback` is main-actor isolated and is called from closures passed to `.sensoryFeedback(trigger:_:)`. That is legal because a non-`Sendable` closure inherits its context's isolation, but it is the one place in the pile where a toolchain that disagrees would say so. The narrowest fix is to make `feedback` `nonisolated` — it returns `SensoryFeedback` values, which are plain values |
+| Round 21's list (`RR2`) | `BatchScreens.swift` | `RefusedVideoList` became `VideoReasonList` with two new defaulted properties, one a tuple. Every call site goes through the synthesised memberwise initialiser, so a label that does not match is the likeliest error; the revert is to rename it back and drop the two parameters |
+| Round 19's numbers (`E2`) | `LibraryModels.swift`, `BatchScreens.swift`, and three test files | `CopySizeModel.Basis`'s two cases each gained a `frameRate` label. Every construction, every `switch` over a basis and every pattern match had to move with it. The revert is the `Basis` change alone; the rest of the round's wording stands without it |
+| Round 19's accessibility | `QualitySelector.swift` | the unselected pill's stroke is `AnyShapeStyle(ShrinkStyle.hairline)` in one arm of a ternary. If `strokeBorder` cannot take that, the narrowest fix is a plain `ShrinkStyle.hairline` with the selected arm's opacity moved into the style |
+| Round 19's finished screen (`A2`) | `BatchScreens.swift` | a `Menu` containing a `ForEach` over an `Identifiable` enum with a `switch` inside it, fed into a `@ViewBuilder` action bar |
+| Round 20's screens | `BatchScreens.swift`, `BatchViewModel.swift` | the new static sentence functions are called with explicit labels; the paused screen draws `BatchFinishedRow` with the same five arguments the finished screen does |
+| Round 20's deletion fixes | `BatchViewModel.swift` | `beginRun`'s new clearing block, the mode guard at the top of `flushDeletions`, and `finishNow`'s call to `refreshDeletionLook` |
+| Round 21's selection rule | `BatchViewModel.swift` | `unaccountedIdentifiers` builds a `Set<String>` by `compactMap` over a dictionary whose value is Equatable |
+
+If the gate fails, the fastest route is the compiler's own file and line, then `git log -1` on that
+file. Every round since 19 also left its reasoning in `AGENT_LOOP.md`, and the two audits' findings
+are in `docs/AUDIT_*.md`, so a change that turns out to be wrong can be judged against why it was
+made rather than reverted reflexively.
+
 | Commit | What it is |
 |--------|------------|
 | `10ab65f` | baseline checkpoint before any agent work |
