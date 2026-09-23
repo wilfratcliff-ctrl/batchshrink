@@ -1128,6 +1128,11 @@ import UIKit
                        "Both stay in the library and can still be ticked by hand")
         XCTAssertEqual(batchFixture.batch.selectableAssets.map(\.id), ["other"],
                        "Neither this app's copy nor the original it came from is picked automatically")
+        // And the flow's own promise, which no case held before: the Originals sheet says "This
+        // applies to batch runs. The one-video flow never deletes." Nothing on this path has an
+        // original to remove, and the fake would record it if anything asked.
+        XCTAssertTrue(oneVideo.photos.deleteBatches.isEmpty,
+                      "the one-video flow never asks Photos to delete anything")
     }
 
     /// A save is the one step whose outcome the app cannot recover from not knowing, and this flow

@@ -34,14 +34,33 @@ import Photos
             (.failed(.verification), .failed(code: .verification)),
             (.needsCheck, .needsCheck)
         ]
-        for (live, stored) in cases {
+        // The pairs that survive a round trip, checked in both directions. This used to compare
+        // `live(stored)` with itself, which is true whatever the code does: `live` is pure, so the
+        // assertion held even if every line of the mapping were wrong, in the file that guards the
+        // queue's state machine.
+        let lossless: [BatchQueueRecord.State] = [
+            .pending,
+            .saved(originalBytes: 1_000, copyBytes: 600),
+            .skipped(reason: "Not smaller"),
+            .failed(code: .storage),
+            .failed(code: .verification),
+            .needsCheck
+        ]
+        for (live, stored) in cases where lossless.contains(stored) {
             XCTAssertEqual(BatchQueueReconciliation.persisted(live), stored)
-            XCTAssertEqual(BatchQueueReconciliation.live(stored), BatchQueueReconciliation.live(stored))
+            XCTAssertEqual(BatchQueueReconciliation.live(stored), live,
+                           "reading \(stored) back did not give the state it was written from")
         }
-        // The two coarse states both come back as something the run will not touch on its own.
-        XCTAssertEqual(BatchQueueReconciliation.live(.running), .pending)
+        // And the deliberately coarse ones: everything in flight is one stored state, so a restored
+        // queue waits on it again rather than resuming the step it had reached.
+        for (live, stored) in cases where stored == .running {
+            XCTAssertEqual(BatchQueueReconciliation.persisted(live), stored)
+            XCTAssertEqual(BatchQueueReconciliation.live(stored), .pending)
+        }
+        // The one in-flight state that is not answered that way: Photos may have taken the copy a save
+        // was handing over, so it comes back as a question instead of as work.
+        XCTAssertEqual(BatchQueueReconciliation.persisted(.saving), .saving)
         XCTAssertEqual(BatchQueueReconciliation.live(.saving), .needsCheck)
-        XCTAssertEqual(BatchQueueReconciliation.live(.needsCheck), .needsCheck)
     }
 
     func testFailureCodesStayUsefulAfterARestart() {
@@ -814,6 +833,22 @@ import Photos
     }
 
     // MARK: - A question a run leaves behind
+
+    /// The two questions the app asks, in the words it asks them in.
+    ///
+    /// Every other case about these compares a constant with itself - `midSaveFindings` holds the same
+    /// value the case asserts - so either sentence could be reversed, and "Look in Photos" could become
+    /// its opposite, with all 407 cases still green. These are the only sentences that tell a user what
+    /// to do about a copy the app cannot account for, so the instruction is asserted as content.
+    func testTheQuestionsTheAppAsksCarryTheInstructionTheyExistFor() {
+        XCTAssertTrue(MidSaveFinding.unknownQuestion.contains("Look in Photos"))
+        XCTAssertTrue(MidSaveFinding.unknownQuestion.contains("if there are two copies, that copy was made"))
+        XCTAssertTrue(MidSaveFinding.limitedAccessQuestion.contains("access covers only some of your library"))
+        XCTAssertTrue(MidSaveFinding.limitedAccessQuestion.contains("Look in Photos"))
+        // The two are different questions: one is about the copy, the other about what the app is
+        // allowed to see, and a user who is told the wrong one looks for the wrong thing.
+        XCTAssertNotEqual(MidSaveFinding.unknownQuestion, MidSaveFinding.limitedAccessQuestion)
+    }
 
     /// The file keeps a question with no run beside it, and reads it back as a question rather than
     /// as no queue - which is the whole reason the field exists.

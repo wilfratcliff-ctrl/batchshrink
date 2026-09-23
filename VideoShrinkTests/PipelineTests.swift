@@ -50,6 +50,40 @@ import Combine
         XCTAssertEqual(fixture.photos.retrieveCount, 0)
     }
 
+    /// The rule that decides whether a user may leave the one-video flow, held to the real model.
+    ///
+    /// `FlowRoutingTests` drives that rule with a mirror of `canChoose`'s stage list. The mirror is the
+    /// right input for the rule and the wrong evidence for the model: if `canChoose` ever gained
+    /// `.choosing`, all eight of those cases would stay green while a user could walk away from an open
+    /// picker. These two drive the model itself at the two stages that matter - the picker, where no
+    /// task is running and the flow is still not at rest, and a finished copy waiting to be saved,
+    /// which is the stage the rule exists for.
+    func testTheFlowRuleHoldsThePickerAndKeepsTheKeptCopyReachable() async {
+        let picking = Fixture()
+        await choose(picking)
+        XCTAssertEqual(picking.model.stage, .choosing)
+        XCTAssertFalse(picking.model.canChoose,
+                       "a picker with no task running is still not a flow at rest")
+        XCTAssertFalse(FlowRouting.oneVideoIsAtRest(canChoose: picking.model.canChoose,
+                                                    stage: picking.model.stage))
+        XCTAssertEqual(FlowRouting.decision(oneVideoCanChoose: picking.model.canChoose,
+                                            stage: picking.model.stage,
+                                            batchCanLeaveFlow: true),
+                       .stay(.oneVideoBusy))
+        picking.model.pickerCancelled()
+
+        let kept = Fixture()
+        await ready(kept)
+        XCTAssertEqual(kept.model.stage, .readyToSave)
+        XCTAssertTrue(FlowRouting.oneVideoIsAtRest(canChoose: kept.model.canChoose,
+                                                   stage: kept.model.stage),
+                      "the copy is kept on purpose, so the screen that can save it stays reachable")
+        XCTAssertEqual(FlowRouting.decision(oneVideoCanChoose: kept.model.canChoose,
+                                            stage: kept.model.stage,
+                                            batchCanLeaveFlow: true),
+                       .maySwitch)
+    }
+
     func testClosingThePickerReturnsToTheWelcomeScreen() async {
         let fixture = Fixture()
         await choose(fixture)

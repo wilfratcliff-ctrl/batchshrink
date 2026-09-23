@@ -390,6 +390,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 25 | see below | The count, the menu hint and the two empty states say what they mean - and the physical-device plan is made to cover the deletion it never tested | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 | 26 | see below | The Originals sheet checked against the code and found honest, and the first audit of the launch path: the advisories a user has to see are no longer buried, and the shell says something rather than nothing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 | 27 | see below | The launch label now reaches the screen before the restore that blocks the runloop, the uncertain-original advisory says what the app has decided, and the quick look speaks for itself when Photos cannot hand a video over to play | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 406 tests, none executed |
+| 28 | see below | Both previews now say what is happening, and the test suite that will be the only gate in October had four cases repaired that could not fail or pinned the wrong thing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 410 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -1501,11 +1502,11 @@ says nothing at all.
 | ID | Priority | Item | Status |
 |----|----------|------|--------|
 | PV1 | 2 | The 20-second bound covers PhotoKit's *request*, not the player: an item that arrives and never becomes ready left a black rectangle under a note telling the user to press play, with no sentence and no bound left running | **half done, round 27**: the sheet waits for the item's own status, under 10 seconds of its own, and a `.failed` item or a wait that gets nowhere gets a sentence. Two clocks now, and the device plan's row says so |
-| PV2 | 2 | The one-video preview has no loading and no failure state at all - one unconditional player under a footer asking the user to check the picture | **open**, with the shape PV1 got, and a note that its reachability is lower: the file is local and was verified seconds earlier by the flow's own verifier, so a failure there means the file is gone, which the save path refuses as well |
+| PV2 | 2 | The one-video preview has no loading and no failure state at all - one unconditional player under a footer asking the user to check the picture | **done, round 28**: the same three states as the quick look, through the one `PlayerReadiness.wait` both previews now call, with the sheet's own sentence because a failure here means the app's own file is gone. The footer is drawn only once there is something to check |
 | PV3 | 2 | Both of the scrub sheet's notes were drawn in the states that contradict them | done, round 27 |
 | PV4 | 2 | The one failure line is whichever pipeline sentence was written for another moment - including "add it to your allowed videos in Settings" for a video Photos no longer has | **done, round 27**, with the sheet's own words for the two errors it can see and a plain sentence for the rest - which is also where a disk-full error and a cancelled fetch land - pinned by a case |
-| PV5 | 2 | Nothing tells VoiceOver that the look finished, failed or arrived | **half done**: the failure is one element with a label; an announcement when a look *finishes* is open |
-| PV6 | 2 | Both previews play PhotoKit's `.current` version while the run exports `.original` - kept in step today only because edited videos are refused by name | **open, latent, and a decision**: the preview must be given the version the run will export, and getting it wrong shows a different video from the one the user gets |
+| PV5 | 2 | Nothing tells VoiceOver that the look finished, failed or arrived | **done, rounds 27 and 28**: the failure is one element whose words wrap under the box, and both previews post an announcement when a look becomes playable, because the spinner's disappearance moves nobody's focus |
+| PV6 | 2 | Both previews play PhotoKit's `.current` version while the run exports `.original` - kept in step today only because edited videos are refused by name | **recorded as an invariant, round 28**: `PhotoLibraryService.playerItem` now says why `.current` and the run's `.original` are the same file for every video this app will play, and what has to move if `AssetRules` ever stops refusing edited videos. Stated rather than changed, because asking for the original of an unedited asset buys nothing and can cost a full iCloud download for a look |
 | PV7 | 3 | Neither preview reacts to backgrounding, and no audio session is configured, so "check the sound" can be silenced by the Ring/Silent switch | open, and it is a decision about what the app claims from the phone rather than a patch |
 | PV8 | 3 | "Size on screen" is PhotoKit's pixel size, while every other picture size in the app is the media's with rotation applied | open |
 | PV9 | 3 | Dismissing during the load could build a player nothing would ever clear | done for the scrub sheet, round 27; the other preview's await belongs with PV2 |
@@ -1517,6 +1518,62 @@ and clear their item on dismissal, the batch's sheet cannot outlive its screen, 
 its failure line are pinned by two tests, the iCloud sentence matches `isNetworkAccessAllowed`, the copy
 the one-video sheet plays is byte-for-byte the file `save()` re-verifies, and neither sheet is offered
 where it cannot work.
+
+### Round 28 — the preview that had no states at all
+
+The preview audit's second finding was the plainest one in the file: the sheet that shows the copy
+before it is saved drew a player and nothing else. No loading state, no failure state, one footer
+asking the user to check picture, orientation and sound - over a file that, if it were gone or
+unplayable, would leave a black rectangle and a working-looking transport that does nothing. Its
+reachability is lower than the quick look's, because the file is one this app wrote seconds earlier and
+verified, but the state existed and said nothing, which is the class this project keeps finding.
+
+It now has the same three states the quick look got in round 27, through **one** implementation:
+`PlayerReadiness.wait(for:seconds:)` is the wait both previews call, because both can be handed a player
+item that never becomes a video and both must answer the same way. The sentence is the sheet's own,
+because the failure means something different here: "This copy could not be played, so there is nothing
+to check. Discard it, then export the video again." - the route that exists, since the save path
+re-verifies before Photos is asked and would refuse the same file. The footer is drawn only once there
+is something to check.
+
+The same round closed the rest of `PV5`: both previews now post an announcement when a look becomes
+playable, because the spinner disappearing moves nobody's focus, so a VoiceOver user who heard
+"Opening…" had to go looking for whatever replaced it. And `PV6` - the previews playing PhotoKit's
+current version while the run exports the original - is now an invariant recorded where the option is
+set, rather than a change: for every video this app will play the two are the same file, because
+`AssetRules` refuses an edited video by name, and asking for the original of an unedited one would buy
+nothing while risking a full iCloud download for a look.
+
+Validation, on Windows and none of it a compiler: `npm run validate:native` PASS (38 app files, 407
+XCTest cases present), the call-site checker PASS over 52 files, 1,243 declarations and 8,105 call
+sites with 0 findings, the pod mirror verified, and a case that pins the readiness wait's timeout path
+with an item for a file that is not there - which is deterministic, because a wait of no seconds
+answers before the item can change its mind. What no case can hold is the two views' layout, the
+announcement, or whether AVKit paints anything over an item that never becomes ready.
+
+**The other half of the round was aimed at the thing that will be the only evidence in October.** The
+suite is the gate once CI returns, and a case that cannot fail is worse than no case - so this round
+audited the suite itself. The audit is **[docs/AUDIT_TEST_SUITE.md](docs/AUDIT_TEST_SUITE.md)**, it read
+all 408 case bodies, and it found fourteen worth naming. Four were repaired here, because they were
+false assurance about safety rather than redundancy.
+
+| # | Priority | Item | Status |
+|---|----------|------|--------|
+| 1 | 1 | `testLiveStatesRoundTripThroughTheStoredForm` asserted `live(stored) == live(stored)`: `live` is pure, so the assertion held whatever the mapping did, in the case that guards the queue's state machine | **done, round 28.** Six pairs round-trip in both directions and five are asserted as the coarsening they are - everything in flight waits again, and a save Photos may have committed comes back as a question |
+| 2 | 1 | Every `FlowRoutingTests` case fed the rule a *copy* of `canChoose`'s stage list, so a model that gained `.choosing` would leave all eight green while a user could walk away from an open picker | **done, round 28**, in `PipelineTests`, where the real model fixture lives: two cases drive the model to `.choosing` and to `.readyToSave` and hold the rule to its own answer |
+| 3 | 1 | The two sentences that tell a user to look in Photos were never asserted as text - every reference compared a constant with itself, so "Look in Photos" could have become its opposite with all 407 cases green | done, round 28 |
+| 4 | 2 | The failure vocabulary was pinned for shape only, and one confirmation case built its expectation out of the very string it was checking | **done, round 28**: the sentences that carry an instruction are asserted as content, including `.save`'s "Inspect Photos before retrying" and the three `DeletionMode.detail` strings |
+| 5 | 2 | `testTheLiveOverloadsReportWhatTheSystemSays` cannot fail on a runner, and its comment claimed the opposite | recorded, round 28: the case now says what it cannot catch and why the two cases above it matter more |
+| 6 | 2 | The `PlayerReadiness` case added in the same round passes against a stub returning false, because a wait of no seconds ends at the deadline | recorded, round 28: the case says so, and names the simulator plan as where a real item would come from |
+| 7 | 3 | The corrupt-container case asserted only "not a cancellation" while its siblings assert the exact error | **done, round 28**: the refusal is asserted to arrive as a `PipelineError`, which is what its name claims |
+| 8 | 3 | `testARowIsIdentifiedByTheVideoItIsWorkingOn` built a value and checked what it had just passed in | **done, round 28**: it now pins the identity convention every lookup in the model depends on, and that two videos cannot collide |
+
+The audit's "thin but honest" list is worth reading before adding cases to those areas, and its sound
+list - the 26 deletion-policy cases, the eligibility sentences, the scan arithmetic, the queue's four
+durability boundaries, the eight-subset overflow hint - is what not to re-walk. The four P1 and P2
+repairs above were possible without executing anything: each is a case that *had* been asserting a
+value, so replacing the assertion with the one its name promised is a source edit whose meaning can be
+read.
 
 **An independent read of the round found four things, and three of them were in the round's own new
 code.** The first was the class the round had just fixed, one state further in: while the quick look

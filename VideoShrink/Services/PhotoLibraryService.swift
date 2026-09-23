@@ -354,6 +354,12 @@ struct DeletionResult: Equatable, Sendable {
         guard let photo = PHAsset.fetchAssets(withLocalIdentifiers: [identifier], options: nil).firstObject
         else { throw PipelineError.assetUnavailable }
         let options = PHVideoRequestOptions()
+        // The current version, and it is the same thing as the original for every video this app will
+        // play: `AssetRules` refuses a video with adjustments by name, so the grid and the run never
+        // see an edited asset, and PhotoKit's "current" for an unedited one is its original. The run's
+        // own retrieval asks for the original, and if that refusal ever comes out of `AssetRules` -
+        // because the pipeline learns to handle adjustments - this line has to move with it, or the
+        // preview and the copy would be different videos.
         options.version = .current
         options.deliveryMode = .automatic
         options.isNetworkAccessAllowed = true

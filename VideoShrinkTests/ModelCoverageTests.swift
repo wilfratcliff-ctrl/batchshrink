@@ -604,6 +604,34 @@ import Photos
         XCTAssertEqual(Set(cases.map(\.errorDescription)).count, cases.count)
     }
 
+    /// The sentences that carry an instruction, asserted as content rather than as shape.
+    ///
+    /// The case above pins that every failure has a sentence, that it names no case, and that no two
+    /// share one. None of that notices a sentence being *reversed*: the app's only place that tells a
+    /// user to look in Photos before trying again, and the three sentences the Originals sheet uses to
+    /// describe what each mode does, could all say the opposite and every case here would stay green.
+    func testTheSentencesThatCarryAnInstructionAreTheOnesTheyClaimToBe() {
+        let save = PipelineError.save.localizedDescription
+        XCTAssertTrue(save.contains("Inspect Photos before retrying"),
+                      "this is the only place the app tells a user to look before trying again")
+        XCTAssertTrue(save.contains("extra copy"),
+                      "and the reason it gives is the second copy the whole area exists to prevent")
+        let scan = PipelineError.libraryScan.localizedDescription
+        XCTAssertTrue(scan.contains("couldn’t look through your Photos library"))
+        let retrieval = PipelineError.retrieval.localizedDescription
+        XCTAssertTrue(retrieval.contains("iCloud"))
+        XCTAssertTrue(PipelineError.cancelled.localizedDescription.contains("not changed"))
+
+        // The Originals sheet's descriptions are what a user reads before turning deletion on, and one
+        // of them is quoted by the confirmation case elsewhere in this file - so a change there has to
+        // fail here rather than quietly rewriting both sides of that assertion.
+        XCTAssertEqual(DeletionMode.off.detail, "Nothing is deleted. You keep both copies.")
+        XCTAssertEqual(DeletionMode.afterEachCopy.detail,
+                       "Each original goes as soon as its copy is saved and checked.")
+        XCTAssertEqual(DeletionMode.afterRun.detail,
+                       "Originals wait until the run finishes. You confirm once at the end.")
+    }
+
     // MARK: - A space refusal says what it asked for
 
     /// The audit's finding: a storage refusal named no figure at all, so the one thing the user
@@ -802,8 +830,15 @@ import Photos
     func testARowIsIdentifiedByTheVideoItIsWorkingOn() {
         let asset = coverageAsset("video-a", bytes: 1_000)
         let item = BatchItem(asset: asset, state: .pending)
+        // The identity a row, a tick, a stored queue entry and every lookup in the model key on is the
+        // video's own identifier rather than one of the model's making: `items.first(where:)`, the
+        // selection, the outcomes dictionaries and the record's items all pair that way, so an
+        // identifier of its own would break every one of those lookups at once.
+        XCTAssertEqual(item.id, asset.id)
         XCTAssertEqual(item.id, "video-a")
         XCTAssertEqual(item.state, .pending)
+        XCTAssertNotEqual(BatchItem(asset: coverageAsset("video-b", bytes: 1_000), state: .pending).id,
+                          item.id)
     }
 
     func testARunTotalOnlyClaimsSavingsWhenItMeasuredBothSides() {

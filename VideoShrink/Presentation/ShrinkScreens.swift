@@ -1,5 +1,6 @@
 import SwiftUI
 import AVKit
+import UIKit
 
 struct ShrinkWelcome: View {
     var body: some View {
@@ -309,22 +310,81 @@ struct ShrinkHelp: View {
 struct VideoPreview: View {
     @Environment(\.dismiss) private var dismiss
     @State private var player: AVPlayer
+    /// True once the copy says it can play. Until then the sheet draws its own spinner, and the
+    /// footer that asks the user to check the picture is held back: it used to be drawn under a
+    /// player that might never put anything on screen, and under a file that might not be there.
+    @State private var playable = false
+    /// Set when the copy cannot be played at all, so the sheet says so instead of showing a black
+    /// rectangle with working-looking controls that do nothing.
+    @State private var problem: String?
     init(url: URL) { _player = State(initialValue: AVPlayer(url: url)) }
 
     var body: some View {
         NavigationStack {
-            VideoPlayer(player: player)
-                .background(.black)
-                .navigationTitle("Your compressed copy").navigationBarTitleDisplayMode(.inline)
-                .safeAreaInset(edge: .bottom) {
+            Group {
+                if playable {
+                    VideoPlayer(player: player)
+                        .background(.black)
+                        .accessibilityElement(children: .contain)
+                        .accessibilityLabel("Your compressed copy")
+                } else if problem == nil {
+                    VStack(spacing: 10) {
+                        ProgressView()
+                        Text("Opening…").font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    VStack(spacing: 12) {
+                        Image(systemName: "video.slash").font(.largeTitle).accessibilityHidden(true)
+                        Text(problem ?? Self.unplayableSentence)
+                            .font(.subheadline).multilineTextAlignment(.center)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(24)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+            .navigationTitle("Your compressed copy").navigationBarTitleDisplayMode(.inline)
+            .safeAreaInset(edge: .bottom) {
+                if playable {
                     Text("Check picture, orientation and sound before you decide.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .padding().frame(maxWidth: .infinity).background(ShrinkStyle.surface)
                 }
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
-                .onDisappear { player.pause(); player.replaceCurrentItem(with: nil) }
+            }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .onDisappear { player.pause(); player.replaceCurrentItem(with: nil) }
+            .task { await open() }
         }
     }
+
+    /// What to say when the copy does not play.
+    ///
+    /// The copy is a file this app wrote seconds ago and verified before the sheet was offered, so a
+    /// failure here means the file is gone rather than that the video was never playable - and the save
+    /// path re-verifies before Photos is asked, so exporting again is the route that exists. The
+    /// sentence is the sheet's own rather than a pipeline one, because the pipeline's are written for a
+    /// run that is about to change something.
+    static let unplayableSentence = "This copy could not be played, so there is nothing to check. Discard it, then export the video again."
+
+    private func open() async {
+        guard let item = player.currentItem else {
+            problem = Self.unplayableSentence
+            return
+        }
+        if await PlayerReadiness.wait(for: item, seconds: Self.playableWaitSeconds) {
+            playable = true
+            UIAccessibility.post(notification: .announcement, argument: "Ready to play")
+        } else if !Task.isCancelled {
+            problem = Self.unplayableSentence
+            player.replaceCurrentItem(with: nil)
+        }
+    }
+
+    /// A file this app wrote seconds ago has no reason to take long, and the read-back of the same
+    /// kind of file is given ten seconds for exactly that reason.
+    private static let playableWaitSeconds: Double = 10
 }
 
 #if DEBUG

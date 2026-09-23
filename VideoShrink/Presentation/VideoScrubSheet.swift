@@ -1,5 +1,26 @@
 import SwiftUI
 import AVKit
+import UIKit
+
+/// Waits for a player item to decide what it is.
+///
+/// Having an item is not having a video. PhotoKit and AVFoundation can both hand back a player item
+/// that never becomes ready - an original that cannot be fetched is the obvious way - and a preview
+/// that took the item's existence as success would sit on a black rectangle with nothing said on it
+/// and no bound left running. Both previews in this app make the same request the same way, so they
+/// make the same mistake the same way, and this is the one place that answers it.
+enum PlayerReadiness {
+    /// True when the item says it can play before `seconds` have passed, and the wait was not
+    /// cancelled. A `.failed` item answers false at once; an item that stays undecided is given its
+    /// time and then treated as one that cannot play.
+    static func wait(for item: AVPlayerItem, seconds: Double) async -> Bool {
+        let deadline = ContinuousClock.now.advanced(by: .seconds(seconds))
+        while item.status == .unknown, !Task.isCancelled, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(150))
+        }
+        return !Task.isCancelled && item.status == .readyToPlay
+    }
+}
 
 /// A quick look at one original before it is chosen or deleted: press play, drag the scrubber,
 /// close. The system player brings the scrubber, so this stays small on purpose.
@@ -139,23 +160,19 @@ struct VideoScrubSheet: View {
 
     /// Waits for the item the system player was handed to become something that plays.
     ///
-    /// Having an item is not having a video. PhotoKit can answer with a player item that never becomes
-    /// ready - an original it cannot fetch is the obvious way - and until round 27 the sheet took the
-    /// item's existence as success, so it would sit on a black rectangle under a footnote telling the
-    /// user to press play, with nothing said and no bound left running. The item's own status answers
-    /// it, under a bound of this sheet's own, because the fetch above has already answered by the time
-    /// this runs: the two waits are one after the other, so the look's worst case is the fetch's bound
-    /// plus this one.
+    /// The wait itself is `PlayerReadiness`'s, because both previews in this app can be handed an item
+    /// that never becomes a video and must answer the same way. The bound is this sheet's own, because
+    /// the fetch above has already answered by the time this runs: the two waits are one after the
+    /// other, so the look's worst case is the fetch's bound plus this one.
     private func waitUntilPlayable(_ item: AVPlayerItem) async {
-        let deadline = ContinuousClock.now.advanced(by: .seconds(Self.playableWaitSeconds))
-        while item.status == .unknown, !Task.isCancelled, ContinuousClock.now < deadline {
-            try? await Task.sleep(for: .milliseconds(150))
-        }
-        guard !Task.isCancelled else { return }
-        guard item.status != .readyToPlay else {
+        if await PlayerReadiness.wait(for: item, seconds: Self.playableWaitSeconds) {
             playable = true
+            // The spinner has gone and the player has taken its place, but nothing moves a VoiceOver
+            // user's focus there: without this they hear "Opening…" and then have to go looking.
+            UIAccessibility.post(notification: .announcement, argument: "Ready to play")
             return
         }
+        guard !Task.isCancelled else { return }
         problem = "Photos handed over a file that would not play. Nothing was changed."
         player = nil
     }

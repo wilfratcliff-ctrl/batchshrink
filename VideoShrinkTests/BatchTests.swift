@@ -509,6 +509,26 @@ import SwiftUI
         // The plural form is pinned by `testThePausedScreenNamesOnlyDeletionsThatHaveAlreadyHappened`.
     }
 
+    /// The wait both previews use, and the plain line the one-video preview says when a copy will not
+    /// play.
+    ///
+    /// An item for a file that is not there will never be ready. With no time to wait it is answered
+    /// as one that cannot play, which is the branch a sheet that never read the item's status would
+    /// not have had at all: it took the item's existence as success and drew a player over nothing.
+    ///
+    /// **What this cannot catch**: an implementation that always answers false satisfies it, because a
+    /// wait of no seconds ends at the deadline before the item can change its mind. The other half -
+    /// that a playable item is answered as playable - needs real media, which
+    /// `docs/SIMULATOR_PIPELINE_PLAN.md` sets out how to generate; until then this case pins the
+    /// timeout path and nothing else.
+    func testAPlayerItemThatIsNotReadyIsAnsweredAsOneThatCannotPlay() async {
+        let item = AVPlayerItem(url: URL(fileURLWithPath: "/nonexistent-batchshrink-preview.mov"))
+        let ready = await PlayerReadiness.wait(for: item, seconds: 0)
+        XCTAssertFalse(ready)
+        XCTAssertTrue(VideoPreview.unplayableSentence.contains("export the video again"),
+                      "the sentence names the route that exists rather than a copy nobody can make")
+    }
+
     /// The quick look's own sentences, which are not the pipeline's.
     ///
     /// The error it can be handed is written for a run that is about to change something: a failed

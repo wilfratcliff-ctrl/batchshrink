@@ -150,7 +150,12 @@ final class RulesTests: XCTestCase {
             _ = try await VideoVerificationService().verify(url, source: metadata(), expecting: nil)
             XCTFail("A nonempty corrupt container must never pass verification")
         } catch {
-            // Different OS releases may reject during property loading or track inspection.
+            // Different OS releases may reject during property loading or track inspection, so the
+            // exact case is not pinned - its two siblings above can pin theirs. What has to hold on
+            // every release is that the refusal arrives as a pipeline failure rather than as a
+            // cancellation or as something this app's error vocabulary cannot name.
+            XCTAssertTrue(error is PipelineError,
+                          "a corrupt container must be refused as a pipeline failure")
             XCTAssertFalse(error is CancellationError)
         }
     }
