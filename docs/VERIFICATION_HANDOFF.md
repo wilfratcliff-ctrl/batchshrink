@@ -300,28 +300,49 @@ touched.
 
 No ordinary EAS build compiles or runs `VideoShrinkTests/`. The opt-in `verify-tests` profile
 below compiles the target and then runs it on a simulator discovered on the builder, so the EAS
-route can execute the 162 cases. A macOS CI runner, for example GitHub Actions, remains an
-alternative, and it runs the same two commands a Mac would:
-
-```
-xcodegen generate
-xcodebuild test -project VideoShrink.xcodeproj -scheme VideoShrink \
-  -destination 'platform=iOS Simulator,name=iPhone 15' CODE_SIGNING_ALLOWED=NO
-```
-
-`xcodegen generate` builds `VideoShrink.xcodeproj` from `project.yml`, which is the source of
-truth; no `.xcodeproj` is checked in. `xcodebuild test` then compiles and runs the suite on the
-runner's simulator.
+route can execute the 162 cases. A GitHub Actions macOS runner is the other route, and it is the
+recommended one once a remote exists. Both routes call the same script, which is deliberately the
+single implementation: `scripts/verify-native-tests.mjs` runs `xcodegen generate` to build
+`VideoShrink.xcodeproj` from `project.yml` (the source of truth; no `.xcodeproj` is checked in),
+then runs `xcodebuild` to compile the test bundle and execute the 162 cases on a simulator.
 
 Two things to be plain about:
 
-- **This is not in place.** It requires a Git remote, and this repository currently has none
-  (`git remote -v` prints nothing). No CI runner, workflow file or remote exists. Setting one up
-  is a decision for the owner, not something this document has done.
-- **It is no longer the only route that executes the tests, but it is the more reproducible
-  one.** The `verify-tests` profile below also executes them, on whatever simulator the EAS
-  builder happens to have. A macOS runner has a fixed, observable environment, which makes a
-  failing test easier to reproduce.
+- **Neither route has run yet.** The EAS route is implemented but temporarily unusable: the
+  free-plan monthly iOS build minutes are exhausted until 1 October 2026, so no `verify-tests`
+  build can start. The GitHub route needs a Git remote, and this repository has none
+  (`git remote -v` prints nothing), so the workflow file has never been dispatched and no CI
+  runner has executed these tests. Creating that remote is a decision for the owner, not
+  something this document has done.
+- **The GitHub route is the more reproducible one.** It spends no EAS build minutes, so the
+  monthly limit does not ration it, and a macOS runner image is a fixed, observable environment,
+  which makes a failing case easier to reproduce than one on the EAS builder.
+
+### The GitHub Actions runner (costs no EAS build minutes)
+
+`.github/workflows/ios-tests.yml` adds a macOS GitHub Actions job that performs the same
+verification as the `verify-tests` EAS profile without spending any EAS build minutes. It does not
+repeat the command sequence: the job sets `VIDEOSHRINK_VERIFY_TESTS=1` and runs
+`node scripts/verify-native-tests.mjs`, the same script `eas-build-post-install` runs, so the
+compile phase, the run phase, the two banners and the exit codes are the one implementation
+described below rather than a second one to keep correct.
+
+The job triggers on every push and pull request to `main`, and can be started by hand from the
+Actions tab (`workflow_dispatch`). It uses the `macos-15` runner image, checks out the repository,
+sets up Node, runs `npm ci`, and then runs the script. It needs no Apple signing, because both
+`xcodebuild` invocations pass `CODE_SIGNING_ALLOWED=NO` and target the iOS Simulator. It adds no
+secrets, no deployment step and no dependency cache, and it publishes nothing: the job only
+proves that the 162 cases compile and pass.
+
+**What the owner must do before it can run: create a GitHub remote.** This repository has none,
+so the workflow file cannot be dispatched and the job has never executed. The owner has to create
+a repository on GitHub, add it as `origin` and push `main`. Until then this route costs nothing
+because it cannot run at all.
+
+Once the remote exists this is the recommended everyday verification: it costs no EAS build
+minutes, so the free-plan monthly iOS build limit never rations it. It does run against that
+repository's own GitHub Actions quota, which is a separate budget from EAS and is not consumed at
+all while the repository is public.
 
 ### Compiling and running the test target on the EAS builder (opt-in)
 

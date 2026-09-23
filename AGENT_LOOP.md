@@ -37,6 +37,24 @@ banners in the log: `VIDEOSHRINK TEST TARGET COMPILE` and `VIDEOSHRINK TEST RUN`
 A green run banner is the only evidence in this project that a change is actually correct;
 every gate above it is a pattern scan.
 
+### Quota — read this before planning a round
+
+**The account's free-plan iOS builds for September are exhausted.** The last successful build was
+`5b7bd87f` on commit `7ec2d40`; an attempt on commit `7c11f26` was refused before it was created
+with "This account has used its iOS builds from the Free plan this month, which will reset in 7
+days (on Thu Oct 01 2026)." Nothing was queued and nothing was charged.
+
+Consequences:
+
+- **The EAS gate cannot run again until 1 October 2026**, unless the owner upgrades the plan.
+  Until then, a round that changes Swift cannot be verified, and the honest thing to do is stop
+  making Swift changes rather than stack more unverified work on top of verified work.
+- Commit `7c11f26` is **unverified**. It is the fix for the four problems the first test run
+  found, and it has never been compiled or tested.
+- The route that costs no build minutes is the macOS CI job in `.github/workflows/ios-tests.yml`,
+  which runs the same `scripts/verify-native-tests.mjs`. It needs a GitHub remote, which this
+  repository does not have.
+
 An EAS build compiles everything under `modules/videoshrink-native/ios/`, which includes
 `VideoShrinkCore/` — the mirror of `VideoShrink/{Models,Services,Presentation}` produced by
 `npm run sync:native`. That is the Swift this loop keeps changing, so **a round is not finished
@@ -140,7 +158,8 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N17 | 1 | The 162 cases compiled but had never executed | done, round 5: the `verify-tests` profile runs them on a simulator |
 | N18 | 2 | `expo doctor` reports 1 failed check during every EAS setup. The build continues, so it is a warning, but a release should not ship past it unnoticed | open |
 | N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
-| N20 | 0 | **7 of 162 tests fail.** All in `BatchTests.swift`: `testACopyEditedInPhotosAfterTheRunKeepsItsOriginal`, `testARefreshDuringARunKeepsTheJobAndTheIdentityItStartedWith`, `testARefreshWithoutAnEarlierLibraryJustTakesTheNewListing`, `testBatchSavesSmallerCopiesAndSkipsOnesThatGrew` (four cases, seven assertions). Diagnose against intended behaviour, not against whichever side an agent wrote | open |
+| N20 | 0 | **7 of 162 tests fail.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | fixed in `7c11f26`, **unverified** |
+| N21 | 0 | Prove `7c11f26` actually turns the suite green. One of the four fixes is behaviour-changing code in the deletion path, so this is not a formality | blocked, needs build minutes |
 
 ## Round log
 

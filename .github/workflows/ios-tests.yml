@@ -1,0 +1,72 @@
+# Compile and run the 162-case XCTest target on a macOS runner.
+#
+# This exists because EAS iOS builds are a rationed monthly resource on the free plan:
+# the minutes were exhausted and do not reset until 1 October 2026, so the `verify-tests`
+# EAS profile could not be run at all. A GitHub-hosted macOS runner performs the same
+# verification and spends none of those minutes.
+#
+# It deliberately does not repeat the command sequence. scripts/verify-native-tests.mjs
+# already installs XcodeGen when it is missing, runs `xcodegen generate`, runs
+# `xcodebuild build-for-testing`, discovers an available iPhone simulator, and runs
+# `test-without-building`, printing the VIDEOSHRINK TEST TARGET COMPILE and
+# VIDEOSHRINK TEST RUN banners and exiting non-zero when a test fails. This job only
+# sets the opt-in variable and runs that script, exactly as the EAS `verify-tests`
+# profile does through `eas-build-post-install`, so there is one implementation to keep
+# correct and a CI failure means what an EAS failure means.
+#
+# No Apple signing is involved: the two xcodebuild invocations the script runs both pass
+# CODE_SIGNING_ALLOWED=NO and target the iOS Simulator, so there is no distribution
+# certificate, no provisioning profile and no registered device. Nothing here publishes
+# or releases anything; the job compiles both targets and runs the tests, and that is all.
+#
+# macos-15 is chosen because its Xcode 16.x image carries the iOS 18 SDK that project.yml
+# requires (deploymentTarget iOS 18.0), and the image's simulator set includes iOS 18
+# iPhone runtimes for the script's destination discovery to find. The script adds both
+# Homebrew prefixes (/opt/homebrew and /usr/local) to PATH, so the job does not depend on
+# which architecture the image ships. Bump the image tag when GitHub retires this one.
+
+name: iOS tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# The job only reads the repository and runs tests.
+permissions:
+  contents: read
+
+jobs:
+  verify-native-tests:
+    name: Compile and run VideoShrinkTests
+    runs-on: macos-15
+    # Generous next to the observed timings (a few minutes of compile, then about seven
+    # seconds of test execution), but bounded so a hung simulator cannot hold a runner
+    # for GitHub's six-hour default.
+    timeout-minutes: 45
+    env:
+      # Equivalent to: VIDEOSHRINK_VERIFY_TESTS=1 node scripts/verify-native-tests.mjs
+      VIDEOSHRINK_VERIFY_TESTS: "1"
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          # Node 24: the repo's packageManager pin npm@11.19.0 needs Node 20.17+ or
+          # 22.9+, and 24.x is the line this project is developed on locally
+          # (Node 24.21.0 with npm 11.19.0). A current LTS suits Expo SDK 57.
+          node-version: "24"
+
+      - name: Install dependencies
+        # npm ci also runs the repo's postinstall script, which regenerates the mirrored
+        # Swift under modules/videoshrink-native/ios/VideoShrinkCore/ before the compile
+        # phase reads it. No dependency cache is configured on purpose: a stale cache
+        # would make a failing run harder to trust.
+        run: npm ci
+
+      - name: Compile and run the 162 XCTest cases
+        run: node scripts/verify-native-tests.mjs
