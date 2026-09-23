@@ -53,7 +53,7 @@ struct QualityPillGroup<Option: Hashable & Identifiable>: View {
             .frame(maxWidth: .infinity, minHeight: 62)
             .background {
                 if isSelected {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    RoundedRectangle(cornerRadius: ShrinkStyle.radiusChip, style: .continuous)
                         .fill(ShrinkStyle.accent)
                         .matchedGeometryEffect(id: "pill", in: namespace)
                 }
@@ -62,12 +62,12 @@ struct QualityPillGroup<Option: Hashable & Identifiable>: View {
                 // The unselected outline is the only thing that says where one pill ends and the
                 // next begins, so it is the hairline rather than a flat opacity: at Increase
                 // Contrast it has to become a line like every other border in the app.
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                RoundedRectangle(cornerRadius: ShrinkStyle.radiusChip, style: .continuous)
                     .strokeBorder(isSelected ? AnyShapeStyle(ShrinkStyle.accent.opacity(0.4))
                                              : AnyShapeStyle(ShrinkStyle.hairline),
                                   lineWidth: 1)
             }
-            .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusChip, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
@@ -221,7 +221,7 @@ struct QualitySheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .presentationCornerRadius(32)
+        .presentationCornerRadius(ShrinkStyle.radiusSheet)
         .tint(ShrinkStyle.accent)
     }
 }
@@ -247,7 +247,7 @@ struct QualityRow: View {
             }
             .padding(ShrinkStyle.cardPadding)
             .shrinkCard()
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Quality. \(settings.resolution.title) \(settings.resolution.codec.displayName), \(settings.frameRate.title).")

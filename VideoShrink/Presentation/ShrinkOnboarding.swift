@@ -124,6 +124,8 @@ struct ShrinkOnboarding: View {
 /// Scales without external images, personal photos, or illustrative storage claims.
 struct ShrinkHeroArtwork: View {
     var mode = 0
+    /// The mark's side in the artwork. Named because the rounding is a fraction of it.
+    private let badgeSide: CGFloat = 60
     /// How much room the artwork has.
     ///
     /// The circles and the frames are sized from the *smaller* of the two dimensions, so a caller that
@@ -156,8 +158,12 @@ struct ShrinkHeroArtwork: View {
                       : mode == 1 ? "square.stack.3d.up.fill" : "arrow.down.right.and.arrow.up.left")
                     .font(.system(size: 23, weight: .semibold))
                     .foregroundStyle(ShrinkStyle.canvas)
-                    .frame(width: 60, height: 60)
-                    .background(ShrinkStyle.accent, in: RoundedRectangle(cornerRadius: 20))
+                    .frame(width: badgeSide, height: badgeSide)
+                    // The mark, at the hero's size, from the one radius the badge is drawn at
+                    // wherever it appears - including the app icon, which
+                    // scripts/make-app-icon.mjs draws from the same fraction.
+                    .background(ShrinkStyle.accent,
+                                in: RoundedRectangle(cornerRadius: ShrinkStyle.markRadius(for: badgeSide)))
                     .rotationEffect(.degrees(-6))
                     .offset(x: width * 0.29, y: -80)
                 Image(systemName: "sparkle")
@@ -179,7 +185,7 @@ struct ShrinkHeroArtwork: View {
                 Image(systemName: "video.fill").font(.system(size: 11))
             }
             ZStack {
-                RoundedRectangle(cornerRadius: 15)
+                RoundedRectangle(cornerRadius: ShrinkStyle.radiusChip)
                     .fill(LinearGradient(colors: [tint.opacity(0.5), tint.opacity(0.06)],
                                          startPoint: .topLeading, endPoint: .bottomTrailing))
                 Image(systemName: "play.fill").font(.system(size: 30, weight: .medium))
@@ -194,8 +200,11 @@ struct ShrinkHeroArtwork: View {
         }
         .foregroundStyle(tint)
         .padding(16).frame(width: width)
-        .background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: 24))
-        .overlay { RoundedRectangle(cornerRadius: 24).strokeBorder(tint.opacity(0.35), lineWidth: 1) }
+        .background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard))
+        .overlay {
+            RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard)
+                .strokeBorder(tint.opacity(0.35), lineWidth: 1)
+        }
         .shadow(color: .black.opacity(0.25), radius: 20, y: 14)
     }
 }

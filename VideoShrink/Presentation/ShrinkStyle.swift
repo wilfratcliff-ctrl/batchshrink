@@ -29,6 +29,32 @@ enum ShrinkStyle {
     /// phone. The picture is a mood, not the content, so it takes a smaller share of a screen that
     /// has something to say and less of one that does not.
     static let heroHeight: CGFloat = 200
+
+    /// The radii every rounded corner in the app shares.
+    ///
+    /// There were eight of them for four jobs: video tiles at 22, cards at 24, the help button at
+    /// 15, quality pills at 14, thumbnails at 12, a 16:9 preview at 18, and both sheets' own
+    /// corners at 32. A tile and a card of the same kind were drawn two points apart on different
+    /// screens - close enough to look like a mistake rather than a decision. These are named rather
+    /// than copied about for the same reason the spacing above is: the eye notices two cards that
+    /// do not line up before it notices either card on its own, and the next screen added should
+    /// land on the scale without anyone having to remember what it was.
+    ///
+    /// The order is deliberate - each is a little rounder than the one before, and each is used for
+    /// a shape a little larger than the one before.
+    static let radiusSheet: CGFloat = 32
+    static let radiusCard: CGFloat = 24
+    static let radiusTile: CGFloat = 20
+    static let radiusChip: CGFloat = 14
+    static let radiusThumb: CGFloat = 12
+
+    /// The brand mark's own rounding, as a fraction of its side.
+    ///
+    /// The mark is drawn at three sizes - 28 points in a toolbar, 60 in the hero artwork, and 216
+    /// in the app icon - and a fixed radius would make the same badge a different shape at each.
+    /// `scripts/make-app-icon.mjs` uses this same fraction, so the icon is the toolbar logo
+    /// enlarged rather than a second drawing of it.
+    static func markRadius(for side: CGFloat) -> CGFloat { side * 0.32 }
 }
 
 /// Every haptic the app plays, and the one switch in Settings that covers them.
@@ -89,9 +115,10 @@ struct ShrinkHairline: ShapeStyle {
 
 extension View {
     func shrinkCard() -> some View {
-        background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard,
+                                                              style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard, style: .continuous)
                     .strokeBorder(ShrinkStyle.hairline, lineWidth: 1)
                     .allowsHitTesting(false)
             }
@@ -256,7 +283,7 @@ private struct ShrinkPrimaryButtonStyle: ButtonStyle {
         configuration.label
             .foregroundStyle(isEnabled ? ShrinkStyle.canvas : Color.white.opacity(0.4))
             .background(isEnabled ? ShrinkStyle.accent : ShrinkStyle.elevated,
-                        in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        in: RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous))
             .opacity(configuration.isPressed ? 0.85 : 1)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
             .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
@@ -264,13 +291,16 @@ private struct ShrinkPrimaryButtonStyle: ButtonStyle {
 }
 
 struct ShrinkBrand: View {
+    private let markSide: CGFloat = 28
+
     var body: some View {
         HStack(spacing: 9) {
             Image(systemName: "arrow.down.right.and.arrow.up.left")
                 .font(.system(size: 13, weight: .bold))
                 .foregroundStyle(ShrinkStyle.canvas)
-                .frame(width: 28, height: 28)
-                .background(ShrinkStyle.accent, in: RoundedRectangle(cornerRadius: 9))
+                .frame(width: markSide, height: markSide)
+                .background(ShrinkStyle.accent,
+                            in: RoundedRectangle(cornerRadius: ShrinkStyle.markRadius(for: markSide)))
             // "BatchShrink" is one unbreakable word, and at the largest text sizes it is wider than
             // the room left beside Skip on the introduction and inside a navigation-bar item on the
             // start screen. Scaling it down costs nothing: the label below is what VoiceOver reads,
@@ -316,15 +346,28 @@ struct ShrinkProgressOrb: View {
     }
 }
 
+/// The two bars that put an original and its copy side by side.
+///
+/// Every screen that reports a saving draws this: the summary's estimate, the end of a batch run,
+/// and the one-video result. The one-video screen used to draw its own version of it, in its own
+/// colour, with no track behind the bars - so the same fact looked like two different components
+/// depending on which flow produced it, and the copy's bar in that version simply stopped in
+/// mid-air with nothing to compare it against. One component, so the two cannot drift again.
 struct ShrinkSizeComparison: View {
     let original: Int64
     let copy: Int64
-    var estimated = false
+    /// What the two rows are called.
+    ///
+    /// The summary is talking about a library - "Originals", "Estimated copies" - and the one-video
+    /// result is talking about the file it just wrote - "Original", "New copy". Neither screen's
+    /// words are right on the other, so the caller owns them and these are the summary's.
+    var originalTitle = "Originals"
+    var copyTitle = "Smaller copies"
 
     var body: some View {
         VStack(spacing: 18) {
-            sizeRow("Originals", bytes: original, color: ShrinkStyle.lilac)
-            sizeRow(estimated ? "Estimated copies" : "Smaller copies", bytes: copy, color: ShrinkStyle.accent)
+            sizeRow(originalTitle, bytes: original, color: ShrinkStyle.lilac)
+            sizeRow(copyTitle, bytes: copy, color: ShrinkStyle.accent)
         }
     }
 
@@ -345,11 +388,23 @@ struct ShrinkSizeComparison: View {
             GeometryReader { geometry in
                 Capsule().fill(ShrinkStyle.elevated)
                 Capsule().fill(color)
-                    .frame(width: geometry.size.width * min(1, Double(max(0, bytes)) / Double(max(1, original))))
+                    .frame(width: geometry.size.width * Self.fraction(bytes, of: largest))
             }
             .frame(height: 8).accessibilityHidden(true)
         }
         .accessibilityElement(children: .combine)
+    }
+
+    /// The longer of the two files, which is what both bars are scaled against.
+    ///
+    /// Scaling against the original alone draws a copy that came out *bigger* as the same length as
+    /// the video it came from, which is the one comparison this view exists to make and the one the
+    /// one-video screen can actually reach: a copy that did not get smaller is shown on it.
+    private var largest: Int64 { max(1, max(original, copy)) }
+
+    /// A bar's share of the track, clamped so a negative or absurd size cannot draw outside it.
+    static func fraction(_ bytes: Int64, of largest: Int64) -> Double {
+        min(1, max(0, Double(bytes) / Double(max(1, largest))))
     }
 }
 

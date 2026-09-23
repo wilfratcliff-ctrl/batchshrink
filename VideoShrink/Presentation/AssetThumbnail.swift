@@ -23,7 +23,7 @@ struct AssetThumbnail: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
+            RoundedRectangle(cornerRadius: ShrinkStyle.radiusThumb, style: .continuous)
                 .fill(ShrinkStyle.thumbnailBackground)
             if let image {
                 Image(uiImage: image)
@@ -52,7 +52,7 @@ struct AssetThumbnail: View {
             }
         }
         .frame(width: size.width, height: size.height)
-        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusThumb, style: .continuous))
         .task(id: requestID) {
             let loaded = await ThumbnailService.shared.image(identifier: identifier, size: size)
             guard !Task.isCancelled else { return }

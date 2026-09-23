@@ -720,6 +720,28 @@ import Photos
                        "equal.circle")
     }
 
+    /// The two bars are scaled against the larger of the two files, not against the original.
+    ///
+    /// The one-video screen is where this matters, because it is the only screen that can report a
+    /// copy which did not get smaller: scaled against the original, a 180 MB copy of a 120 MB video
+    /// drew the same length as the video it came from, so the bar chart said "equal" on the one
+    /// screen whose whole job is showing the difference. The summary and the finished screen only
+    /// ever draw a copy that is smaller, so for them the two denominators agree.
+    func testTheComparisonBarsAreScaledAgainstTheLargerFile() {
+        // A copy that came out bigger: the original is the shorter bar, and the copy fills the track.
+        XCTAssertEqual(ShrinkSizeComparison.fraction(120, of: 180), 120.0 / 180.0, accuracy: 0.0001)
+        XCTAssertEqual(ShrinkSizeComparison.fraction(180, of: 180), 1.0, accuracy: 0.0001)
+
+        // A copy that is smaller, which is every use the other two screens have for it.
+        XCTAssertEqual(ShrinkSizeComparison.fraction(60, of: 120), 0.5, accuracy: 0.0001)
+        XCTAssertEqual(ShrinkSizeComparison.fraction(120, of: 120), 1.0, accuracy: 0.0001)
+
+        // Nothing measured is 0, not a division by zero and not a full-length bar.
+        XCTAssertEqual(ShrinkSizeComparison.fraction(0, of: 0), 0, accuracy: 0.0001)
+        // A negative size cannot happen and cannot draw backwards into the track if it did.
+        XCTAssertEqual(ShrinkSizeComparison.fraction(-5, of: 100), 0, accuracy: 0.0001)
+    }
+
     /// The batch flow learned in round 15 that a restriction is not a refusal. The one-video flow
     /// did not, and sent a device held back by Screen Time or a device management profile to a
     /// Photos switch that is not on this app's Settings page.

@@ -384,7 +384,7 @@ struct BatchSummaryScreen: View {
                 // copies. A video the estimate expects to skip has no copy, and pairing its original
                 // with the copies was a before-and-after of two different sets.
                 ShrinkSizeComparison(original: estimate.copiedBytes, copy: estimate.estimatedCopyBytes,
-                                     estimated: true)
+                                     copyTitle: "Estimated copies")
                 Text("Saving copies uses more space. Storage is reclaimed after originals are deleted and cleared from Recently Deleted.")
                     .font(.footnote).foregroundStyle(.secondary)
                 DisclosureGroup("About this estimate") {
@@ -794,9 +794,9 @@ struct BatchSelectionScreen: View {
             .accessibilityHint(isSelected ? "Remove from this batch." : "Add to this batch.")
         }
         .background(ShrinkStyle.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous)
                 .strokeBorder(isSelected ? AnyShapeStyle(ShrinkStyle.accent) : AnyShapeStyle(ShrinkStyle.hairline),
                               lineWidth: isSelected ? 2 : 1)
                 .allowsHitTesting(false)
@@ -911,9 +911,9 @@ struct VideoReasonList: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(ShrinkStyle.surface)
-        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous))
         .overlay {
-            RoundedRectangle(cornerRadius: 22, style: .continuous)
+            RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous)
                 .strokeBorder(ShrinkStyle.hairline, lineWidth: 1)
                 .allowsHitTesting(false)
         }

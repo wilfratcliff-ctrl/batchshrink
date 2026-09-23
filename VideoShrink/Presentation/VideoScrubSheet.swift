@@ -109,7 +109,7 @@ struct VideoScrubSheet: View {
             }
         }
         .aspectRatio(16.0 / 9.0, contentMode: .fit)
-        .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .clipShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusTile, style: .continuous))
     }
 
     /// The failure's words, drawn under the box rather than inside it.

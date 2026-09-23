@@ -54,7 +54,7 @@ struct DeletionSheet: View {
         }
         .presentationDetents([.large])
         .presentationDragIndicator(.visible)
-        .presentationCornerRadius(32)
+        .presentationCornerRadius(ShrinkStyle.radiusSheet)
         .tint(ShrinkStyle.accent)
     }
 
@@ -130,7 +130,7 @@ struct DeletionRow: View {
                     .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
             .padding(ShrinkStyle.cardPadding).shrinkCard()
-            .contentShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard, style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Originals. \(settings.deletionMode.title).")

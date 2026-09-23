@@ -123,7 +123,6 @@ struct ShrinkResult: View {
     let source: VideoMetadata
     let output: VideoMetadata
     let saved: Bool
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private var savings: Savings { Savings(originalBytes: source.bytes, compressedBytes: output.bytes) }
 
@@ -165,35 +164,14 @@ struct ShrinkResult: View {
                         .font(.headline)
                 }
                 VStack(spacing: 18) {
-                    comparisonRow("Original", bytes: source.bytes, accent: false)
-                    comparisonRow("New copy", bytes: output.bytes, accent: true)
+                    ShrinkSizeComparison(original: source.bytes, copy: output.bytes,
+                                         originalTitle: "Original", copyTitle: "New copy")
                 }
             }
             .padding(ShrinkStyle.cardPadding).shrinkCard()
             Text("Your original is still stored. Keeping both copies uses more space; no iCloud storage has been freed.")
                 .font(.footnote).foregroundStyle(.secondary)
         }
-    }
-
-    private func comparisonRow(_ title: String, bytes: Int64, accent: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 9) {
-            let layout = dynamicTypeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
-            layout {
-                Text(title).foregroundStyle(.secondary)
-                if !dynamicTypeSize.isAccessibilitySize { Spacer(minLength: 8) }
-                Text(ShrinkFormat.bytes(bytes)).fontWeight(.semibold).monospacedDigit()
-            }
-            .font(.subheadline)
-            GeometryReader { geometry in
-                let fraction = Double(max(0, bytes)) / Double(max(1, max(source.bytes, output.bytes)))
-                Capsule().fill((accent ? ShrinkStyle.accent : Color.secondary).opacity(accent ? 1 : 0.4))
-                    .frame(width: geometry.size.width * fraction)
-            }
-            .frame(height: 8).accessibilityHidden(true)
-        }
-        .accessibilityElement(children: .combine)
     }
 }
 
@@ -226,7 +204,7 @@ struct HelpButton: View {
                 .font(.system(size: 17, weight: .medium))
                 .foregroundStyle(.primary)
                 .frame(minWidth: 44, minHeight: 44)
-                .background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: 15))
+                .background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: ShrinkStyle.radiusChip))
         }
         .accessibilityLabel("Help and settings")
     }
