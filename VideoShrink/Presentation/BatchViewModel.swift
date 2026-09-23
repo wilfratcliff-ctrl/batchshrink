@@ -1120,7 +1120,7 @@ enum BatchPhase: Equatable {
                 // The record also has to carry what the run measured for that copy. Without those
                 // numbers there is nothing to claim, so the item keeps its question, and the
                 // requeue path below refuses it either way.
-                guard let saving = attemptedSaves[id]?.savings, saving.isSmaller else { break }
+                guard let saving = attemptedSaves[id], saving.isSmaller else { break }
                 // A read-back found in a mid-save record describes an earlier attempt rather than
                 // this copy, so it is dropped instead of inherited. That is what keeps the
                 // deletion gate shut for a video whose copy was never checked, while the copy
