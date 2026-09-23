@@ -417,6 +417,7 @@ struct BatchSelectionScreen: View {
     @State private var sort: Sort = .largest
     @State private var previewing: LibraryAsset?
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var columns: [GridItem] {
         Array(repeating: GridItem(.flexible(), spacing: 12),
@@ -426,29 +427,7 @@ struct BatchSelectionScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                HStack(alignment: .top) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Make room.").font(ShrinkStyle.headline).tracking(-1)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .accessibilityAddTraits(.isHeader)
-                        Text("\(batch.eligibleAssets.count) videos to explore")
-                            .font(.subheadline).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    Spacer(minLength: 8)
-                    Menu {
-                        Picker("Order", selection: $sort) {
-                            ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
-                        }
-                    } label: {
-                        Label(sort.rawValue, systemImage: "line.3.horizontal.decrease")
-                            .font(.caption.weight(.semibold))
-                            .padding(.horizontal, 12).frame(minHeight: 44)
-                            .background(ShrinkStyle.surface, in: Capsule())
-                    }
-                    .accessibilityLabel("Sort videos, \(sort.rawValue)")
-                    .accessibilityHint("Chooses the order the videos appear in.")
-                }
+                header
                 QualityRow(settings: batch.settings, open: openQuality)
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(assets) { asset in row(asset) }
@@ -510,6 +489,62 @@ struct BatchSelectionScreen: View {
         }
     }
 
+    /// The headline and the way the grid is ordered.
+    ///
+    /// They shared one row against about 327pt of usable width. The headline can wrap and the
+    /// pill's single word cannot, so at accessibility text sizes the one thing that truncated was
+    /// the order the user has no other way to read. The decision is `sortSitsBesideHeadline` on its
+    /// own so a case can state it; whether the stacked pill then fits is what a render would say.
+    @ViewBuilder private var header: some View {
+        if Self.sortSitsBesideHeadline(at: dynamicTypeSize) {
+            HStack(alignment: .top) {
+                titleBlock
+                Spacer(minLength: 8)
+                sortMenu
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 12) {
+                titleBlock
+                sortMenu
+            }
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Make room.").font(ShrinkStyle.headline).tracking(-1)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityAddTraits(.isHeader)
+            Text("\(batch.eligibleAssets.count) videos to explore")
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var sortMenu: some View {
+        Menu {
+            Picker("Order", selection: $sort) {
+                ForEach(Sort.allCases) { Text($0.rawValue).tag($0) }
+            }
+        } label: {
+            Label(sort.rawValue, systemImage: "line.3.horizontal.decrease")
+                .font(.caption.weight(.semibold))
+                .padding(.horizontal, 12).frame(minHeight: 44)
+                .background(ShrinkStyle.surface, in: Capsule())
+        }
+        .accessibilityLabel("Sort videos, \(sort.rawValue)")
+        .accessibilityHint("Chooses the order the videos appear in.")
+    }
+
+    /// Whether the sort pill shares the headline's line, or sits under it.
+    ///
+    /// These are the sizes the rest of the app already reshapes itself for: a grid that becomes one
+    /// column, and figures that stop sharing a row with their labels. Static and internal so a case
+    /// can state the boundary rather than re-derive it.
+    static func sortSitsBesideHeadline(at size: DynamicTypeSize) -> Bool {
+        !size.isAccessibilitySize
+    }
+
     private var footer: String {
         var lines = ["Anything that doesn’t get smaller is skipped, so you never get a bigger copy."]
         let unknown = batch.eligibleAssets.filter { $0.bytes == nil }.count
@@ -538,6 +573,10 @@ struct BatchSelectionScreen: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .fixedSize(horizontal: false, vertical: true)
+            // The figures count up as videos are ticked. Reduce Motion swaps them outright. Without
+            // an animation the numeric transition above it was inert, which reads as a live
+            // modifier until someone looks for the animation it needs.
+            .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: batch.selection.count)
             ShrinkPrimaryButton(title: batch.selection.count == 1 ? "Shrink 1 video" : "Shrink \(batch.selection.count) videos",
                                 symbol: "wand.and.sparkles") {
                 confirmStart = true
@@ -676,9 +715,12 @@ struct RefusedVideoList: View {
     var body: some View {
         if !assets.isEmpty {
             VStack(alignment: .leading, spacing: 12) {
+                // Every other title on these screens is a VoiceOver header, so this card's heading
+                // and the two below it were the only ones the rotor could not reach.
                 Text("Not supported")
                     .font(.headline)
                     .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityAddTraits(.isHeader)
                 Text(spoken)
                     .font(.subheadline).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -822,6 +864,10 @@ struct BatchProcessingScreen: View {
                     .font(.system(.title, design: .default, weight: .bold))
                     .fixedSize(horizontal: false, vertical: true)
                     .contentTransition(.numericText())
+                    // The estimate is remade as videos finish, and the figure counts to its new
+                    // value when it moves. Reduce Motion swaps it outright; the numeric transition
+                    // above was inert without an animation to drive it.
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: batch.remainingEstimate)
                 Text("\(ShrinkFormat.durationRange(estimate)) · from \(batch.estimator.sampleCount) finished \(batch.estimator.sampleCount == 1 ? "video" : "videos")")
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
@@ -856,8 +902,12 @@ struct BatchProcessingScreen: View {
                 if let progress = batch.currentProgress {
                     ProgressView(value: progress)
                         .accessibilityLabel(batch.currentStage?.title ?? "Progress")
+                    // The bar speaks its own percentage and the orb speaks the stage and the
+                    // percentage again; this figure is the same number a third time. It stays on
+                    // screen and leaves the accessibility tree.
                     Text(progress, format: .percent.precision(.fractionLength(0)))
                         .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
+                        .accessibilityHidden(true)
                 } else {
                     ProgressView().frame(maxWidth: .infinity)
                 }
@@ -884,9 +934,14 @@ struct BatchProcessingScreen: View {
 
     private func savedSoFarCard(_ savings: Savings) -> some View {
         VStack(alignment: .leading, spacing: 6) {
+            // The figure is the only thing on this screen that says anything is being saved, and it
+            // was hidden inside a container that combines its children: VoiceOver read "smaller so
+            // far, 3 copies saved" and never the number. `BatchFinishedRow` gives its figure the same
+            // spoken label one screen away, so the phrase lives in one place.
             Text(ShrinkFormat.bytes(savings.bytesSaved))
                 .font(.system(.title, design: .default, weight: .bold))
-                .monospacedDigit().accessibilityHidden(true)
+                .monospacedDigit()
+                .accessibilityLabel(BatchFinishedRow.SavingDisplay(bytesSaved: savings.bytesSaved).spokenLabel)
                 .contentTransition(.numericText())
             Text("smaller so far").font(.subheadline.weight(.medium))
             Text("\(batch.summary.savedCount) \(batch.summary.savedCount == 1 ? "copy" : "copies") saved")
@@ -905,6 +960,7 @@ struct BatchProcessingScreen: View {
         if !finished.isEmpty {
             VStack(alignment: .leading, spacing: 14) {
                 Text("Just finished").font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(finished) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],
@@ -968,8 +1024,9 @@ struct BatchFinishedRow: View {
         return SavingDisplay(bytesSaved: saving.bytesSaved)
     }
 
-    /// One saving in the two forms this row needs, built from the same number so the figure and
-    /// the phrase VoiceOver reads cannot disagree.
+    /// One saving in the two forms a figure needs, built from the same number so the figure and the
+    /// phrase VoiceOver reads cannot disagree. The working screen's running total is the other
+    /// figure nothing else can explain, and it borrows this phrase rather than writing its own.
     struct SavingDisplay: Equatable {
         let bytesSaved: Int64
         var figure: String { "-\(ShrinkFormat.bytes(bytesSaved))" }
@@ -1260,27 +1317,76 @@ struct BatchFinishedScreen: View {
                 ShrinkPrimaryButton(title: "Shrink more videos", symbol: "checklist") {
                     batch.beginSelecting()
                 }
-                if !batch.deletableItemIDs.isEmpty {
-                    Button(batch.deletionInProgress ? "Deleting…" : "Delete \(batch.deletableItemIDs.count) originals") {
+                HStack(spacing: 12) {
+                    Button("Done") { batch.reset() }
+                        .font(.subheadline.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
+                        .accessibilityIdentifier("finishBatch")
+                    // Drawn only when there is something behind it: a menu trigger over an empty menu
+                    // is a control that does nothing at all.
+                    if !extras.isEmpty {
+                        overflowMenu
+                    }
+                }
+            }
+        }
+    }
+
+    /// The one control that keeps this bar two rows high however many extra actions apply.
+    ///
+    /// The bar could stack five controls - roughly 304pt, and roughly 450pt at accessibility text
+    /// sizes - against a landscape viewport of about 330pt, which left the totals card, the read-back
+    /// line and the failure list a sliver. Those figures are the audit's arithmetic: a render in both
+    /// landscape orientations would settle what the bar actually costs.
+    private var overflowMenu: some View {
+        Menu {
+            ForEach(extras) { extra in
+                switch extra {
+                case .deleteOriginals:
+                    // The destructive role is what the menu has instead of the bar's orange text.
+                    Button(batch.deletionInProgress ? "Deleting…" : "Delete \(batch.deletableItemIDs.count) originals",
+                           role: .destructive) {
                         confirmDeletion = true
                     }
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
-                    .frame(minHeight: 44)
                     .disabled(batch.deletionInProgress)
                     .accessibilityIdentifier("deleteOriginals")
-                }
-                if batch.summary.failedCount > 0 {
+                case .retryFailed:
                     Button("Try the failed ones again") { batch.retryFailed() }
-                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
-                }
-                if midSave.awaitingUser > 0 {
+                case .requeueUncertain:
                     Button("I checked Photos — run them again") { batch.requeueUncertain() }
-                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
                 }
-                Button("Done") { batch.reset() }
-                    .font(.subheadline.weight(.medium)).frame(minHeight: 44)
-                    .accessibilityIdentifier("finishBatch")
             }
+        } label: {
+            Label("More actions", systemImage: "ellipsis.circle")
+                .font(.subheadline.weight(.medium))
+                .frame(minWidth: 44, minHeight: 44)
+        }
+        .accessibilityHint("Delete originals, try the failed ones again, or run the ones you checked.")
+    }
+
+    /// What the finished screen can still do beyond the two controls on its bar, in the order they
+    /// appear. One list decides both whether the overflow control is drawn and what is inside it, so
+    /// the two cannot disagree.
+    private var extras: [Extra] {
+        Extra.available(deletableCount: batch.deletableItemIDs.count,
+                        failedCount: batch.summary.failedCount,
+                        awaitingUser: midSave.awaitingUser)
+    }
+
+    /// The screen's third, fourth and fifth controls, as values rather than as a second copy of the
+    /// conditions that decide them. Internal so a case can read the list.
+    enum Extra: Hashable, Identifiable {
+        case deleteOriginals
+        case retryFailed
+        case requeueUncertain
+
+        var id: Self { self }
+
+        static func available(deletableCount: Int, failedCount: Int, awaitingUser: Int) -> [Extra] {
+            var extras: [Extra] = []
+            if deletableCount > 0 { extras.append(.deleteOriginals) }
+            if failedCount > 0 { extras.append(.retryFailed) }
+            if awaitingUser > 0 { extras.append(.requeueUncertain) }
+            return extras
         }
     }
 
@@ -1376,6 +1482,7 @@ struct BatchFinishedScreen: View {
         if !needing.isEmpty {
             VStack(alignment: .leading, spacing: 16) {
                 Text("Needs attention").font(.subheadline.weight(.semibold))
+                    .accessibilityAddTraits(.isHeader)
                 ForEach(needing) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],

@@ -20,7 +20,10 @@ struct DeletionSheet: View {
                             }
                         }
                     }
-                    .background(ShrinkStyle.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                    // The three choices are one card, and it was the only card in the app without a
+                    // border - so the list a user has to read before turning deletion on was also
+                    // the one thing at Increase Contrast that kept a flat eight-percent fill.
+                    .shrinkCard()
                     Text("A copy has to be saved, smaller and confirmed in Photos before an original is touched. Anything else is kept, and the run tells you why.")
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

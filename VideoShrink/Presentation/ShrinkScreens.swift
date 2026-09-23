@@ -214,7 +214,7 @@ struct ShrinkHelp: View {
     @ObservedObject var settings: ShrinkSettings
     @Environment(\.dismiss) private var dismiss
     @Environment(\.openURL) private var openURL
-    @AppStorage("completionHaptics") private var completionHaptics = true
+    @AppStorage(ShrinkHaptics.storageKey) private var haptics = true
     @State private var showIntroduction = false
 
     var body: some View {
@@ -261,7 +261,9 @@ struct ShrinkHelp: View {
                     Text("Photos doesn’t report an original size for every video, so those are counted but left out of the estimate.")
                 }
                 Section("Preferences") {
-                    Toggle("Completion haptics", isOn: $completionHaptics)
+                    Toggle("Haptics", isOn: $haptics)
+                    Text("Buzzes on the quality choices, and when a compress finishes or fails.")
+                        .font(.footnote).foregroundStyle(.secondary)
                     Toggle("Keep screen awake while working", isOn: $settings.keepScreenAwake)
                     Text("Only while a batch is running. It uses more battery and the phone runs warmer.")
                         .font(.footnote).foregroundStyle(.secondary)

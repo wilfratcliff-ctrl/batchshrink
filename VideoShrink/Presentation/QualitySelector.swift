@@ -59,8 +59,12 @@ struct QualityPillGroup<Option: Hashable & Identifiable>: View {
                 }
             }
             .overlay {
+                // The unselected outline is the only thing that says where one pill ends and the
+                // next begins, so it is the hairline rather than a flat opacity: at Increase
+                // Contrast it has to become a line like every other border in the app.
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(isSelected ? ShrinkStyle.accent.opacity(0.4) : Color.primary.opacity(0.07),
+                    .strokeBorder(isSelected ? AnyShapeStyle(ShrinkStyle.accent.opacity(0.4))
+                                             : AnyShapeStyle(ShrinkStyle.hairline),
                                   lineWidth: 1)
             }
             .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
@@ -82,6 +86,7 @@ struct QualitySelector: View {
     @Namespace private var resolutionHighlight
     @Namespace private var frameRateHighlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage(ShrinkHaptics.storageKey) private var haptics = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -109,14 +114,24 @@ struct QualitySelector: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .sensoryFeedback(.selection, trigger: settings.resolution)
-        .sensoryFeedback(.selection, trigger: settings.frameRate)
+        // The pills are the controls this app taps most, and they obey the same switch as the end
+        // of a run rather than buzzing through it.
+        .sensoryFeedback(trigger: settings.resolution) { _, _ in
+            ShrinkHaptics.feedback(.qualityChoice, enabled: haptics)
+        }
+        .sensoryFeedback(trigger: settings.frameRate) { _, _ in
+            ShrinkHaptics.feedback(.qualityChoice, enabled: haptics)
+        }
     }
 
+    /// The two headings inside this card. The traits the app puts on its titles stop at the card,
+    /// so "Picture size" and "Smoothness" were the only headings a VoiceOver user could not skip
+    /// between.
     private func sectionTitle(_ text: String) -> some View {
         Text(text)
             .font(.subheadline.weight(.semibold))
             .foregroundStyle(.secondary)
+            .accessibilityAddTraits(.isHeader)
     }
 
     @ViewBuilder private var estimateBlock: some View {
@@ -144,6 +159,10 @@ struct QualitySelector: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18).shrinkCard()
+            // The figure and the sentence under it are one answer to one question: VoiceOver read
+            // "1.2 to 2.4 gigabytes" and then the explanation as two unrelated elements, where
+            // `ShrinkStat` and `ShrinkResult` already combine theirs.
+            .accessibilityElement(children: .combine)
             // The figures cross-fade as the picture size changes. Reduce Motion swaps them outright.
             .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: settings.resolution)
         } else {

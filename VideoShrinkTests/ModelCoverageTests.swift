@@ -943,6 +943,29 @@ import Photos
         XCTAssertEqual(ShrinkFormat.compactBytes(1_500_000_000), ShrinkFormat.bytes(1_500_000_000))
     }
 
+    // MARK: - What the app plays
+
+    /// The one haptics switch covers every moment the app plays, the quality pills included.
+    ///
+    /// It was named for the end of a run and only the end of a run read it, so the two controls this
+    /// app taps most - the picture size and smoothness pills - buzzed for someone who had turned it
+    /// off. The switch is now named for what it does. What a case can hold is the coverage: off is
+    /// silent at every moment, and every moment has something to play when it is on.
+    func testTheOneHapticsSwitchCoversEveryMomentTheAppPlays() {
+        XCTAssertEqual(ShrinkHaptics.Moment.allCases, [.qualityChoice, .finished, .failed],
+                       "choosing a pill is a haptic moment like the end of a run")
+        for moment in ShrinkHaptics.Moment.allCases {
+            XCTAssertNil(ShrinkHaptics.feedback(moment, enabled: false),
+                         "\(moment) must be silent when the switch is off")
+            XCTAssertNotNil(ShrinkHaptics.feedback(moment, enabled: true),
+                            "\(moment) is a moment the app plays, so it needs something to play")
+        }
+
+        // The stored key is the row's original name on purpose: following the row's new name would
+        // be a different preference, and everyone who had turned haptics off would find them on.
+        XCTAssertEqual(ShrinkHaptics.storageKey, "completionHaptics")
+    }
+
     // MARK: - Driving the one-video flow
 
     /// Takes the flow as far as the picker, which is the state a chosen video is handed over from.

@@ -124,6 +124,45 @@ What a cloud build still does not do:
 - prove any device behaviour. Actual deletion, audio sync, HDR appearance, interruption windows
   and iCloud retrieval need a real iPhone and `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
 
+### The gate is blocked again, and this time it is the account's Actions minutes
+
+On 2026-09-23, a few hours after the three-job workflow above went green on two of its three
+jobs, every job stopped starting. The evidence, in the order it was gathered:
+
+- run `35885102232` (commit `9d0e745`, a one-line test-name fix) reported **failure for all
+  three jobs about nine seconds after it was created**, with `runner_name` empty and `steps`
+  empty; there is no log to fetch, and the API returns 404 for the job log blob;
+- re-running the failed jobs (`run_attempt` 2) reproduced it exactly;
+- GitHub's status API said **"All Systems Operational"** at the same moment, so it is not a
+  platform outage;
+- a throwaway `ubuntu-latest` job was pushed, dispatched and observed: it also failed with no
+  runner, so it is **not** a macOS-only quota. The probe then deleted itself.
+
+The account is on a free plan and the repository is private, which is the expensive combination:
+private-repository runner minutes are drawn from a monthly allowance, and **macOS runners are
+billed at ten times the Linux rate**. The three-job workflow costs roughly `7 + 12 + 6` macOS
+minutes per push, which is about **250 billed minutes**, and several pushes a day exhaust a free
+allowance quickly. The workflow that made this project verifiable is, at this price, also what
+used it up.
+
+**What this means for a round, until it is resolved.**
+
+- **Nothing that needs macOS can be verified.** The local gates still run on Windows and are
+  still worth running, but they are pattern scans.
+- **Do not stack unverified Swift on top of unverified Swift without saying so.** The rule from
+  round 5 applies again, and the honest answer to "what is proven" is a commit, not a wish.
+- The last states that were actually seen: `31b6245` had job 1 and job 2 green. `780f14f` had
+  job 3 green — **the first observation of a rendered screen in this project** — and job 1 red on
+  a test-only typo, which `9d0e745` fixes without being verified. Everything after `31b6245` is
+  unverified, and the accessibility wave is unverified.
+
+**The options, for whoever reads this next.** Make the repository public, which removes the
+private-repository minute cost entirely and is by far the cheapest fix; buy minutes; or cut the
+workflow down so one push costs about one macOS job instead of three. That last one is a real
+trade — the three jobs answer three different questions, and job 2 is the only thing that
+compiles the Expo app — so it should be a decision, not a silent edit. Whichever it is, the
+arithmetic above is the thing to decide against.
+
 ## Build log
 
 | Date | Build | Commit | Profile | Result |
@@ -664,16 +703,16 @@ documents are the detail.
 | E7 | 3 | A selection that will not shrink renders as the bold figure "Zero KB" | **done, round 19.** `SavingsEstimate.predictsNoSaving` with one shared wording; `byteRange` itself is untouched |
 | E8 | 3 | A stored non-shrinking saving renders as "--1.2 GB" in a finished row | **done, round 19**, on the view side. The alternative half — clamping a foreign stored `.saved` in `BatchQueueReconciliation.live` — is still open and would be the better place if a second reader of that record appears |
 | E9 | 3 | "N selected · X of originals" pairs the full selection count with a subtotal of the sized ones only | **done, round 19.** "5 selected · 2.1 GB of 4 measured" |
-| A1 | 1 | The batch working screen's saved-so-far figure is `.accessibilityHidden(true)` inside a `.combine` container, so VoiceOver never reads the number the comment says it reads | open, round 19 |
-| A2 | 1 | The finished screen's action bar can stack five controls — about 304pt, and more at accessibility sizes — against a landscape viewport of roughly 330pt, crushing the screen it exists to show | open, round 19 |
-| A3 | 2 | The quality estimate reads as a bare number with its explanation as a separate element | open, round 19 |
-| A4 | 2 | The word mark cannot fit beside "Skip" at accessibility sizes | open, round 19 |
-| A5 | 2 | The selection header keeps the sort pill beside a `.largeTitle` headline at accessibility sizes, truncating the order the user cannot otherwise read | open, round 19 |
-| A6 | 3 | Five section headings inside cards are not VoiceOver headers, unlike every title above them | open, round 19 |
-| A7 | 3 | The working screen can announce the same percentage three times | open, round 19 |
-| A8 | 3 | Two surfaces bypass `ShrinkHairline`, so Increase Contrast misses the two things a user must distinguish | open, round 19 |
-| A9 | 3 | The app's haptics switch does not cover the quality pills | open, round 19 |
-| A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert | open, round 19 |
+| A1 | 1 | The batch working screen's saved-so-far figure is `.accessibilityHidden(true)` inside a `.combine` container, so VoiceOver never reads the number the comment says it reads | **done, round 19**, unverified - see the gate note above. It now carries `BatchFinishedRow.SavingDisplay.spokenLabel`, so the phrase exists once rather than twice |
+| A2 | 1 | The finished screen's action bar can stack five controls — about 304pt, and more at accessibility sizes — against a landscape viewport of roughly 330pt, crushing the screen it exists to show | **done, round 19**, unverified. The bar is two rows at most: the primary, then Done and one "More actions" menu holding delete, retry-failed and the checked-again action. `BatchFinishedScreen.Extra.available` is the one list deciding both the trigger's presence and its contents. The height figures are the audit's arithmetic; a render in both landscape orientations would settle them |
+| A3 | 2 | The quality estimate reads as a bare number with its explanation as a separate element | done, round 19, unverified |
+| A4 | 2 | The word mark cannot fit beside "Skip" at accessibility sizes | done, round 19, unverified: `.lineLimit(1).minimumScaleFactor(0.6)`. Whether 0.6 is enough at AX5 is a source reading |
+| A5 | 2 | The selection header keeps the sort pill beside a `.largeTitle` headline at accessibility sizes, truncating the order the user cannot otherwise read | done, round 19, unverified: the pill stacks under the headline at accessibility sizes, with the boundary in `sortSitsBesideHeadline(at:)` so a case can state it |
+| A6 | 3 | Five section headings inside cards are not VoiceOver headers, unlike every title above them | done, round 19, unverified |
+| A7 | 3 | The working screen can announce the same percentage three times | done, round 19, unverified: the duplicate figure is hidden from VoiceOver rather than deleted, because it is a real visual cue |
+| A8 | 3 | Two surfaces bypass `ShrinkHairline`, so Increase Contrast misses the two things a user must distinguish | done, round 19, unverified |
+| A9 | 3 | The app's haptics switch does not cover the quality pills | done, round 19, unverified. The key deliberately stays `completionHaptics`: a renamed key is a different preference, and everyone who had turned haptics off would have found them on |
+| A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert | done, round 19, unverified: both got Reduce Motion-gated animations rather than deletion |
 
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.

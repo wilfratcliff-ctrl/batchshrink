@@ -12,6 +12,47 @@ enum ShrinkStyle {
     static let headline = Font.system(.largeTitle, design: .default, weight: .bold)
 }
 
+/// Every haptic the app plays, and the one switch in Settings that covers them.
+///
+/// The switch was named for the end of a run and only the end of a run read it, so someone who had
+/// turned it off still felt a buzz on every quality pill - the controls this app taps most. The row
+/// is now named for what it covers and every trigger asks here, so the name in Settings and the
+/// moments that obey it cannot drift apart. Reduce Motion is deliberately not involved: haptics
+/// are not motion, and the system's own Haptics switch remains the way to silence the whole phone.
+enum ShrinkHaptics {
+    /// The stored preference.
+    ///
+    /// The key keeps the row's original name rather than following the row's new one, because a
+    /// renamed key is a different preference: everyone who had turned haptics off would have found
+    /// them on again.
+    static let storageKey = "completionHaptics"
+
+    /// One of the app's haptic moments.
+    enum Moment: CaseIterable {
+        /// Choosing a picture size or a smoothness option.
+        case qualityChoice
+        /// A batch run or a one-video compress finishing.
+        case finished
+        /// A batch run or a one-video compress failing.
+        case failed
+    }
+
+    /// The feedback to play at `moment`, or none at all when the switch is off.
+    ///
+    /// Main-actor isolated because it builds SwiftUI's own feedback values, and every caller is a
+    /// view body or a `@MainActor` case. The key above deliberately is not: it is read in an
+    /// `@AppStorage` initialiser, where a default value has to stay usable outside the actor.
+    @MainActor
+    static func feedback(_ moment: Moment, enabled: Bool) -> SensoryFeedback? {
+        guard enabled else { return nil }
+        switch moment {
+        case .qualityChoice: return .selection
+        case .finished: return .success
+        case .failed: return .error
+        }
+    }
+}
+
 /// The one-pixel line around a card and along the action bar.
 ///
 /// A flat `Color.white.opacity(0.08)` is a whisper on this dark canvas, and for anyone who has
@@ -198,7 +239,16 @@ struct ShrinkBrand: View {
                 .foregroundStyle(ShrinkStyle.canvas)
                 .frame(width: 28, height: 28)
                 .background(ShrinkStyle.accent, in: RoundedRectangle(cornerRadius: 9))
-            Text("BatchShrink").font(.headline).tracking(-0.5)
+            // "BatchShrink" is one unbreakable word, and at the largest text sizes it is wider than
+            // the room left beside Skip on the introduction and inside a navigation-bar item on the
+            // start screen. Scaling it down costs nothing: the label below is what VoiceOver reads,
+            // so the name is never the thing that is lost. Whether 0.6 is enough at the very largest
+            // size is a reading of the source; a render at AX5 would settle it.
+            Text("BatchShrink")
+                .font(.headline)
+                .tracking(-0.5)
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("BatchShrink")

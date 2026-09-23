@@ -11,7 +11,7 @@ struct SingleVideoFlow: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("completionHaptics") private var completionHaptics = true
+    @AppStorage(ShrinkHaptics.storageKey) private var haptics = true
     @State private var sheet: DetailSheet?
     @State private var confirmation: Confirmation?
     @State private var showQuality = false
@@ -110,10 +110,11 @@ struct SingleVideoFlow: View {
             if value == .background { model.enteredBackground() }
         }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: model.stage)
+        // The end of a compress obeys the same switch as the quality pills, through the one place
+        // that decides what each haptic moment plays.
         .sensoryFeedback(trigger: model.stage) { _, next in
-            guard completionHaptics else { return nil }
-            if next == .saved { return .success }
-            if next == .failed { return .error }
+            if next == .saved { return ShrinkHaptics.feedback(.finished, enabled: haptics) }
+            if next == .failed { return ShrinkHaptics.feedback(.failed, enabled: haptics) }
             return nil
         }
     }

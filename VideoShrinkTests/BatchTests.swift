@@ -1,6 +1,7 @@
 import XCTest
 import AVFoundation
 import Photos
+import SwiftUI
 @testable import VideoShrink
 
 @MainActor final class BatchTests: XCTestCase {
@@ -1733,6 +1734,47 @@ import Photos
         XCTAssertGreaterThan(sample.processingSeconds, 0.05,
                              "the retrieval is part of what waiting for this video is made of")
         XCTAssertEqual(sample.contentSeconds, 120)
+    }
+
+    // MARK: - What the screens offer, and where it sits
+
+    /// The finished screen's bar keeps its primary and one secondary, and moves the rest into one
+    /// menu; this list decides both what is behind the control and whether it is drawn at all.
+    ///
+    /// The bar could stack five controls - roughly 304pt, and roughly 450pt at accessibility text
+    /// sizes - against a landscape viewport of about 330pt, which left the totals card, the read-back
+    /// line and the failure list the sliver at the top. A trigger over an empty menu would be a
+    /// control that does nothing, so the presence and the contents have to be the same decision.
+    func testTheFinishedBarOffersExactlyTheExtraActionsThatApply() {
+        XCTAssertTrue(BatchFinishedScreen.Extra.available(deletableCount: 0, failedCount: 0,
+                                                          awaitingUser: 0).isEmpty,
+                      "an ordinary run leaves nothing behind the overflow control")
+        XCTAssertEqual(BatchFinishedScreen.Extra.available(deletableCount: 4, failedCount: 0, awaitingUser: 0),
+                       [.deleteOriginals])
+        XCTAssertEqual(BatchFinishedScreen.Extra.available(deletableCount: 0, failedCount: 2, awaitingUser: 0),
+                       [.retryFailed])
+        XCTAssertEqual(BatchFinishedScreen.Extra.available(deletableCount: 0, failedCount: 0, awaitingUser: 1),
+                       [.requeueUncertain])
+        // The order is the order they are read in, and all three can apply to one run.
+        XCTAssertEqual(BatchFinishedScreen.Extra.available(deletableCount: 4, failedCount: 2, awaitingUser: 1),
+                       [.deleteOriginals, .retryFailed, .requeueUncertain])
+    }
+
+    /// The sort pill moves under the headline at accessibility text sizes, and not a size earlier.
+    ///
+    /// "Make room." at `.largeTitle` and the pill shared one row with an 8pt spacer against about
+    /// 327pt of usable width. The headline can wrap and the pill's single word cannot, so the order
+    /// the grid is in was the thing that truncated - and the grid itself cannot say it.
+    func testTheSortPillMovesUnderTheHeadlineAtAccessibilitySizes() {
+        for size in [DynamicTypeSize.large, .xLarge, .xxLarge, .xxxLarge] {
+            XCTAssertTrue(BatchSelectionScreen.sortSitsBesideHeadline(at: size),
+                          "\(size) still has room for the headline and the pill on one line")
+        }
+        for size in [DynamicTypeSize.accessibility1, .accessibility2, .accessibility3,
+                     .accessibility4, .accessibility5] {
+            XCTAssertFalse(BatchSelectionScreen.sortSitsBesideHeadline(at: size),
+                           "\(size) stacks the pill under the headline")
+        }
     }
 
     // MARK: - Helpers

@@ -8,7 +8,7 @@ struct BatchFlow: View {
 
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("completionHaptics") private var completionHaptics = true
+    @AppStorage(ShrinkHaptics.storageKey) private var haptics = true
     @State private var showHelp = false
     @State private var showQuality = false
     @State private var showDeletion = false
@@ -38,10 +38,11 @@ struct BatchFlow: View {
                 if value == .background { batch.enteredBackground() }
             }
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: batch.phase)
+            // The end of a run obeys the same switch as the quality pills, through the one place
+            // that decides what each haptic moment plays.
             .sensoryFeedback(trigger: batch.phase) { _, next in
-                guard completionHaptics else { return nil }
-                if next == .finished { return .success }
-                if next == .failed { return .error }
+                if next == .finished { return ShrinkHaptics.feedback(.finished, enabled: haptics) }
+                if next == .failed { return ShrinkHaptics.feedback(.failed, enabled: haptics) }
                 return nil
             }
             .onChange(of: batch.phase) { _, value in
