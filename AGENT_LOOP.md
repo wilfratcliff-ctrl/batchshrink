@@ -387,7 +387,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
 | 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
 | 24 | see below | The one-video flow journals the copy it could never account for, so the batch flow cannot be made to copy the *original* again on its own - the copy itself stays unnameable | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 402 tests, none executed |
-| 25 | see below | The count, the menu hint and the two empty states say what they mean, with one helper instead of seven ternaries | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
+| 25 | see below | The count, the menu hint and the two empty states say what they mean - and the physical-device plan is made to cover the deletion it never tested | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 405 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -841,6 +841,29 @@ and eight new things:
 | AX6 | 3, latent | "To look at in Photos" heads every `.needsCheck` item, including one whose finding the app has already answered, which the notice above it can describe as "Nothing is left to check". Latent: both halves need the state `Q1` records as unreachable from any shipped build | open with `Q1`, and it is the heading half of `Q1`'s own proposed fix |
 | AX7 | 3 | An empty library announces "Nothing to shrink yet." twice, once as the header and once as the notice title, with "0 videos in your Photos library." between them | open, cosmetic |
 | AX8 | 3 | The working screen's time estimate is a bare figure with its explanation as a separate element (the fix `A3` made in the quality sheet is five lines away), and a stage is announced three times over - the orb's label, the card's text and the bar's label, where `A7` hid only the percentage | open |
+
+### Round 25's second half — the device plan, read against the code it will be used on
+
+`docs/PHYSICAL_DEVICE_TEST_PLAN.md` is the only instrument for everything the source cannot decide, and
+nobody had re-read it against the code since round 20 while rounds 21 to 24 changed the deletion path,
+the question machinery and the one-video flow. The audit is
+**[docs/AUDIT_DEVICE_PLAN.md](docs/AUDIT_DEVICE_PLAN.md)**; the plan itself was then rewritten to its
+change set, which is one file with no Swift in it and therefore the only part of this round that a
+person can read and check.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| D1 | 1 | **The plan never exercised the app's one irreversible action.** Every deletion row was a case where nothing is deleted, so Photos' own confirmation was never declined, never accepted, and the "a deletion did not happen" endings were never seen - and the code has exactly one deletion transaction, whose catch maps any error to one sentence | **done, round 25.** Two new cases: decline Photos' confirmation, and accept it. The first records what the app said and whether it claimed a deletion that did not happen, and states plainly that a phone cannot separate a decline from an error - which is `DEL5` |
+| D2 | 1 | Case 5 asked the tester to compare brightness and highlights in an **HDR copy** of a video both flows refuse by name, and to judge a ProRes original the app also refuses | **done, round 25**: the case is now a refusal case, and a copy offered for either clip is the failure it exists to catch |
+| D3 | 1 | The retrieval-cancelled row described the loop before round 16: "nothing caps how many times it may come back there" and "the number a cap should be set from", while `cancelledRetryLimit` landed in the same commit as the row | **done, round 25**: the row now states the cap (back on the waiting list twice, failed on the third) and asks for the count, the timings and the row's own sentence after it gives up |
+| D4 | 1 | Nothing asked a person to open Photos and count the copies after a save was killed - the one observation the whole mid-save question rests on - and the one-video flow had no row at all | **done, round 25.** The process-termination row became two cases, split by flow: the batch case asks for the restored row, the `Left out of Select all` heading and the count in Photos; the one-video case asks whether the journal survived the kill, and adds the `Made by BatchShrink` versus `Previously shrunk` captions that tell whether Photos named the copy |
+| D5 | 2 | The iCloud-versus-local wording question was not asked, though the code decides it from PhotoKit's progress callback, so a local original can be told it is being downloaded | done, round 25: a `Local original, network off` row naming both pairs of sentences and which belongs to which |
+| D6 | 2 | The "Save transaction" row named a Save control the batch flow does not have | done, round 25: split by flow |
+| D7 | 2 | No reset existed between cases, the kill-a-save case sat in the middle of the matrix, `Original safety` was one case near the end rather than a before-and-after on each case, and one row could remove originals while the preamble promised none would | done, round 25: a reset case, the irreversible cases last, and `Original safety` clauses on every case that saves or deletes |
+| D8 | 2 | One row asked for sandbox facts a phone cannot give, and another timed a single read where the step can be three bounded reads (about 31 s) | done, round 25: both rewritten to what a person can record |
+| D9 | 3 | The larger-copy row describes the one-video flow only, and does not ask whether an ordinary original ever produces a copy bigger in bytes - the device question `docs/AUDIT_SINGLE_VIDEO.md` names | **open**: the row wants original bytes, copy bytes and which of the two endings appeared, for each file, in both flows |
+| D10 | 3 | The "Failed queue write" step could not be performed on a phone (done: tied to the storage cases), and the *reachable* sibling - a record the app cannot read, with its notice - still has no row | **half done, round 25**; the notice row is open |
+| D11 | 3 | The build attribution names a build that has never existed: `app.json` is build 11 and `docs/RELEASE_10.md` records that the next upload should use 11 or later, so nobody has run build 11, and whoever runs this plan will install the first build carrying rounds 1 to 24 | **open**, and it is a commitment rather than a fact: it should read as `RELEASE_10.md` does |
 
 ## Round 19 — the numbers tell the truth, and the app stops asking too early
 
@@ -1307,3 +1330,19 @@ Validation, on Windows and none of it a compiler: `npm run validate:native` PASS
 XCTest cases present), the call-site checker PASS over 52 files, 1,233 declarations and 8,014 call
 sites with 0 findings, `npm run typecheck` clean, the pod mirror verified, and `prove:guardrails` 70
 of 70 caught across four gates. **None of it has been compiled.**
+
+**The same round re-read the device plan against the code it will be used on**, which is the only
+instrument for everything the source cannot decide and had not been checked against the tree since
+round 20 - while rounds 21 to 24 changed the deletion path, the question machinery and the one-video
+flow. Its worst finding was not a stale sentence: the plan never exercised the app's one irreversible
+action at all. Every deletion row was a case where nothing is deleted, so Photos' own confirmation was
+never declined, never accepted, and the app's "a deletion did not happen" endings were never seen -
+in a plan whose whole purpose is to be the evidence for the risky paths. Two cases now do that, one
+declining and one accepting, and the first says plainly that a phone cannot tell a declined alert
+from an error, which is `DEL5`. Three more P1s went with it: case 5 asked the tester to compare
+brightness in an HDR copy both flows refuse to make; the retrieval row said "nothing caps how many
+times it may come back" about a loop a cap had landed under; and nothing anywhere asked a person to
+open Photos and count the copies after a save was killed - the one observation the whole mid-save
+question rests on. The process-termination row became two cases, one per flow. The audit's D9 to D11
+are recorded above rather than taken in passing; the plan's own file carries the changes, and it is
+the one part of this round a person can check by reading.
