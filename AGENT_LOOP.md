@@ -776,6 +776,21 @@ the confidence and the list of what was checked and found correct. The table is 
 | RR5 | 3 | A queue that cannot be read is indistinguishable from no queue, and says nothing | open |
 | RR6 | 3 | A video whose outcome is unknown counts as finished, on the screen and in `canLeaveFlow` | half done, round 20: the paused counts are honest now. Whether an unanswered flag should hold the flow is open, with RR2 |
 
+### Round 21's audit — the one-video flow
+
+The flow that had never been traced, written up in **[docs/AUDIT_SINGLE_VIDEO.md](docs/AUDIT_SINGLE_VIDEO.md)**.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| SV1 | 2 | A save interrupted while Photos holds it leaves a real copy that nothing remembers, and the batch's Select all can then copy the copy | **open.** The narrowest fix is a pending-save marker in the shared history store, written before the save and cleared when it returns; the batch already has the consumer for it |
+| SV2 | 2 | The recovery screen's "Shrink one video instead" was live and did nothing | done, round 21, unverified. The deeper question - whether a *failed* batch should hold the user at all - is open and is a `canLeaveFlow` change |
+| SV3 | 3 | The ready-to-save screen said preview "before saving" when its own text said saving was off | done, round 21, unverified |
+| SV4 | 3 | A copy that came out bigger was drawn as "No size reduction" under an equals sign over two different figures | done, round 21, unverified |
+| SV5 | 3 | Cancelling the picker lands on a recovery screen about a video that was never chosen | open: needs `pickerCancelled()` to return to `.idle`, and the stage transition with it |
+| SV6 | 3 | "HEVC export failed" for a 720p H.264 export, and "larger" for a pixel mismatch | done, round 21, unverified |
+| SV7 | 3 | The welcome promised "your smaller copy" before anything had been measured | done, round 21, unverified |
+| SV8 | 3 | The shared quality sheet promises estimates the one-video flow cannot show | open, cosmetic |
+
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.
 
@@ -966,3 +981,37 @@ the two fixes the audit offered.
 
 **Unverified, again, and for the same reason.** The local gates pass and the proof harness is 67 of
 67, but nothing has compiled this since `31b6245`.
+
+### Round 21 continued — a review of the round's own work, and the last untraced flow
+
+**The review paid for itself again, and the two worst findings were mine.** An independent read of
+round 21's diff found that the round's central fix was half-done in two places. First: generalising
+the list component changed its heading and its summary and left its rows alone, so every row of the
+new card on the selection screen read "This video is not supported yet." - of a video the app can
+process perfectly well and is inviting the user to tick by hand - and told VoiceOver it could not be
+chosen. Changing a card's headline is not changing its rows. Second: "Done" cleared the findings
+through `reset()`, so the exclusion held for "Shrink more videos" and not for the button beside it,
+and `reset()` leaves the library already scanned, which put the flagged video one tap of Select all
+away in the same session. Both are fixed, and the mirror of the second is fixed too: nothing cleared
+a finding when the *question was answered*, so `requeueUncertain` now does.
+
+The review also found a test of mine that could not pass - it asserted the deletion message contains
+no "3" while that message says "30 days" - and a doc comment that had become attached to the wrong
+function. Both corrected.
+
+**And the one-video flow was traced for the first time.** Eight findings, in
+`docs/AUDIT_SINGLE_VIDEO.md`. Six were the small truthfulness class the last four rounds have been
+working through and are fixed; two are open and both matter more than their priority suggests. SV1:
+a save interrupted while Photos holds it leaves a real copy that nothing remembers, and the batch's
+Select all can then copy the copy - the same outcome round 21 exists to prevent, reached through the
+other flow. SV5: backing out of the picker is answered with a recovery screen about a video that was
+never chosen.
+
+**Its most useful contribution is a reassurance.** The one-video flow cannot delete anything, and
+every screen's claim about that is true, checked against the code rather than the comments. It is
+also the flow whose code has been compiled - most of the findings above are in files CI has built -
+which is why the audit could rank its findings by compilation state at all.
+
+**Where the round leaves the project.** Six more Swift fixes than round 20, and the same caveat: the
+local gates pass, the proof harness is 67 of 67, and nothing since `31b6245` has been compiled. The
+verification handoff now carries a triage table for the moment that changes.
