@@ -211,7 +211,7 @@ struct QualitySheet: View {
                     }
                 }
                 .frame(maxWidth: 540)
-                .padding(24)
+                .padding(ShrinkStyle.gutter)
                 .frame(maxWidth: .infinity)
             }
             .background(ShrinkStyle.canvas)

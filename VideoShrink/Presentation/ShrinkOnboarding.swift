@@ -62,7 +62,7 @@ struct ShrinkOnboarding: View {
                         .multilineTextAlignment(.center)
                 }
                 .frame(maxWidth: 480)
-                .padding(.horizontal, 28).padding(.vertical, 24)
+                .padding(.horizontal, ShrinkStyle.gutter).padding(.vertical, ShrinkStyle.gutter)
                 .frame(maxWidth: .infinity)
                 .id(page)
                 .transition(.opacity)

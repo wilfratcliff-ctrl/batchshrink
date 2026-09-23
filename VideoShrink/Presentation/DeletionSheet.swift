@@ -31,7 +31,7 @@ struct DeletionSheet: View {
                         .font(.footnote).foregroundStyle(.secondary)
                 }
                 .frame(maxWidth: 540)
-                .padding(24)
+                .padding(ShrinkStyle.gutter)
                 .frame(maxWidth: .infinity)
             }
             .background(ShrinkStyle.canvas)

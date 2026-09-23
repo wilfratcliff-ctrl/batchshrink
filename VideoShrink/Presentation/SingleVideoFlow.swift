@@ -57,9 +57,7 @@ struct SingleVideoFlow: View {
                 }
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter)
-            .padding(.top, 20)
-            .padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)

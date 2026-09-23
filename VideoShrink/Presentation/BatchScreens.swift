@@ -56,7 +56,7 @@ struct BatchStartScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -135,7 +135,7 @@ struct BatchScanningScreen: View {
                 Text("Keep this open while it reads.").font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -276,7 +276,7 @@ struct BatchSummaryScreen: View {
                 QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -527,7 +527,7 @@ struct BatchSelectionScreen: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             .frame(maxWidth: 700)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 24)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -992,7 +992,7 @@ struct BatchProcessingScreen: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
     }
@@ -1510,7 +1510,7 @@ struct BatchPausedScreen: View {
                                  context: "Taken out of this run before it started.")
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -1574,7 +1574,7 @@ struct BatchFinishedScreen: View {
                 }
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)
@@ -1903,7 +1903,7 @@ struct BatchRecoveryScreen: View {
                 QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
-            .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+            .shrinkPageInsets()
             .frame(maxWidth: .infinity)
         }
         .background(ShrinkStyle.canvas)

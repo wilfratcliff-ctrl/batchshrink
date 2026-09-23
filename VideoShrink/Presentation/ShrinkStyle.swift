@@ -131,6 +131,18 @@ extension View {
                     .allowsHitTesting(false)
             }
     }
+
+    /// The inset every page's content sits inside.
+    ///
+    /// Nine screens wrote the same three paddings out by hand and two more wrote a shape of their
+    /// own, which is exactly how the two flows came to be four points apart on the gap between
+    /// blocks for a whole round without anyone choosing it. One modifier, so a page cannot be inset
+    /// like no other page. It goes between the content's own max width and the frame that fills the
+    /// screen - see any screen's body - because that is the order these three paddings have always
+    /// been applied in.
+    func shrinkPageInsets() -> some View {
+        padding(.horizontal, ShrinkStyle.gutter).padding(.top, 20).padding(.bottom, 28)
+    }
 }
 
 enum ShrinkFormat {
