@@ -2,13 +2,13 @@
 
 A native SwiftUI, one-video feasibility prototype. It retrieves a selected Photos video, exports a 1080p HEVC copy on the iPhone, verifies that file, previews it and saves a separate Photos item only after an explicit save action.
 
-The project now includes an **Expo development app** that embeds the native SwiftUI harness through a local Swift module. [EAS_DEVELOPMENT_BUILD.md](docs/EAS_DEVELOPMENT_BUILD.md) describes the Windows-to-EAS setup; [EXPO_INTEGRATION.md](docs/EXPO_INTEGRATION.md) explains the shared source arrangement. EAS built and signed this app repeatedly, ending with the production build 10 recorded in [RELEASE_10.md](docs/RELEASE_10.md); the build ids that survive in the record are listed in [VALIDATION.md](docs/VALIDATION.md).
+The project now includes an **Expo development app** that embeds the native SwiftUI harness through a local Swift module. [EAS_DEVELOPMENT_BUILD.md](docs/EAS_DEVELOPMENT_BUILD.md) describes the Windows-to-EAS setup; [EXPO_INTEGRATION.md](docs/EXPO_INTEGRATION.md) explains the shared source arrangement. EAS built and signed this app repeatedly, ending with the production build 10 recorded in [RELEASE_10.md](docs/RELEASE_10.md); the build ids that survive in the record are listed in [VALIDATION.md](docs/VALIDATION.md). Build 10 is still the last build known to have reached testers.
 
-**Status: implemented source, never compiled in its current form.** Every status statement in this repository is one of three kinds, and they are not interchangeable:
+**Status: the source compiles and its test suite passes; the app has never run.** Every status statement in this repository is one of three kinds, and they are not interchangeable:
 
-- **Historical** - a past build or a past decision, recorded as it stood then. Real builds were compiled, archived and signed by EAS, most recently build 10. That is compilation evidence for the source as it was at that build, not for the tree as it is now.
-- **Implemented source** - present in the tree, never compiled. Round 1 landed at commit `559f693` and that is the reference point for the "in the tree at `559f693`" statements below; anything later is recorded by the loop in `AGENT_LOOP.md`, not here. Everything Swift here is plausible, not proven, until `scripts/validate-mac.sh` runs on a Mac.
-- **Observed** - something that actually ran, with the evidence named beside it. No XCTest execution, simulator run or physical-device acceptance result is claimed anywhere in this repository.
+- **Historical** - a past build or a past decision, recorded as it stood then. Real builds were compiled, archived and signed by EAS, most recently build 10. That is compilation evidence for the source as it was at that build, not for the tree as it is now. Build 10 is the last build known to have reached testers; every build after it targeted a simulator and reached no one.
+- **Implemented source** - present in the tree and, since 2026-09-23, compiled. `.github/workflows/ios-tests.yml` runs `scripts/verify-native-tests.mjs` on a free macOS runner on every push to `main`: it generates the standalone project with XcodeGen, compiles both targets and runs the whole XCTest suite. Round 1 landed at commit `559f693` and is the reference point for the "in the tree at `559f693`" statements below; later rounds are recorded by the loop in `AGENT_LOOP.md`. The verified commit is `5d72357`, and uncommitted work is unverified until it is pushed. Compiling and passing tests is not the same as running correctly - the app's runtime behaviour is still unobserved.
+- **Observed** - something that actually ran, with the evidence named beside it. The test suite is in this category now: CI run `35852961091` on commit `5d72357` reported `** TEST BUILD SUCCEEDED **`, `TEST RUN ... PASSED` and `Executed 162 tests, with 0 failures (0 unexpected)`, and that job also compiles the standalone Xcode project. Nothing else here is observed, because the app has never actually run. No screen has been rendered, no video has been exported, no original has been deleted and no queue file has been written on a device.
 
 Created on Windows on 2026-09-17. Git, Node.js and ripgrep were available; Swift, Xcode and XcodeGen were not. The Python command was a Windows app alias, not a verified runtime. See [validation evidence](docs/VALIDATION.md). Phase 0 is only complete after the device acceptance test below passes.
 
@@ -47,14 +47,16 @@ rules and the limits. In short: the scan downloads nothing, sizes come only from
 documented Photos API or from originals already on the iPhone, savings and time are reported
 as ranges with their basis, and no released iCloud space is claimed.
 
-After build 10, the round 1 reliability work changed this source further and none of it is
-compiled. In the tree at `559f693`: a failed queue write stops a run before it touches Photos and
-a committed save is never repeated after a failed follow-up write; deletion stores an
-original-to-copy receipt, revalidates both assets immediately before deleting and refuses a
-receipt that is missing, stale or from an older algorithm; verification requires every sample
-window to decode, decodes audio instead of trusting track duration and compares the imported copy
-against the output the run measured. XCTest cases went from 102 to 145 and none has ever run. See
-[VALIDATION.md](docs/VALIDATION.md) for the entry and [BATCH_PHASE.md](docs/BATCH_PHASE.md) for
+After build 10, rounds 1 to 5 changed this source further. That work is in the tree, and the tree
+now compiles and its tests run. In the tree at `5d72357`: a failed queue write stops a run before
+it touches Photos and a committed save is never repeated after a failed follow-up write; deletion
+stores an original-to-copy receipt, revalidates both assets immediately before deleting and
+refuses a receipt that is missing, stale or from an older algorithm; verification requires every
+sample window to decode, decodes audio instead of trusting track duration and compares the
+imported copy against the output the run measured. The XCTest suite went from 102 cases to 162 and
+all 162 now execute and pass on the CI runner (run `35852961091` at commit `5d72357`). A green
+suite is not a device result: none of this has run against a real library. See
+[VALIDATION.md](docs/VALIDATION.md) for the entries and [BATCH_PHASE.md](docs/BATCH_PHASE.md) for
 the current rules.
 
 ## What this proves once tested
@@ -126,14 +128,15 @@ Verification checks a real, nonempty regular file, a playable single video track
 On Windows, install the Expo application dependencies with `npm ci`, then validate:
 
 ```powershell
-node scripts/validate.mjs
+npm run validate:native
 npm run typecheck
 node scripts/sync-native-sources.mjs --check
 ```
 
-These checks cover repository guardrails, TypeScript and generated native source copies, **not Swift syntax or execution**. EAS will compile Swift after explicit build approval. The JavaScript development tooling uses Node on the PC; video processing stays native on the phone.
+These checks cover repository guardrails, the Swift call-site scan, TypeScript and generated native source copies, **not Swift syntax or execution**. Swift is compiled and the XCTest suite executed elsewhere: `.github/workflows/ios-tests.yml` performs that verification on a free macOS runner on every push to `main`, which is now the everyday route. EAS is needed only for builds that install on a real device, and its free-plan iOS build minutes are exhausted until 1 October 2026. The JavaScript development tooling uses Node on the PC; video processing stays native on the phone.
 
-On the rented Mac, follow [CLOUD_MAC_SETUP.md](docs/CLOUD_MAC_SETUP.md). In brief:
+The owner does not own a Mac, so the Mac path below is kept only for a session on a rented
+machine, per [CLOUD_MAC_SETUP.md](docs/CLOUD_MAC_SETUP.md):
 
 ```bash
 brew install xcodegen
@@ -145,11 +148,11 @@ xcrun simctl list devices available
 SIMULATOR_UDID="PASTE_AN_AVAILABLE_IPHONE_SIMULATOR_UDID" bash scripts/validate-mac.sh
 ```
 
-No build artifacts, certificates, provisioning profiles or credentials belong in Git. Two local commits exist (`10ab65f` baseline, `559f693` round 1); no remote is configured and nothing has been pushed. See [.gitignore](.gitignore).
+No build artifacts, certificates, provisioning profiles or credentials belong in Git. Git history now runs to `5d72357` on branch `main`, pushed to a private GitHub repository, and that is the state the CI job verifies and the state the status block above calls the verified commit. See [.gitignore](.gitignore).
 
 ## Unverified assumptions and release gate
 
-- All Swift source, framework overloads, isolation annotations, project generation, resource bundling and test-target settings require the first actual Xcode build. Static Windows checks cannot establish compilation.
+- The first actual Xcode build has happened, and CI has repeated it on every push since: the generated project, the app target, the resource bundle and the test target all compile. What is still unproven is everything that only exists once the app runs - the app launching, its screens rendering, and framework calls behaving as the source reads. Static Windows checks cannot establish any of that.
 - The preset must produce a smaller file on at least one representative large video; HEVC inputs and low-bitrate inputs may grow. No predicted ratio is promised.
 - PhotoKit file-backed original access, iCloud progress/errors, limited permissions, callback cancellation races and representation lifetime require a real library.
 - HEVC capability, source rotation/mirroring, audio presence/sync/channels, HDR/HLG/PQ/Dolby Vision appearance, frame rate and slow/special-format filtering require physical-device inspection. The prototype does not promise HDR or cinematic metadata preservation.
@@ -157,7 +160,7 @@ No build artifacts, certificates, provisioning profiles or credentials belong in
 - Low storage, thermal pressure, interruptions, lock/background transitions, process termination and cleanup latency are unverified. An OS-terminated process cannot run cleanup immediately.
 - The disk-space privacy reason, app icon, archive/export compliance answers and App Store Connect validation need checking in the submitted archive. No App Review approval is implied.
 - This iPhone-targeted prototype has no separately validated iPad interface. No claim is made about unreleased or untested device models.
-- The round 1 reliability work (persistence-gated Photos mutations, deletion receipts and revalidation, decoded audio and all-window verification) is source only. It has never been compiled, and the 145 XCTest cases in `VideoShrinkTests/` have never executed. The first Mac run is the real test of all of it, and a change as strict as revalidated deletion needs device validation before it is trusted.
+- The round 1 to 5 reliability work (persistence-gated Photos mutations, deletion receipts and revalidation, decoded audio and all-window verification, library reconciliation and copy exclusion) compiles, and the 162 XCTest cases in `VideoShrinkTests/` run and pass in CI (run `35852961091` at commit `5d72357`). That says the logic holds against its injected fakes, not that the app works: no screen has been rendered, no video has been exported, no original has been deleted and no queue file has been written on a device. A change as strict as revalidated deletion needs device validation before it is trusted.
 
 **Acceptance:** a TestFlight build on the iPhone 15 Pro Max selects an allowed video whose original must download from iCloud, exports a smaller HEVC file, passes verification and saves a separate playable Photos item with measured potential savings. The original must remain unchanged. Record build, OS, source characteristics and evidence in the [device test plan](docs/PHYSICAL_DEVICE_TEST_PLAN.md).
 

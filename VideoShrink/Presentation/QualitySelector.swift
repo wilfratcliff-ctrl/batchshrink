@@ -20,6 +20,8 @@ struct QualityPillGroup<Option: Hashable & Identifiable>: View {
                 pill(option)
             }
         }
+        // The highlight slides from pill to pill. Reduce Motion keeps the highlight and drops the
+        // slide, so which option is chosen stays visible without any movement.
         .animation(reduceMotion ? nil : .spring(response: 0.34, dampingFraction: 0.78), value: selected)
     }
 
@@ -118,6 +120,7 @@ struct QualitySelector: View {
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(18).shrinkCard()
+            // The figures cross-fade as the picture size changes. Reduce Motion swaps them outright.
             .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: settings.resolution)
         } else {
             Text(placeholder)
@@ -188,6 +191,7 @@ struct QualityRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Quality. \(settings.resolution.title) \(settings.resolution.codec.displayName), \(settings.frameRate.title).")
+        .accessibilityHint("Opens the picture size and frame rate choices.")
         .accessibilityIdentifier("qualityRow")
     }
 }

@@ -144,17 +144,251 @@ import AVFoundation
         XCTAssertEqual(batch.phase, .paused)
         XCTAssertNotNil(batch.queueWarning)
         XCTAssertEqual(batch.summary.savedCount, 1)
-        // The record of a save in flight is kept, which is the evidence a later launch needs.
+        // The record of a save in flight is kept, which is the evidence a later launch needs, and
+        // it names the copy Photos created along with the sizes this run measured for it.
         XCTAssertEqual(fixture.store.stored?.items.first?.state, BatchQueueRecord.State.saving)
+        XCTAssertNotNil(fixture.store.stored?.items.first?.copyEvidence?.verifiedCopyIdentifier)
+        XCTAssertEqual(fixture.store.stored?.items.first?.attemptedSave?.copyBytes, 600)
 
-        // A relaunch offers a look in Photos rather than a second copy.
+        // A relaunch reads that record, finds that copy in Photos and settles the item as the save
+        // it turned out to be, so the video is never handed to the encoder again.
         let relaunched = fixture.makeBatch()
-        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.needsCheck)
-        XCTAssertEqual(relaunched.summary.needsCheckCount, 1)
+        XCTAssertEqual(relaunched.midSaveFindings["a"], MidSaveFinding.copyInPhotos)
+        XCTAssertEqual(relaunched.items.first?.state,
+                       BatchItemState.saved(Savings(originalBytes: 1_000, compressedBytes: 600)))
+        XCTAssertEqual(relaunched.summary.needsCheckCount, 0)
         XCTAssertFalse(relaunched.hasPendingWork)
         relaunched.resume()
         XCTAssertEqual(fixture.photos.saveCount, 1)
     }
+
+    // MARK: - Exactly-once save reconciliation
+
+    func testAMidSaveRecordWhoseCopyIsStillInPhotosSettlesAsTheSaveItWas() async {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+
+        // Photos still has the copy the stopped run created, so the question is answered: this
+        // video was saved, and it is never handed to the encoder again.
+        XCTAssertEqual(relaunched.midSaveFindings["a"], MidSaveFinding.copyInPhotos)
+        XCTAssertEqual(relaunched.items.first?.state,
+                       BatchItemState.saved(Savings(originalBytes: 1_000, compressedBytes: 600)))
+        XCTAssertEqual(relaunched.summary.savedCount, 1)
+        XCTAssertEqual(relaunched.summary.needsCheckCount, 0)
+        XCTAssertFalse(relaunched.hasPendingWork)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        // The copy was found, not read back. Nothing may claim the check that justifies a delete,
+        // so the original stays even though the fresh look at both assets agreed.
+        XCTAssertNil(relaunched.readBackOutcomes["a"])
+        relaunched.settings.deletionMode = .afterRun
+        XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
+        relaunched.deleteOriginalsNow()
+        await eventually { !relaunched.deletionInProgress }
+        XCTAssertTrue(fixture.photos.deleteBatches.isEmpty)
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+        // And no route through the model runs it again, because a second copy is the one outcome
+        // this whole area exists to prevent.
+        relaunched.resume()
+        relaunched.requeueUncertain()
+        relaunched.retryFailed()
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertEqual(relaunched.items.first?.state,
+                       BatchItemState.saved(Savings(originalBytes: 1_000, compressedBytes: 600)))
+    }
+
+    func testASettledMidSaveItemIsNotOfferedByASelectAllAgain() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+        XCTAssertEqual(relaunched.items.first?.state,
+                       BatchItemState.saved(Savings(originalBytes: 1_000, compressedBytes: 600)))
+
+        // The run that made that copy may never have reached the point where it writes either of
+        // these down, so the restore does. It matters: an original nothing has recorded is offered
+        // by Select all, and running it again would make a second copy.
+        XCTAssertTrue(relaunched.completedIdentifiers.contains("a"))
+        XCTAssertTrue(relaunched.createdCopyIdentifiers.contains("copy-of-a"))
+
+        await scan(fixture, relaunched)
+        relaunched.beginSelecting()
+        relaunched.selectAll()
+        XCTAssertTrue(relaunched.selectableAssets.isEmpty)
+        XCTAssertTrue(relaunched.selection.isEmpty)
+    }
+
+    func testAMidSaveRecordPhotosHasNoCopyOfWaitsAgain() {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .copyMissing
+
+        let relaunched = fixture.makeBatch()
+
+        // Photos has no copy of this video, so nothing was saved and the video may wait again.
+        XCTAssertEqual(relaunched.midSaveFindings["a"], MidSaveFinding.noCopyInPhotos)
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.pending)
+        XCTAssertTrue(relaunched.hasPendingWork)
+        XCTAssertEqual(relaunched.summary.pendingCount, 1)
+        XCTAssertEqual(relaunched.summary.needsCheckCount, 0)
+        XCTAssertEqual(relaunched.phase, .paused)
+        // Nothing was saved by the launch itself, and there is nothing to delete: no copy exists.
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
+        // The answer reaches disk, so the next launch is not asked the same question again.
+        XCTAssertEqual(fixture.store.stored?.items.first?.state, BatchQueueRecord.State.pending)
+    }
+
+    func testAMidSaveRecordThatCannotBeLookedUpStaysAQuestion() {
+        let fixture = QueueFixture(assets: [])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .unavailable
+
+        let relaunched = fixture.makeBatch()
+
+        // Photos could not answer, so the question stays the user's, with nothing invented.
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.needsCheck)
+        XCTAssertEqual(relaunched.summary.needsCheckCount, 1)
+        XCTAssertNil(relaunched.readBackOutcomes["a"])
+        XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+
+        // The user says they looked in Photos, and here their word is the only evidence there is,
+        // so the video goes back to waiting. Still nothing runs until they ask for it.
+        relaunched.requeueUncertain()
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.pending)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+        XCTAssertEqual(fixture.store.stored?.items.first?.state, BatchQueueRecord.State.pending)
+    }
+
+    func testAMidSaveRecordWithNoCopyIdentifierIsStillAQuestion() {
+        let fixture = QueueFixture(assets: [])
+        // The stopped run never got as far as writing the copy down, so this launch has no
+        // identity to look up and no amount of looking can answer it.
+        fixture.store.stored = midSaveRecord("a", recordedCopy: false)
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        XCTAssertEqual(relaunched.items.first?.state, BatchItemState.needsCheck)
+        // What Photos would have said cannot stand in for a receipt that names the copy.
+        XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
+        XCTAssertEqual(fixture.photos.saveCount, 0)
+    }
+
+    func testAMidSaveRecordThatClaimsAReadBackStillKeepsTheOriginal() async {
+        let fixture = QueueFixture(assets: [])
+        // A record as an earlier launch could have left it: a mid-save item whose stored read-back
+        // describes an earlier attempt of the same video, beside a receipt for this copy.
+        fixture.store.stored = midSaveRecord("a", readBack: .confirmed)
+        fixture.photos.revalidation = .matches
+
+        let relaunched = fixture.makeBatch()
+        relaunched.settings.deletionMode = .afterRun
+
+        // The read-back belonged to a different copy, so it is dropped rather than inherited.
+        XCTAssertNil(relaunched.readBackOutcomes["a"])
+        XCTAssertEqual(relaunched.items.first?.state,
+                       BatchItemState.saved(Savings(originalBytes: 1_000, compressedBytes: 600)))
+        XCTAssertTrue(relaunched.deletableItemIDs.isEmpty)
+
+        relaunched.deleteOriginalsNow()
+        await eventually { !relaunched.deletionInProgress }
+        XCTAssertTrue(fixture.photos.deleteBatches.isEmpty)
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+    }
+
+    func testTheMidSaveRuleNeverInventsAnAnswer() {
+        let receipt = copyReceipt(for: "a")
+        // Anything showing the recorded copy is in the library means a copy exists.
+        for look in [CopyRevalidation.matches, .copyChanged, .sourceMissing, .sourceChanged] {
+            XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: look,
+                                                                  wholeLibraryVisible: true),
+                           MidSaveFinding.copyInPhotos)
+        }
+        XCTAssertTrue(MidSaveFinding.copyInPhotos.forbidsAnotherSave)
+        // A missing copy is only an answer with the whole library in view: under limited access an
+        // asset can be invisible rather than gone, and that reading could make a second copy.
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: .copyMissing,
+                                                              wholeLibraryVisible: true),
+                       MidSaveFinding.noCopyInPhotos)
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: .copyMissing,
+                                                              wholeLibraryVisible: false),
+                       MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
+        XCTAssertFalse(MidSaveFinding.noCopyInPhotos.forbidsAnotherSave)
+        // Nothing else answers anything.
+        for look in [CopyRevalidation.accessDenied, .unavailable] {
+            XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: look,
+                                                                  wholeLibraryVisible: true),
+                           MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        }
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: receipt, lookup: nil,
+                                                              wholeLibraryVisible: true),
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: nil, lookup: .matches,
+                                                              wholeLibraryVisible: true),
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        // A receipt from an older algorithm names nothing that can be looked up, and the service
+        // reports it exactly as it reports a missing copy, so it can never be read as "no copy".
+        let older = DeletionEvidence(version: DeletionEvidence.currentVersion - 1,
+                                     copy: receipt.copy, source: receipt.source)
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: older, lookup: .copyMissing,
+                                                              wholeLibraryVisible: true),
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+    }
+
+    func testAQueueFromBeforeTheMeasuredSizesWereWrittenStillDecodes() throws {
+        // The file shape a shipped build leaves for an item it was mid-save on: the `.saving`
+        // state, no measured sizes and no copy identity, through the project's own encoder.
+        let legacy = LegacyMidSaveQueue(
+            settings: .init(resolution: "hd1080", frameRate: "original", deletion: "afterRun"),
+            items: [LegacyMidSaveQueue.Item(identifier: "a", creationDate: nil, duration: 120,
+                                            pixelWidth: 3840, pixelHeight: 2160, bytes: 1_000,
+                                            state: .saving, readBack: nil, deletion: nil,
+                                            copyEvidence: nil)])
+        let data = try JSONEncoder().encode(legacy)
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("attemptedSave"),
+                       "The fixture must not carry the field this change adds")
+
+        // It still decodes, so an in-progress run on a user's phone is not thrown away.
+        let record = try JSONDecoder().decode(BatchQueueRecord.self, from: data)
+        XCTAssertEqual(record.version, BatchQueueRecord.currentVersion)
+        XCTAssertEqual(record.items.count, 1)
+        XCTAssertEqual(record.items[0].state, .saving)
+        XCTAssertNil(record.items[0].attemptedSave)
+        // With nothing measured and no copy named there is no answer to be had, so the restore
+        // keeps the question rather than settling on a save it cannot describe.
+        XCTAssertEqual(BatchQueueReconciliation.midSaveFinding(receipt: record.items[0].copyEvidence,
+                                                              lookup: nil,
+                                                              wholeLibraryVisible: true),
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+    }
+
+    func testTheMeasuredSizesRoundTripWithTheQueue() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileBatchQueueStore(directory: directory)
+
+        let record = midSaveRecord("a")
+        try store.save(record)
+
+        let loaded = try XCTUnwrap(store.load())
+        XCTAssertEqual(loaded, record)
+        XCTAssertEqual(loaded.items[0].attemptedSave,
+                       AttemptedSave(Savings(originalBytes: 1_000, compressedBytes: 600)))
+        XCTAssertEqual(loaded.items[0].attemptedSave?.savings,
+                       Savings(originalBytes: 1_000, compressedBytes: 600))
+    }
+
+    // MARK: - Durable evidence before Photos mutations, continued
 
     func testAQueueThatCannotBeWrittenStopsBeforePhotosIsAskedToDelete() async throws {
         let fixture = QueueFixture(assets: [])
@@ -309,6 +543,55 @@ private func deletionCandidateRecord(_ id: String) -> BatchQueueRecord {
     record.items[0].readBack = .confirmed
     record.items[0].copyEvidence = copyReceipt(for: id)
     return record
+}
+
+/// A stored queue as a run leaves it when the app stops in the middle of a save: the `.saving`
+/// state, the sizes the run had measured for that copy, and the copy's identity once Photos has
+/// handed it over. Each of the three is optional in the record, so a test can leave out exactly
+/// the evidence it wants to be missing.
+private func midSaveRecord(_ id: String,
+                           savings: Savings? = Savings(originalBytes: 1_000, compressedBytes: 600),
+                           recordedCopy: Bool = true,
+                           readBack: CopyReadBack? = nil) -> BatchQueueRecord {
+    var item = BatchQueueRecord.Item(identifier: id, creationDate: nil, duration: 120,
+                                     pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000,
+                                     state: .saving)
+    item.readBack = readBack
+    item.copyEvidence = recordedCopy ? copyReceipt(for: id) : nil
+    item.attemptedSave = savings.map { AttemptedSave($0) }
+    return BatchQueueRecord(
+        settings: BatchQueueRecord.Settings(resolution: CopyResolution.hd1080.rawValue,
+                                            frameRate: FrameRateOption.original.rawValue,
+                                            deletion: DeletionMode.afterRun.rawValue),
+        items: [item])
+}
+
+/// The queue file shape from before the run's measured sizes were written: the same fields, the
+/// project's own encoder, and no `attemptedSave` key. Encoding this produces a file exactly like
+/// one a shipped build left on a phone that stopped mid-save.
+private struct LegacyMidSaveQueue: Encodable {
+    struct Settings: Encodable {
+        var resolution: String
+        var frameRate: String
+        var deletion: String?
+    }
+
+    struct Item: Encodable {
+        var identifier: String
+        var creationDate: Date?
+        var duration: Double
+        var pixelWidth: Int
+        var pixelHeight: Int
+        var bytes: Int64?
+        var state: BatchQueueRecord.State
+        var readBack: CopyReadBack?
+        var deletion: DeletionOutcome?
+        var copyEvidence: DeletionEvidence?
+    }
+
+    var version = 1
+    var settings: Settings
+    var items: [Item]
 }
 
 /// A queue store that can fail one chosen write, so a test can break exactly one checkpoint.

@@ -77,13 +77,26 @@ Consequences:
   which runs the same `scripts/verify-native-tests.mjs`. It needs a GitHub remote, which this
   repository does not have.
 
-**Status: the goal is blocked on this.** Every remaining backlog item needs a compile or a test
-run to be honest about, and there is no way to get one. The locally verifiable work — the
-guardrail scan, the Swift static checker, the CI workflow, the handoff documents — is done. Work
-resumes the moment one of these is true: the owner adds a git remote, the owner upgrades the EAS
-plan, or 1 October arrives and the free builds reset. Do not start another Swift round before
-then; `7c11f26` is still sitting unverified and adding to it would repeat the exact mistake that
-produced four compile errors this month.
+### The blocker is cleared — verification is now free and automatic
+
+The repository now has a GitHub remote, and `.github/workflows/ios-tests.yml` runs
+`scripts/verify-native-tests.mjs` on a free macOS runner on every push. **This is the gate to use,
+not EAS.** It costs no build minutes and returns in about seven minutes.
+
+First green run, 2026-09-23, commit `5d72357`:
+
+```
+===== VIDEOSHRINK TEST TARGET COMPILE ===== PASSED
+===== VIDEOSHRINK TEST RUN ===== PASSED
+     Executed 162 tests, with 0 failures (0 unexpected)
+```
+
+The whole suite is green for the first time. EAS is now only needed for actual app builds; its
+free iOS minutes remain exhausted until 1 October.
+
+**Working rule from here:** no Swift change is finished until a push has made CI green. `main` is
+the verified branch; anything uncommitted is unverified, and `git status` is the honest answer to
+"what is proven".
 
 An EAS build compiles everything under `modules/videoshrink-native/ios/`, which includes
 `VideoShrinkCore/` — the mirror of `VideoShrink/{Models,Services,Presentation}` produced by

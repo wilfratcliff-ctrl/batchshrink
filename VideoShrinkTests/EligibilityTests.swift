@@ -102,4 +102,33 @@ final class EligibilityTests: XCTestCase {
         let restricted = AssetRules.Traits(isSharedOrRestricted: true)
         XCTAssertEqual(AssetRules.unsupportedReason(restricted), "Shared or restricted videos aren’t supported yet.")
     }
+
+    // MARK: - The two traits only the media itself can decide
+
+    /// The library steps cannot see a codec subtype or a colour tag, so HDR and ProRes are
+    /// decided once an original can be read. That is a second entry point into the same table,
+    /// and it has to produce the same sentences in the same order.
+    func testTheFormatEntriesDecideTheSameSentences() {
+        XCTAssertEqual(AssetRules.unsupportedFormatReason(isHDR: true, isProRes: false),
+                       "HDR videos aren’t supported yet.")
+        XCTAssertEqual(AssetRules.unsupportedFormatReason(isHDR: false, isProRes: true),
+                       "ProRes videos aren’t supported yet.")
+        XCTAssertNil(AssetRules.unsupportedFormatReason(isHDR: false, isProRes: false))
+        XCTAssertEqual(AssetRules.unsupportedFormatReason(isHDR: true, isProRes: true),
+                       "ProRes videos aren’t supported yet.",
+                       "The trait order decides, exactly as it does for a listed video")
+    }
+
+    /// The two paths must not drift: whatever the trait table says about these two facts is what
+    /// the format entry point says about them.
+    func testBothEntryPointsAgreeAboutHDRAndProRes() {
+        for isHDR in [true, false] {
+            for isProRes in [true, false] {
+                XCTAssertEqual(
+                    AssetRules.unsupportedFormatReason(isHDR: isHDR, isProRes: isProRes),
+                    AssetRules.unsupportedReason(AssetRules.Traits(isHDR: isHDR, isProRes: isProRes)),
+                    "HDR \(isHDR), ProRes \(isProRes)")
+            }
+        }
+    }
 }

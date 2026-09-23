@@ -60,6 +60,8 @@ struct ShrinkOnboarding: View {
                 .id(page)
                 .transition(.opacity)
             }
+            // Moving to another page fades the old one out. Reduce Motion swaps the page with no
+            // fade at all; the step indicator already carries the same information with no motion.
             ShrinkActionBar {
                 ShrinkPrimaryButton(title: page == 2 ? "Get started" : "Continue",
                                     symbol: "arrow.right") {
@@ -70,7 +72,8 @@ struct ShrinkOnboarding: View {
                     Button("Back") {
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { page -= 1 }
                     }
-                    .font(.subheadline).foregroundStyle(.secondary).frame(minHeight: 44)
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .frame(minWidth: 44, minHeight: 44)
                 } else {
                     Text("Less storage. More life.")
                         .font(.footnote).foregroundStyle(.secondary).padding(.vertical, 8)

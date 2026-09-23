@@ -33,6 +33,11 @@ enum BatchPhase: Equatable {
     /// The fresh look taken at those receipts and the originals beside them. It is filled by one
     /// pass over the candidates, never by reading Photos from inside a view update.
     @Published private(set) var revalidationOutcomes: [String: CopyRevalidation] = [:]
+    /// What a restored run worked out about each video that was mid-save when the app stopped:
+    /// whether Photos holds the copy, whether it holds none, or whether the question is still the
+    /// user's. It is a finding and never an instruction: nothing here creates or removes anything,
+    /// and finding a copy is not evidence enough to delete an original.
+    @Published private(set) var midSaveFindings: [String: MidSaveFinding] = [:]
     @Published private(set) var deletionOutcomes: [String: DeletionOutcome] = [:]
     @Published private(set) var deletionInProgress = false
     @Published private(set) var limitedAccess = false
@@ -88,6 +93,11 @@ enum BatchPhase: Equatable {
     /// Set once a checkpoint the run cannot continue past failed to reach disk. It is cleared when
     /// a fresh attempt begins, so a stopped run keeps explaining itself instead of looking healthy.
     private var checkpointFailure = false
+    /// The sizes the run measured for the copy it is handing to Photos, by original. They go to
+    /// disk with the `.saving` state, and a later launch reads them back for the items that are
+    /// still a question: they are what turns "a copy is in Photos" into the save it turned out to
+    /// be rather than an unanswerable claim.
+    private var attemptedSaves: [String: Savings] = [:]
     static let deletionBatchSize = 5
 
     init(photos: any PhotoLibraryServing,
@@ -555,9 +565,11 @@ enum BatchPhase: Equatable {
         readBackOutcomes = [:]
         copyEvidence = [:]
         revalidationOutcomes = [:]
+        midSaveFindings = [:]
         deletionOutcomes = [:]
         activeDeletionMode = settings.deletionMode
         checkpointFailure = false
+        attemptedSaves = [:]
         queueWarning = nil
         clearStoredQueue()
         selection.removeAll()
@@ -571,9 +583,25 @@ enum BatchPhase: Equatable {
 
     /// Requeues the videos the app is not sure about. Only for use after the user has looked
     /// in Photos, because running one again can create a second copy.
+    ///
+    /// The tap is the user saying they looked. The app looks again too, at that moment and not only
+    /// at launch, exactly as the delete path does: a video whose copy it can see is never put back
+    /// in the waiting list, because running that video again would make the second copy this whole
+    /// area exists to prevent. The user's word covers what the app cannot see; it does not override
+    /// what the app can.
     func requeueUncertain() {
         guard runTask == nil else { return }
-        let uncertain = items.indices.filter { items[$0].state == .needsCheck }
+        let flagged = items.filter { $0.state == .needsCheck }.map(\.id)
+        guard !flagged.isEmpty else { return }
+        refreshDeletionLook(for: flagged)
+        resolveMidSaveItems()
+        let uncertain = items.indices.filter { index in
+            items[index].state == .needsCheck
+                && midSaveFindings[items[index].id]?.forbidsAnotherSave != true
+        }
+        // A video whose copy the app can see keeps the flag it had instead of going back in the
+        // queue. That flag is what the paused and finished screens already point the user at, and
+        // nothing here may quietly run it again.
         guard !uncertain.isEmpty else { return }
         for index in uncertain { items[index].state = .pending }
         persistQueue()
@@ -631,9 +659,12 @@ enum BatchPhase: Equatable {
     private func process(id: String) async {
         guard let asset = items.first(where: { $0.id == id })?.asset else { return }
         // A fresh attempt makes a new copy, so any receipt from an earlier attempt no longer
-        // describes what this one is about to create. It has to be earned again.
+        // describes what this one is about to create. It has to be earned again, and the read-back
+        // goes with it: a check of an earlier copy is not a check of this one, and the deletion
+        // gate must never be able to read one as the other.
         copyEvidence[id] = nil
         revalidationOutcomes[id] = nil
+        readBackOutcomes[id] = nil
         // Work only starts while the queue can be written. Shrinking a video for an hour and then
         // finding out the app cannot record the copy is work thrown away, and copying without a
         // record is worse than not copying at all.
@@ -685,6 +716,10 @@ enum BatchPhase: Equatable {
             let saving = Savings(originalBytes: original.bytes, compressedBytes: output.bytes)
             if saving.isSmaller {
                 try temporary.requireCapacity(for: DiskHeadroom.bytes(output.bytes, copies: 1))
+                // The sizes this run measured go down with the intent, so a launch that finds the
+                // copy in Photos afterwards can say what was saved instead of asking the user to
+                // work it out.
+                attemptedSaves[id] = saving
                 // The intent is on disk before Photos is asked to keep anything. A copy Photos has
                 // accepted cannot be taken back, so the queue must already describe it when the
                 // app stops for good.
@@ -696,6 +731,17 @@ enum BatchPhase: Equatable {
                 // next bulk selection must leave it alone rather than shrink it a second time.
                 rememberCreatedCopy(created)
                 record(output: output, for: id)
+                // Which asset Photos created is written down here, at the moment its identifier is
+                // known, rather than only after the read-back below. A crash in that window would
+                // otherwise leave a restored run with no way at all to find out whether this save
+                // landed. What is written is the copy's identity: it is not a verification, and a
+                // delete still needs a read-back this app performed.
+                if let created,
+                   let receipt = photos.deletionEvidence(originalIdentifier: id,
+                                                         copyIdentifier: created) {
+                    copyEvidence[id] = receipt
+                    persistQueue()
+                }
                 // Photos now holds a copy, so the run must not go back on that. When the record of
                 // it cannot be written, the `.saving` entry already on disk is what stops a later
                 // launch from making a second copy, and the run stops here rather than reach a
@@ -705,6 +751,9 @@ enum BatchPhase: Equatable {
                     throw PipelineError.cancelled
                 }
                 await confirmReadBack(for: id, createdIdentifier: created, expected: output)
+                // The save is settled, so the sizes measured for it are no longer the only record
+                // of what happened: the item's own state carries them from here.
+                attemptedSaves[id] = nil
                 if activeDeletionMode == .afterEachCopy {
                     await queueDeletion(for: id)
                 }
@@ -966,7 +1015,8 @@ enum BatchPhase: Equatable {
                                       state: BatchQueueReconciliation.persisted(item.state),
                                       readBack: readBackOutcomes[item.asset.id],
                                       deletion: deletionOutcomes[item.asset.id],
-                                      copyEvidence: copyEvidence[item.asset.id])
+                                      copyEvidence: copyEvidence[item.asset.id],
+                                      attemptedSave: attemptedSaves[item.asset.id].map { AttemptedSave($0) })
             })
         do {
             try queueStore.save(record)
@@ -1023,12 +1073,94 @@ enum BatchPhase: Equatable {
         deletionOutcomes = Dictionary(uniqueKeysWithValues: reconciled.items.compactMap { item in
             item.deletion.map { (item.identifier, $0) }
         })
+        // What the stopped run had measured for the copy it was handing over, kept for the items
+        // that are still a question. An item that settled carries its own sizes.
+        var restoredAttempts: [String: Savings] = [:]
+        for item in reconciled.items where BatchQueueReconciliation.live(item.state) == .needsCheck {
+            if let attempt = item.attemptedSave { restoredAttempts[item.identifier] = attempt.savings }
+        }
+        attemptedSaves = restoredAttempts
         restoredRun = true
-        phase = hasPendingWork ? .paused : .finished
         // A restored run still has to take its own fresh look before it offers anything, because
         // a receipt written earlier says what the assets looked like then, not now.
         refreshDeletionLook()
+        // Then the one question the stored record cannot answer on its own: whether Photos took
+        // the copy an interrupted save was handing over.
+        resolveMidSaveItems()
+        // Read after that question is settled: a video Photos has no copy of is waiting again, and
+        // the run should come back as one that can be continued rather than one that is finished.
+        phase = hasPendingWork ? .paused : .finished
         log.info("Restored a stored queue")
+    }
+
+    /// Answers "did Photos take that copy?" for the videos a restored run is unsure about, as far
+    /// as the stored record and Photos can answer it, and lets the two answers that can be acted
+    /// on change what the item is.
+    ///
+    /// Nothing here creates or removes anything: it looks, and writes down what it saw. A video
+    /// whose copy it can see settles as the save that copy turned out to be and is never handed to
+    /// the encoder again, because a second copy of a video that was already copied is the outcome
+    /// this whole area exists to prevent. A video Photos has no copy of goes back to waiting, which
+    /// cannot duplicate anything. Anything else stays a question for the user. No finding here can
+    /// authorise a delete: only a read-back this app performed can do that, and this is not one.
+    private func resolveMidSaveItems() {
+        var settled = false
+        for index in items.indices where items[index].state == .needsCheck {
+            let id = items[index].id
+            let finding = BatchQueueReconciliation.midSaveFinding(
+                receipt: copyEvidence[id],
+                lookup: revalidationOutcomes[id],
+                wholeLibraryVisible: !libraryChanges.isLimited)
+            midSaveFindings[id] = finding
+            switch finding {
+            case .copyInPhotos:
+                // The copy exists whatever else is known about it, so it is recorded as this
+                // app's own output and left out of every automatic selection.
+                rememberCreatedCopy(copyEvidence[id]?.verifiedCopyIdentifier)
+                // The record also has to carry what the run measured for that copy. Without those
+                // numbers there is nothing to claim, so the item keeps its question, and the
+                // requeue path below refuses it either way.
+                guard let saving = attemptedSaves[id]?.savings, saving.isSmaller else { break }
+                // A read-back found in a mid-save record describes an earlier attempt rather than
+                // this copy, so it is dropped instead of inherited. That is what keeps the
+                // deletion gate shut for a video whose copy was never checked, while the copy
+                // itself is still written down properly below.
+                readBackOutcomes[id] = nil
+                items[index].state = .saved(saving)
+                recordFoundCopy(for: id, savings: saving)
+                attemptedSaves[id] = nil
+                settled = true
+                log.info("A restored mid-save item was settled from Photos")
+            case .noCopyInPhotos:
+                items[index].state = .pending
+                attemptedSaves[id] = nil
+                settled = true
+            case .unresolved:
+                break
+            }
+        }
+        // What a launch settled on has to reach disk, or the next one is asked the same question.
+        if settled { persistQueue() }
+    }
+
+    /// Writes down that this iPhone made a copy of an original, from what the queue kept.
+    ///
+    /// A run that stopped mid-save may never have reached the point where it records this, and a
+    /// restore that has just found the copy is the only other place that can. It matters beyond
+    /// tidiness: an original nothing has recorded is offered by Select all, and running it again
+    /// would make a second copy.
+    private func recordFoundCopy(for id: String, savings: Savings) {
+        let copy = copyEvidence[id]?.copy
+        let longEdge = copy.map { max($0.pixelWidth, $0.pixelHeight) } ?? 0
+        let duration = items.first { $0.id == id }?.asset.duration ?? 0
+        var measurement: CopyMeasurement?
+        if longEdge > 0, duration > 0 {
+            measurement = CopyMeasurement(bitsPerSecond: Double(savings.compressedBytes) * 8 / duration,
+                                          longEdge: longEdge)
+        }
+        history.record(identifier: id, measurement: measurement)
+        completedIdentifiers.insert(id)
+        measurements = history.copyMeasurements()
     }
 
     private func record(output: VideoMetadata, for id: String) {

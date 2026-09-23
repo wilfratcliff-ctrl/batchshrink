@@ -17,4 +17,6 @@ The existing App Store Connect app ID is now saved in `eas.json` for future non-
 **Scope of this record.** This build carries the source as it stood at build 10. The round 1
 reliability work - persistence-gated Photos mutations, deletion receipts and revalidation,
 decoded-audio and all-window verification - landed afterwards in commit `559f693` and is not in
-this build. None of it has been compiled; see [VALIDATION.md](VALIDATION.md).
+this build. That later work has since been compiled and its tests pass in CI (run `35852961091`
+at commit `5d72357`: 162 cases, 0 failures); see [VALIDATION.md](VALIDATION.md). Build 10 remains
+the last build known to have reached testers, and no build since has run on a device.

@@ -131,6 +131,7 @@ struct DeletionRow: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Originals. \(settings.deletionMode.title).")
+        .accessibilityHint("Opens the choice of what happens to originals.")
         .accessibilityIdentifier("deletionRow")
     }
 }

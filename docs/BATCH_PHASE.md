@@ -7,11 +7,16 @@ single-video path with a preview before saving is still there, one tap away.
 A smaller copy is added to Photos as a separate item, and only after it passes the existing
 checks. Deleting an original is opt-in, applies to batch runs, and is described below.
 
-**Status: implemented source, never compiled.** This document describes the batch as it exists in
-the tree at commit `559f693`. Earlier builds compiled earlier states of it. The round 1
-reliability work changed the queue write boundaries, the deletion gate and verification
-afterwards, and none of that has been compiled. Later round 2 work is recorded by the loop in
-`AGENT_LOOP.md`, not here. Nothing in this document is a device result.
+**Status: implemented source, compiled and tested; never run.** This document describes the batch
+as it exists in the tree at commit `5d72357`. Earlier builds compiled earlier states of it. The
+round 1 to 5 reliability work - the queue write boundaries, the deletion gate, verification, the
+library reconciliation and the copy exclusion - is all in that tree. CI
+(`.github/workflows/ios-tests.yml`, running `scripts/verify-native-tests.mjs`) compiles the
+standalone project and the test target and executes the 162-case suite on every push to `main`;
+run `35852961091` at `5d72357` is green: `** TEST BUILD SUCCEEDED **`, `TEST RUN ... PASSED`,
+`Executed 162 tests, with 0 failures (0 unexpected)`. **Nothing in this document is a device
+result.** The app has never actually run: no screen has been rendered, no video has been exported,
+no original has been deleted and no queue file has been written on a device.
 
 ## What the prescan can see
 
@@ -279,6 +284,11 @@ The list is capped at the 2,000 most recent identifiers and 60 measured bitrates
 
 ## What still needs a device
 
+The XCTest suite has left this list: the 162 cases compile and run on a macOS CI runner on every
+push to `main` (run `35852961091` at `5d72357`), which exercises the pure logic against injected
+fakes. A simulator has no real photo library, no thermal or storage pressure and no iCloud
+offload, so everything below still needs a physical iPhone.
+
 1. Confirm the scan reports sizes on a device running iOS 27, and that it degrades to counts
    with no sizes on an older system instead of failing.
 2. Confirm with the on-device measure pass that no bytes are downloaded: watch network use
@@ -312,12 +322,9 @@ The list is capped at the 2,000 most recent identifiers and 60 measured bitrates
     original, plus a final one for the remainder.
 16. Leave a batch running with the screen-awake option on and confirm the display stays on, then
     that it is released when the batch finishes or the app is backgrounded.
-17. Run the XCTest suite on a Mac with `scripts/validate-mac.sh`. The tree now holds 145 cases and
-    none has ever executed; the round 1 cases for queue boundaries, deletion receipts and
-    verification have not been compiled either.
-18. With deleting on, edit or remove a copy in Photos after a run, then confirm the original is
+17. With deleting on, edit or remove a copy in Photos after a run, then confirm the original is
     kept and the kept reason appears, because the fresh look no longer matches the receipt.
-19. Restore a queue written by an earlier build (7 through 10) and confirm none of its originals
+18. Restore a queue written by an earlier build (7 through 10) and confirm none of its originals
     can be deleted, because those records carry no receipt.
-20. Make the queue file unwritable during a run and confirm the app stops before it saves a copy or
+19. Make the queue file unwritable during a run and confirm the app stops before it saves a copy or
     asks Photos to delete anything, rather than mutating Photos without a record.

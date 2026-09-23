@@ -18,18 +18,26 @@ import AVFoundation
     static let onDeviceSizeLimit = 400
 
     private let manager = PHImageManager.default()
-    private var cancelled = false
+    /// The stop button on the scanning screen, and the scan's alone.
+    ///
+    /// `cancel()` is the scan's stop switch, and `BatchViewModel.cancelScan()` cancels the
+    /// scan's task in the same breath. A refresh runs on a task of its own and stops with that
+    /// task's cancellation, so it never sets or clears this flag. One flag shared by both meant
+    /// a refresh that began between the user's tap and the scan loop's next
+    /// `checkCancellation()` could clear the cancel and revive a scan the user had stopped.
+    private var scanCancelled = false
     private var supportsReportedSize = false
 
-    func cancel() { cancelled = true }
+    func cancel() { scanCancelled = true }
 
     func scan(progress: @escaping @MainActor (LibraryScanProgress) -> Void) async throws -> LibraryScanResult {
-        cancelled = false
+        // A new scan is the one thing that clears an earlier cancel.
+        scanCancelled = false
         supportsReportedSize = false
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
 
-        let listing = try await listEligible(progress: progress)
+        let listing = try await listEligible(progress: progress, scanOwned: true)
         var eligible = listing.assets
         var measured = 0
         var sizeSource: LibrarySizeSource = supportsReportedSize ? .reportedByPhotos : .unavailable
@@ -54,11 +62,13 @@ import AVFoundation
     /// PhotoKit to fetch an original, and it never reports a measurement it did not take. Sizes
     /// Photos itself reports come along for free.
     func refreshListing() async throws -> LibraryScanResult {
-        cancelled = false
+        // Deliberately leaves `scanCancelled` exactly as it was found. A refresh must never
+        // clear a cancel that belongs to a scan; the refresh's own cancellation is its task's,
+        // which `Task.isCancelled` reports.
         supportsReportedSize = false
         let status = PHPhotoLibrary.authorizationStatus(for: .readWrite)
         guard status == .authorized || status == .limited else { throw PipelineError.permissionDenied }
-        let listing = try await listEligible(progress: { _ in })
+        let listing = try await listEligible(progress: { _ in }, scanOwned: false)
         return LibraryScanResult(assets: listing.assets,
                                  videoCount: listing.videoCount,
                                  unsupportedCount: listing.unsupported,
@@ -82,8 +92,12 @@ import AVFoundation
     /// The metadata half of a scan: what Photos has, what each video looks like, and which ones
     /// the pipeline cannot process. Nothing here measures a size or requests media, so nothing
     /// here can download an original.
+    ///
+    /// `scanOwned` says whose stop switch this pass reads. Only the scan has one, so a refresh
+    /// passes `false` and stops on its task's cancellation alone.
     private func listEligible(
-        progress: @escaping @MainActor (LibraryScanProgress) -> Void
+        progress: @escaping @MainActor (LibraryScanProgress) -> Void,
+        scanOwned: Bool
     ) async throws -> (assets: [LibraryAsset], videoCount: Int, unsupported: Int) {
         let options = PHFetchOptions()
         options.sortDescriptors = [NSSortDescriptor(key: "creationDate", ascending: false)]
@@ -95,7 +109,7 @@ import AVFoundation
         eligible.reserveCapacity(total)
         var unsupported = 0
         for index in 0..<total {
-            try checkCancellation()
+            try checkCancellation(scanOwned: scanOwned)
             let asset = describe(fetch.object(at: index))
             if asset.isEligible { eligible.append(asset) } else { unsupported += 1 }
             if index % 32 == 31 || index == total - 1 {
@@ -103,7 +117,7 @@ import AVFoundation
                 await Task.yield()
             }
         }
-        try checkCancellation()
+        try checkCancellation(scanOwned: scanOwned)
         return (eligible, total, unsupported)
     }
 
@@ -167,7 +181,7 @@ import AVFoundation
         var measured: [String: Int64] = [:]
         progress(LibraryScanProgress(phase: .measuring, scanned: 0, total: candidates.count))
         for (index, candidate) in candidates.enumerated() {
-            try checkCancellation()
+            try checkCancellation(scanOwned: true)
             if let bytes = await onDeviceBytes(identifier: candidate.id) { measured[candidate.id] = bytes }
             progress(LibraryScanProgress(phase: .measuring, scanned: index + 1, total: candidates.count))
             await Task.yield()
@@ -204,7 +218,11 @@ import AVFoundation
         }
     }
 
-    private func checkCancellation() throws {
-        if cancelled || Task.isCancelled { throw PipelineError.cancelled }
+    /// `Task.isCancelled` stops whichever operation this is. The flag belongs to the scan: a
+    /// refresh that read it would stop for a cancel that was never meant for it, and stop for
+    /// every later refresh too, because only a new scan clears the flag.
+    private func checkCancellation(scanOwned: Bool) throws {
+        if Task.isCancelled { throw PipelineError.cancelled }
+        if scanOwned, scanCancelled { throw PipelineError.cancelled }
     }
 }

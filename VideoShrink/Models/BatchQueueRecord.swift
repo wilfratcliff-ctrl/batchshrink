@@ -38,6 +38,12 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
         /// delete is submitted. A queue written before this existed carries none, which is exactly
         /// why its originals are never deleted.
         var copyEvidence: DeletionEvidence? = nil
+        /// The sizes the run measured for the copy it was handing to Photos. Written with the
+        /// `.saving` state, because that is the moment the run knows them and Photos may already
+        /// hold the copy. It is what lets a later launch that finds that copy say what was saved
+        /// instead of leaving the user a question, and it is never read for an item that settled.
+        /// A queue written before this existed carries none, and its question simply stays open.
+        var attemptedSave: AttemptedSave? = nil
 
         var asset: LibraryAsset {
             LibraryAsset(id: identifier, creationDate: creationDate, duration: duration,
@@ -56,6 +62,55 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
         case skipped(reason: String)
         case failed(code: BatchFailureCode)
         case needsCheck
+    }
+}
+
+/// The sizes a run measured for the copy it was about to hand to Photos.
+///
+/// `Savings` is deliberately not storable, so this is the smallest shape that carries the two
+/// numbers a restored run needs to describe a copy it later finds in Photos.
+struct AttemptedSave: Codable, Equatable, Sendable {
+    var originalBytes: Int64
+    var copyBytes: Int64
+
+    init(_ savings: Savings) {
+        originalBytes = savings.originalBytes
+        copyBytes = savings.compressedBytes
+    }
+
+    var savings: Savings { Savings(originalBytes: originalBytes, compressedBytes: copyBytes) }
+}
+
+/// What a restored run worked out about a video that was mid-save when the app stopped.
+///
+/// This is the whole of the reconciliation. "Photos may have taken that copy" becomes an answer
+/// wherever the stored record and PhotoKit can give one, and stays a question wherever they
+/// cannot. Only a receipt naming the copy this app created can answer anything, and even then the
+/// answer is read from how Photos looks now: a receipt describes an earlier moment, which is
+/// exactly why it is evidence rather than proof.
+enum MidSaveFinding: Equatable, Sendable {
+    /// Photos still has the copy this run created. Nothing may save this video again.
+    case copyInPhotos
+    /// Photos has no copy this run created and the app could see the whole library, so this video
+    /// may wait again: running it cannot make a second copy.
+    case noCopyInPhotos
+    /// Neither the record nor Photos can answer the question, so it stays the user's. The text is
+    /// what to look for in Photos, in the words the interface shows.
+    case unresolved(question: String)
+
+    /// The question left open when neither the record nor Photos can narrow it, or when the app
+    /// can see only part of the library for reasons of its own.
+    static let unknownQuestion = "BatchShrink stopped while Photos was taking a copy of this video. Look in Photos: if there are two copies, that copy was made; if there is one, it wasn't."
+    /// The same question when access covers part of the library, which makes a copy the app cannot
+    /// see no evidence at all that it was never written.
+    static let limitedAccessQuestion = "Photos access covers only some of your library, so BatchShrink cannot tell whether this video was copied. Look in Photos before running it again."
+
+    /// Whether this finding rules out running the video again.
+    var forbidsAnotherSave: Bool {
+        switch self {
+        case .copyInPhotos: return true
+        case .noCopyInPhotos, .unresolved: return false
+        }
     }
 }
 
@@ -145,6 +200,40 @@ enum BatchQueueReconciliation {
             return .saved(Savings(originalBytes: original, compressedBytes: copy))
         case .skipped(let reason): return .skipped(reason)
         case .failed(let code): return .failed(code.error)
+        }
+    }
+
+    /// Turns the copy identity a record kept, plus a fresh look at Photos, into an answer.
+    ///
+    /// The three answers are deliberately not symmetrical. Anything that shows the recorded copy
+    /// is in the library means a copy exists, and a video that may already have been copied must
+    /// never be copied again. "No copy" is only given with the whole library in view: under
+    /// limited access an asset can be invisible rather than gone, and reading that as absence is
+    /// the one answer that could lead to a second copy. Everything else stays a question.
+    static func midSaveFinding(receipt: DeletionEvidence?,
+                               lookup: CopyRevalidation?,
+                               wholeLibraryVisible: Bool) -> MidSaveFinding {
+        // A receipt from an older algorithm, or one with no copy in it, names nothing that can be
+        // looked up. What Photos says about it cannot be trusted either: the service reports an
+        // unusable receipt exactly as it reports a missing copy.
+        guard let receipt, receipt.verifiedCopyIdentifier != nil else {
+            return .unresolved(question: MidSaveFinding.unknownQuestion)
+        }
+        guard let lookup else {
+            return .unresolved(question: MidSaveFinding.unknownQuestion)
+        }
+        switch lookup {
+        // The copy is there. `.copyChanged` still means an asset with that identifier exists, and
+        // the two source cases can only be reached once the copy itself has matched.
+        case .matches, .copyChanged, .sourceMissing, .sourceChanged:
+            return .copyInPhotos
+        case .copyMissing:
+            guard wholeLibraryVisible else {
+                return .unresolved(question: MidSaveFinding.limitedAccessQuestion)
+            }
+            return .noCopyInPhotos
+        case .accessDenied, .unavailable:
+            return .unresolved(question: MidSaveFinding.unknownQuestion)
         }
     }
 }

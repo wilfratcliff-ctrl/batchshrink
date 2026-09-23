@@ -15,7 +15,19 @@ actor VideoVerificationService: VideoVerifying {
     /// hold a frame, so the policy below leaves that window out instead of guessing at it.
     static let minimumSampleWindow: Double = 0.05
 
+    /// Reads an original this run is about to process. An original whose format cannot be
+    /// preserved is refused here rather than exported: this is the first point in a run where
+    /// the media itself can be read, and the only point where the codec subtype and the colour
+    /// tags exist at all.
     func inspect(_ url: URL) async throws -> VideoMetadata {
+        try await readMetadata(url, refusingUnsupportedFormats: true)
+    }
+
+    /// The one read both entry points share. Only the original is refused: a copy this app made
+    /// is checked against what the export measured, and the read-back pass has its own error for
+    /// a copy that does not match. `refusingUnsupportedFormats` is false there so a Photos-created
+    /// copy cannot be reported with wording that talks about the user's original.
+    private func readMetadata(_ url: URL, refusingUnsupportedFormats: Bool) async throws -> VideoMetadata {
         try Task.checkCancellation()
         let values = try url.resourceValues(forKeys: [.fileSizeKey, .isRegularFileKey])
         guard values.isRegularFile == true, let size = values.fileSize, size > 0 else { throw PipelineError.verification }
@@ -33,12 +45,21 @@ actor VideoVerificationService: VideoVerifying {
               abs(rect.width) < 100_000, abs(rect.height) < 100_000 else { throw PipelineError.unsupported }
         let formats = try await video.load(.formatDescriptions)
         let frameRate = try await video.load(.nominalFrameRate)
+        // Both facts below are decided from the media. PhotoKit reports neither one, which is
+        // why the library steps leave them alone and this layer has to decide them.
+        let declared = Self.transferFunction(of: formats)
+        let proRes = formats.contains { Self.isProRes(subtype: CMFormatDescriptionGetMediaSubType($0)) }
+        if refusingUnsupportedFormats,
+           let refusal = Self.unsupportedFormatRefusal(isHDR: declared.isHDR, isProRes: proRes) {
+            throw refusal
+        }
         return VideoMetadata(duration: duration, width: Int(abs(rect.width).rounded()),
                              height: Int(abs(rect.height).rounded()), bytes: Int64(size),
                              fileType: url.pathExtension.isEmpty ? "Unknown container" : url.pathExtension.uppercased(),
                              audioTrackCount: audios.count, isPlayable: playable,
                              codec: Self.codec(of: formats),
-                             nominalFrameRate: Double(frameRate))
+                             nominalFrameRate: Double(frameRate),
+                             transferFunction: declared, isProRes: proRes)
     }
 
     /// Verifies an export this run produced, compared with the original it came from.
@@ -65,7 +86,7 @@ actor VideoVerificationService: VideoVerifying {
     private func verifyCopy(at url: URL, against expected: VideoMetadata,
                             expecting codec: VideoCodec?) async throws -> VideoMetadata {
         guard FileManager.default.fileExists(atPath: url.path) else { throw PipelineError.verification }
-        let observed = try await inspect(url)
+        let observed = try await readMetadata(url, refusingUnsupportedFormats: false)
         try Self.validate(expected: expected, observed: observed, expecting: codec)
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw PipelineError.verification }
@@ -195,5 +216,71 @@ actor VideoVerificationService: VideoVerifying {
         if subtypes.allSatisfy({ $0 == kCMVideoCodecType_HEVC }) { return .hevc }
         if subtypes.allSatisfy({ $0 == kCMVideoCodecType_H264 }) { return .h264 }
         return .other
+    }
+
+    /// The transfer function a track's format descriptions declare.
+    ///
+    /// Every description in one track agrees in practice. An HDR curve anywhere among them wins,
+    /// because assuming "ordinary" here is the mistake that would export a video this app cannot
+    /// preserve, and a declaration this app cannot name is reported as `.unknown` rather than
+    /// being read either way.
+    static func transferFunction(of formats: [CMFormatDescription]) -> TransferFunction {
+        let declared = formats.map { format in
+            transferFunction(declaredBy: declaredValue(in: format,
+                                                       for: kCMFormatDescriptionExtension_TransferFunction))
+        }
+        if let hdr = declared.first(where: { $0.isHDR }) { return hdr }
+        return declared.first(where: { $0 != .unknown }) ?? .unknown
+    }
+
+    /// The transfer function one declared value names.
+    ///
+    /// The two high-dynamic-range values are Apple's own constants, compared by name so the rule
+    /// cannot drift from a string typed out by hand. Note the spelling: the perceptual quantiser
+    /// curve is `kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ`. There is no constant
+    /// called `kCMFormatDescriptionTransferFunction_ITU_R_2100_PQ`, so writing PQ that way is a
+    /// compile error rather than a missed rule. Anything else a file can declare - a curve this
+    /// app can export with, or a value it has never seen - is treated as ordinary, which is the
+    /// distinction this check acts on and the only one. ITU-R BT.2020 primaries are deliberately
+    /// not a reason to refuse: that is a colour gamut, not a curve, and CoreMedia documents it as
+    /// semantically equivalent to BT.709.
+    static func transferFunction(declaredBy value: Any?) -> TransferFunction {
+        // Two steps on purpose: the extension arrives as a `CFPropertyList`, which becomes an
+        // `Any`, and the cast away from `Any` is the one that can fail.
+        guard let declared = value, let value = declared as? String else { return .unknown }
+        if value == kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String { return .pq }
+        if value == kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String { return .hlg }
+        return .sdr
+    }
+
+    /// True for every ProRes subtype Apple declares: the six ordinary ones and the two RAW ones,
+    /// which are ProRes too and which no preset this app exports with reproduces. Compared by
+    /// name for the same reason as above: a fourCC written out as an integer would keep compiling
+    /// after it was wrong.
+    static func isProRes(subtype: CMVideoCodecType) -> Bool {
+        subtype == kCMVideoCodecType_AppleProRes422
+            || subtype == kCMVideoCodecType_AppleProRes422HQ
+            || subtype == kCMVideoCodecType_AppleProRes422LT
+            || subtype == kCMVideoCodecType_AppleProRes422Proxy
+            || subtype == kCMVideoCodecType_AppleProRes4444
+            || subtype == kCMVideoCodecType_AppleProRes4444XQ
+            || subtype == kCMVideoCodecType_AppleProResRAW
+            || subtype == kCMVideoCodecType_AppleProResRAWHQ
+    }
+
+    /// The refusal an original with these format facts gets, or nil when it is ordinary.
+    ///
+    /// The words come from `AssetRules`, so this layer cannot invent a second sentence for the
+    /// same video. Pure, so every branch is exercisable without a media fixture.
+    static func unsupportedFormatRefusal(isHDR: Bool, isProRes: Bool) -> UnsupportedOriginalError? {
+        guard let reason = AssetRules.unsupportedFormatReason(isHDR: isHDR, isProRes: isProRes) else {
+            return nil
+        }
+        return UnsupportedOriginalError(reason: reason)
+    }
+
+    /// One declared format-description extension, or nil when the media omits it.
+    private static func declaredValue(in format: CMFormatDescription, for key: CFString) -> Any? {
+        CMFormatDescriptionGetExtension(format, extensionKey: key)
     }
 }

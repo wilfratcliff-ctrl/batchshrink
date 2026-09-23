@@ -22,12 +22,15 @@ struct BatchStartScreen: View {
                 }
                 ShrinkIllustration()
                 HStack(alignment: .top, spacing: 16) {
+                    // Decorative: the heading beside it already names the card.
                     Image(systemName: "square.stack.3d.up.fill")
                         .font(.title2).foregroundStyle(ShrinkStyle.lilac)
                         .frame(width: 44, height: 44)
                         .background(ShrinkStyle.lilac.opacity(0.10), in: RoundedRectangle(cornerRadius: 14))
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 5) {
                         Text("Start with your video library").font(.headline)
+                            .fixedSize(horizontal: false, vertical: true)
                         Text("See sizes and potential savings before you choose what to shrink.")
                             .font(.subheadline).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -226,6 +229,8 @@ struct BatchSummaryScreen: View {
             }
         }
         .padding(24).shrinkCard()
+        // The estimate restates itself when the size changes. Reduce Motion swaps the figures
+        // outright, which is the whole of what this animation carries.
         .animation(reduceMotion ? nil : .snappy(duration: 0.28), value: batch.settings.resolution)
     }
 
@@ -284,9 +289,11 @@ struct BatchSelectionScreen: View {
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 6) {
                         Text("Make room.").font(ShrinkStyle.headline).tracking(-1)
+                            .fixedSize(horizontal: false, vertical: true)
                             .accessibilityAddTraits(.isHeader)
                         Text("\(batch.eligibleAssets.count) videos to explore")
                             .font(.subheadline).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     Spacer(minLength: 8)
                     Menu {
@@ -300,6 +307,7 @@ struct BatchSelectionScreen: View {
                             .background(ShrinkStyle.surface, in: Capsule())
                     }
                     .accessibilityLabel("Sort videos, \(sort.rawValue)")
+                    .accessibilityHint("Chooses the order the videos appear in.")
                 }
                 QualityRow(settings: batch.settings, open: openQuality)
                 LazyVGrid(columns: columns, spacing: 14) {
@@ -330,6 +338,7 @@ struct BatchSelectionScreen: View {
                     Image(systemName: "checklist").frame(minWidth: 44, minHeight: 44)
                 }
                 .accessibilityLabel("Selection options")
+                .accessibilityHint("Select all, select likely to shrink, or clear the selection.")
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) { actionBar }
@@ -392,6 +401,19 @@ struct BatchSelectionScreen: View {
         // that explains the row.
         let madeByApp = batch.createdCopyIdentifiers.contains(asset.id)
         let estimate = batch.savings(for: asset)
+        // VoiceOver cannot see the lilac captions below, so the row's label repeats every fact
+        // the card shows in words, choosing between the three in the same order the card does.
+        var spoken = [rowLabel(asset)]
+        if madeByApp {
+            spoken.append("made by BatchShrink")
+        } else if alreadyShrunk {
+            spoken.append("previously shrunk")
+        } else if let estimate {
+            spoken.append(estimate.likelyShrinks
+                          ? "estimated \(ShrinkFormat.bytes(estimate.conservativeBytes)) smaller"
+                          : "little saving expected")
+        }
+        spoken.append(isSelected ? "selected" : "not selected")
         return VStack(alignment: .leading, spacing: 0) {
             Button { previewing = asset } label: {
                 GeometryReader { geometry in
@@ -439,7 +461,7 @@ struct BatchSelectionScreen: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("\(rowLabel(asset)), \(isSelected ? "selected" : "not selected")")
+            .accessibilityLabel(spoken.joined(separator: ", "))
             .accessibilityAddTraits(isSelected ? [.isSelected] : [])
             .accessibilityHint(isSelected ? "Remove from this batch." : "Add to this batch.")
         }
@@ -456,12 +478,6 @@ struct BatchSelectionScreen: View {
     private func rowLabel(_ asset: LibraryAsset) -> String {
         let size = asset.bytes.map(ShrinkFormat.bytes) ?? "size not reported"
         return "\(ShrinkFormat.date(asset.creationDate)), \(ShrinkFormat.duration(asset.duration)), \(size)"
-    }
-
-    private func detail(_ asset: LibraryAsset) -> String {
-        let size = asset.bytes.map(ShrinkFormat.bytes) ?? "Size not reported"
-        let shape = asset.longEdge > 0 ? " · \(asset.pixelWidth)×\(asset.pixelHeight)" : ""
-        return "\(size)\(shape)"
     }
 }
 
@@ -624,6 +640,8 @@ struct BatchProcessingScreen: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(24).shrinkCard()
         .accessibilityElement(children: .combine)
+        // The running total counts up as copies finish. Reduce Motion shows each new figure with
+        // no count, and the combined element reads the value either way.
         .animation(reduceMotion ? nil : .snappy(duration: 0.3), value: batch.summary.copyBytes)
     }
 
@@ -657,6 +675,7 @@ struct BatchFinishedRow: View {
             VStack(alignment: .leading, spacing: 3) {
                 Text(ShrinkFormat.date(item.asset.creationDate))
                     .font(.subheadline.weight(.medium))
+                    .fixedSize(horizontal: false, vertical: true)
                 Text(detail).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -665,8 +684,11 @@ struct BatchFinishedRow: View {
                 Text("-\(ShrinkFormat.bytes(saving.bytesSaved))")
                     .font(.footnote.weight(.semibold)).monospacedDigit()
                     .foregroundStyle(ShrinkStyle.accent)
+                    // Spoken, "-1.4 GB" reads as a subtraction. The label names the saving.
+                    .accessibilityLabel("\(ShrinkFormat.bytes(saving.bytesSaved)) saved")
             } else {
-                Image(systemName: symbol).foregroundStyle(tint)
+                // The symbol only repeats the state `detail` already spells out in words.
+                Image(systemName: symbol).foregroundStyle(tint).accessibilityHidden(true)
             }
         }
         .accessibilityElement(children: .combine)

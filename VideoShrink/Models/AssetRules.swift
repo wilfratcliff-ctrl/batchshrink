@@ -44,4 +44,19 @@ enum AssetRules {
         if traits.isSharedOrRestricted { return "Shared or restricted videos aren’t supported yet." }
         return nil
     }
+
+    /// Returns the same reason for the two traits that only the media itself can decide.
+    ///
+    /// A ProRes fourCC and an HDR transfer function do not appear in any PhotoKit listing, so
+    /// the library steps cannot fill them in. They become readable once the original is on disk
+    /// and its format descriptions can be read, which is a different layer and a different
+    /// moment in a run. Both layers come back here for their words, so a video refused while the
+    /// library was listed reads exactly like one refused once its format was read, and there is
+    /// still one place where these sentences change.
+    static func unsupportedFormatReason(isHDR: Bool, isProRes: Bool) -> String? {
+        var traits = Traits()
+        traits.isHDR = isHDR
+        traits.isProRes = isProRes
+        return unsupportedReason(traits)
+    }
 }

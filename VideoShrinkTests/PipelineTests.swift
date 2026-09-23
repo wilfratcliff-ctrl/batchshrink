@@ -1,5 +1,7 @@
 import XCTest
 import AVFoundation
+import CoreMedia
+import CoreVideo
 import Combine
 @testable import VideoShrink
 
@@ -263,6 +265,116 @@ import Combine
                 matching: metadata())
             XCTFail("A copy that cannot be read must never pass read-back verification")
         } catch { XCTAssertEqual(error as? PipelineError, .verification) }
+    }
+
+    // MARK: - Formats only the media itself can decide (N12)
+
+    // A ProRes subtype and an HDR transfer function appear in no PhotoKit listing, so both are
+    // decided once the original can be read. The first three cases below drive that decision; the
+    // fourth drives it through a real `CMFormatDescription`, which is as close to an original as
+    // a machine with no media file can get.
+
+    /// Failures before this change: every one of them, because nothing could set either trait.
+    /// `AssetRules` refusal is read out of the rules table rather than restated, so an HDR
+    /// original reads the same here as it does on the screening screen.
+    func testAHDRTransferFunctionIsRefusedInTheRulesOwnWords() {
+        XCTAssertEqual(VideoVerificationService.transferFunction(
+            declaredBy: kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String), .hlg)
+        XCTAssertEqual(VideoVerificationService.transferFunction(
+            declaredBy: kCMFormatDescriptionTransferFunction_SMPTE_ST_2084_PQ as String), .pq)
+        XCTAssertEqual(VideoVerificationService.transferFunction(
+            declaredBy: kCVImageBufferTransferFunction_SMPTE_ST_2084_PQ as String), .pq,
+                       "The image-buffer attachment and the format description carry one value")
+        XCTAssertTrue(TransferFunction.hlg.isHDR)
+        XCTAssertTrue(TransferFunction.pq.isHDR)
+
+        let wording = AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true))
+        let refusal = VideoVerificationService.unsupportedFormatRefusal(isHDR: true, isProRes: false)
+        XCTAssertNotNil(wording)
+        XCTAssertEqual(refusal?.reason, wording)
+        XCTAssertEqual(refusal?.errorDescription, wording,
+                       "An HDR original must be refused in the words the library already shows")
+    }
+
+    func testAProResSubtypeIsRefusedInTheRulesOwnWords() {
+        for subtype in [kCMVideoCodecType_AppleProRes422, kCMVideoCodecType_AppleProRes422HQ,
+                        kCMVideoCodecType_AppleProRes422LT, kCMVideoCodecType_AppleProRes422Proxy,
+                        kCMVideoCodecType_AppleProRes4444, kCMVideoCodecType_AppleProRes4444XQ,
+                        kCMVideoCodecType_AppleProResRAW, kCMVideoCodecType_AppleProResRAWHQ] {
+            XCTAssertTrue(VideoVerificationService.isProRes(subtype: subtype),
+                          "Every ProRes subtype Apple declares must be refused")
+        }
+
+        let refusal = VideoVerificationService.unsupportedFormatRefusal(isHDR: false, isProRes: true)
+        XCTAssertEqual(refusal?.errorDescription,
+                       AssetRules.unsupportedReason(AssetRules.Traits(isProRes: true)),
+                       "A ProRes original must be refused in the words the library already shows")
+    }
+
+    func testAnOrdinarySDRVideoIsNotRefused() {
+        XCTAssertNil(VideoVerificationService.unsupportedFormatRefusal(isHDR: false, isProRes: false))
+        XCTAssertEqual(VideoVerificationService.transferFunction(declaredBy: nil), .unknown)
+        XCTAssertEqual(VideoVerificationService.transferFunction(declaredBy: "not a transfer function"),
+                       .unknown,
+                       "A value this app has never seen is not a reason to refuse the whole library")
+        XCTAssertEqual(VideoVerificationService.transferFunction(
+            declaredBy: kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String), .sdr)
+        XCTAssertFalse(TransferFunction.sdr.isHDR)
+        XCTAssertFalse(TransferFunction.unknown.isHDR)
+        for subtype in [kCMVideoCodecType_H264, kCMVideoCodecType_HEVC] {
+            XCTAssertFalse(VideoVerificationService.isProRes(subtype: subtype))
+        }
+
+        let ordinary = metadata()
+        XCTAssertFalse(ordinary.isHDR)
+        XCTAssertFalse(ordinary.isProRes)
+        XCTAssertEqual(ordinary.transferFunction, .unknown)
+    }
+
+    /// The two facts as a real format description carries them. Building a description is not
+    /// building a media file, so this proves the symbols and the documented extension key line up
+    /// with Apple's, and nothing about what a device reports.
+    func testTheFormatFactsAreReadFromARealFormatDescription() throws {
+        let hdr = try formatDescription(codecType: kCMVideoCodecType_HEVC,
+                                        declaring: kCMFormatDescriptionTransferFunction_ITU_R_2100_HLG as String)
+        XCTAssertEqual(VideoVerificationService.transferFunction(of: [hdr]), .hlg,
+                       "The reader must find the transfer function through Apple's documented key")
+        XCTAssertEqual(VideoVerificationService.unsupportedFormatRefusal(
+            isHDR: VideoVerificationService.transferFunction(of: [hdr]).isHDR, isProRes: false)?.reason,
+                       AssetRules.unsupportedReason(AssetRules.Traits(isHDR: true)))
+
+        let proRes = try formatDescription(codecType: kCMVideoCodecType_AppleProRes4444)
+        XCTAssertTrue(VideoVerificationService.isProRes(
+            subtype: CMFormatDescriptionGetMediaSubType(proRes)))
+        XCTAssertFalse(VideoVerificationService.isProRes(
+            subtype: CMFormatDescriptionGetMediaSubType(hdr)),
+                       "An HDR HEVC original is not ProRes")
+
+        let ordinary = try formatDescription(codecType: kCMVideoCodecType_H264,
+                                             declaring: kCMFormatDescriptionTransferFunction_ITU_R_709_2 as String)
+        XCTAssertEqual(VideoVerificationService.transferFunction(of: [ordinary]), .sdr)
+        XCTAssertNil(VideoVerificationService.unsupportedFormatRefusal(
+            isHDR: VideoVerificationService.transferFunction(of: [ordinary]).isHDR,
+            isProRes: VideoVerificationService.isProRes(
+                subtype: CMFormatDescriptionGetMediaSubType(ordinary))))
+    }
+
+    /// A real `CMFormatDescription`, made with the API CoreMedia itself uses, so the subtype and
+    /// the colour tag are read off a genuine description rather than off a dictionary this test
+    /// wrote. `declaring` is the value of the documented transfer-function extension.
+    private func formatDescription(codecType: CMVideoCodecType,
+                                   declaring transferFunction: String? = nil) throws -> CMFormatDescription {
+        var extensions: [String: Any] = [:]
+        if let transferFunction {
+            extensions[kCMFormatDescriptionExtension_TransferFunction as String] = transferFunction
+        }
+        var created: CMFormatDescription?
+        // Argument order is CoreMedia's: allocator, codecType, width, height, extensions, out.
+        let status = CMVideoFormatDescriptionCreate(allocator: nil, codecType: codecType,
+                                                   width: 1920, height: 1080,
+                                                   extensions: extensions as CFDictionary,
+                                                   formatDescriptionOut: &created)
+        return try XCTUnwrap(created, "CMVideoFormatDescriptionCreate returned status \(status)")
     }
 
     private func choose(_ fixture: Fixture) async {

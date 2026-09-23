@@ -1,13 +1,51 @@
 # Validation record
 
 Every entry below is one of three things, and says which: **historical** (a past build or a past
-decision), **implemented source** (in the tree, never compiled), or **observed** (it ran, with the
-evidence named). See the status legend in [README.md](../README.md).
+decision), **implemented source** (in the tree; compiled by CI since 2026-09-23, but never run), or
+**observed** (it ran, with the evidence named). See the status legend in
+[README.md](../README.md).
 
-## September 23: round 2 and the Mac handoff (implemented source at 65d6a09, never compiled)
+## September 23: the test suite compiles and passes in CI (observed at 5d72357)
+
+This is the first entry in this record that is **observed** rather than implemented source. The
+XCTest suite did not merely compile: it ran, and it passed.
+
+- **Observed.** CI run `35852961091` on commit `5d72357` printed `** TEST BUILD SUCCEEDED **` and
+  `===== VIDEOSHRINK TEST RUN ===== PASSED` with
+  `Executed 162 tests, with 0 failures (0 unexpected)`. The job is
+  `.github/workflows/ios-tests.yml`, which runs the same `scripts/verify-native-tests.mjs` the EAS
+  `verify-tests` profile runs, on a free macOS runner. It generates `VideoShrink.xcodeproj` from
+  `project.yml` with XcodeGen, compiles the app target and the test target, and executes the cases
+  on an iPhone simulator.
+- **Observed, and new.** That job compiles the standalone Xcode project, including
+  `VideoShrink/VideoShrinkApp.swift` and the resource bundle, so those are no longer uncompiled
+  source. The earlier EAS builds compiled only the Swift under
+  `modules/videoshrink-native/ios/`, which is the pod's copy of the app's own Swift.
+- **Historical.** The builds that lead here. EAS build `9f83392c` on commit `082537a`, profile
+  `development-simulator`, finished and produced an artifact: that is the first evidence that the
+  round 1 to 3 Swift core compiles. The `verify-tests` profile then found the test target's two
+  argument-order errors in `DeletionPolicyTests.swift`; after that fix the test target compiled.
+  Its first run executed all 162 cases with 7 failures; commits `7c11f26` and `5d72357` addressed
+  them, and the run above is the result. The earlier builds and their evidence stay listed further
+  down this file.
+- Verification is now free and automatic rather than rationed. The EAS account's free-plan iOS
+  build minutes are exhausted until 1 October 2026, so EAS is now only for builds that install on
+  a device; the CI job spends none of those minutes and runs on every push to `main`.
+- **Still NOT RUN, unchanged and not softened.** The app itself has never run. No screen has been
+  rendered, no video has been exported, no original has been deleted and no queue file has been
+  written on a device. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is still entirely unexecuted. Build 10
+  is still the last build known to have reached testers. A green suite exercises the app's pure
+  logic against injected fakes and says nothing about PhotoKit, AVFoundation, thermal state, HDR,
+  interruptions or iCloud.
+- At the time of writing, branch `main` is at `5d72357` and the working tree carries uncommitted
+  edits from the next round, which are unverified until they are pushed and CI is green.
+
+## September 23: round 2 and the Mac handoff (implemented source at 65d6a09; compiled and tested later, see the entry above)
 
 This entry records round 2 as it landed at commit `65d6a09`, and the handoff document written for
-the first Mac session. Neither has been compiled or executed.
+the first Mac session. Neither was compiled or executed at the time. The code described here
+later became part of the tree at `5d72357`, which CI compiles and whose tests pass (see the entry
+above); the handoff document itself is still an unexecuted set of instructions.
 
 - Round 2 is in the tree at `65d6a09`: `BatchViewModel` constructs and starts the `LibraryChangeMonitor`
   and applies a metadata-only reconciliation on each report (N1), `ThumbnailService.invalidate(identifiers:)`
@@ -18,12 +56,14 @@ the first Mac session. Neither has been compiled or executed.
   a deliberate workaround (N7, N8).
 - `LibraryReconciling` is still a cast: `BatchViewModel` holds `any LibraryScanning` and does
   `scanner as? LibraryReconciling`. The real service conforms; the scanner test mocks do not, so the
-  cast yields nil in tests and the reconciliation path is covered by no case.
-- No Swift has been compiled. XCTest cases remain at 145 and zero have executed. Portable checks after
-  round 2: `npm run validate:native` passes (37 app Swift files, 145 XCTest cases present, icon/JSON
-  valid), `npm run typecheck` passes, and `node scripts/sync-native-sources.mjs --check` passes
-  (36 Swift source files and the privacy manifest). Those are pattern scans and a TypeScript check,
-  not a compiler.
+  cast yields nil in tests and the reconciliation path is covered by no case. Round 3 later removed
+  the workaround and added tests for the wiring (N7 and N8).
+- At that commit no Swift had been compiled and no XCTest case had executed, and the tree held 145
+  cases. Both changed later: the same code is in the tree at `5d72357`, where 162 cases compile and
+  pass (entry above). Portable checks after round 2: `npm run validate:native` passes (37 app Swift
+  files, 145 XCTest cases present, icon/JSON valid), `npm run typecheck` passes, and
+  `node scripts/sync-native-sources.mjs --check` passes (36 Swift source files and the privacy
+  manifest). Those are pattern scans and a TypeScript check, not a compiler.
 - `docs/MAC_VALIDATION_HANDOFF.md` was written for the first Mac session. That assumed a Mac with
   Xcode, and the owner uses Expo only and does not own a Mac, so the document could not be run. It
   has been replaced by `docs/VERIFICATION_HANDOFF.md`, which routes verification through an EAS cloud
@@ -31,16 +71,19 @@ the first Mac session. Neither has been compiled or executed.
   compiles and what it does not, gives the exact commands for each profile in `eas.json`, keeps the
   ranked list of things a round said it could not compile-check, and keeps the symptom-to-file-to-commit
   triage table for `10ab65f`, `559f693`, `65d6a09` and `dcd0695`. It claims no result.
-- **NOT RUN**: compilation, XCTest execution, simulator, any build, any device run, deletion against a
-  real library, the queue-failure paths on a device, and the new revalidation lookups.
+- **At that commit, NOT RUN**: compilation, XCTest execution, simulator, any build, any device run,
+  deletion against a real library, the queue-failure paths on a device, and the new revalidation
+  lookups. Compilation and the XCTest suite have since been observed (entry above); every device
+  item in this list has not.
 
-## September 23: round 1 reliability work (implemented source at 559f693, never compiled)
+## September 23: round 1 reliability work (implemented source at 559f693; compiled and tested later, see the entry above)
 
 This entry records round 1 as it landed at commit `559f693`. Later round 2 work is recorded by the
 loop in `AGENT_LOOP.md` and is not described here.
 
 - P0-1, P0-2 and P0-3 from `DEVELOPMENT_REVIEW.md`, plus the `LibraryChangeMonitor` mechanism, are
-  in the tree at commit `559f693`. None of it has been compiled and no XCTest case has run.
+  in the tree at commit `559f693`. At that point none of it had been compiled and no XCTest case
+  had run; the same code is in the tree at `5d72357` today, compiled, with the suite passing.
 - `BatchViewModel` now reports whether each queue write reached disk, and a checkpoint that fails
   stops the run before it submits a Photos mutation: before a save, before a delete transaction,
   and before work starts on a video. A copy Photos has already accepted is never put back on the
@@ -60,11 +103,14 @@ loop in `AGENT_LOOP.md` and is not described here.
   dead code because no caller passed the new evidence in. An integration pass rewired the receipt
   from read-back through the persisted queue into the gate, and the old unrevalidated delete call
   now has no caller. A change that strict needs device validation before it is trusted.
-- XCTest cases went from 102 to 145. None has ever executed. Portable checks after round 1:
+- XCTest cases went from 102 to 145 at this commit, and none had executed. (The suite is 162 cases
+  now and passes in CI; see the entry above.) Portable checks after round 1:
   `npm run validate:native` passes (37 application Swift files, 145 XCTest cases present) and
   `npm run typecheck` passes. Those are pattern scans, not a compiler.
-- **NOT RUN**: compilation, XCTest execution, simulator, any build, any device run, deletion
-  against a real library, the queue-failure paths on a device, and the new revalidation lookups.
+- **At that commit, NOT RUN**: compilation, XCTest execution, simulator, any build, any device run,
+  deletion against a real library, the queue-failure paths on a device, and the new revalidation
+  lookups. Compilation and the XCTest suite have since been observed (entry above); every device
+  item in this list has not.
 
 ## September 21: selection previews and a clarity pass (historical: compiled into production build 10)
 
@@ -225,7 +271,10 @@ loop in `AGENT_LOOP.md` and is not described here.
 - Privacy manifest XML and synchronized-source checks passed. Calculated fixed-token contrast: white on primary button 8.51:1; light accent on canvas 7.40:1; dark accent on canvas 12.11:1. These calculations do not replace an accessibility audit of the rendered interface.
 - Supplied six deterministic SwiftUI previews. Visual rendering, accessibility behavior and haptics still require Xcode/device review; no simulator is available on Windows.
 
-The sections below record the earlier September 17 setup and its limitations at that time.
+The sections below record the earlier September 17 setup and its limitations at that time. Their
+"not available" lists describe that Windows-only environment, not the present one: compilation
+and XCTest execution are now covered by CI (see the entry at the top of this file), while every
+device and simulator-app behaviour they list remains unproven.
 
 Environment: Windows 10.0.26200, PowerShell, Node.js v24.21.0, Git 2.55.0.windows.3. Date: 2026-09-17.
 
