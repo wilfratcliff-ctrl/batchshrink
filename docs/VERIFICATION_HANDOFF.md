@@ -99,9 +99,9 @@ Swift in that mirror compiled for the target it was built for.
 
 - **The test target.** `VideoShrinkTests/` holds 162 XCTest cases, and no ordinary EAS build
   compiles or runs them: the pod glob above does not reach `VideoShrinkTests/`, and the
-  standalone project is not part of the Expo build. Zero of the 162 cases have ever been
-  compiled or executed. The opt-in `verify-tests` profile in section 6 compiles the test
-  target, and that is all it does; it still does not run a single test.
+  standalone project is not part of the Expo build. The opt-in `verify-tests` profile in
+  section 6 is the one exception: it compiles the test target and then runs it on a simulator
+  when the builder has one. Every other profile does neither.
 - **`VideoShrink/VideoShrinkApp.swift` and the standalone Xcode project.** The standalone
   XcodeGen app is not what EAS builds. `VideoShrinkApp.swift` is not inside the pod glob and is
   not compiled by an EAS build.
@@ -153,8 +153,8 @@ device). Nothing here is a prediction that it fails.
 
 ### 2. The three `PhotoLibraryServing` requirements
 
-- **Where:** the EAS build log (the app conformer); the test fakes matter only to the CI run in
-  section 6.
+- **Where:** the EAS build log (the app conformer); the test fakes matter only to the opt-in
+  test-target step in section 6.
 - Files: `VideoShrink/Services/ServiceProtocols.swift` (protocol `PhotoLibraryServing`),
   `VideoShrink/Services/PhotoLibraryService.swift` (the app conformer).
 - Symptom: `type 'X' does not conform to protocol 'PhotoLibraryServing'`.
@@ -167,7 +167,7 @@ device). Nothing here is a prediction that it fails.
 ### 3. Round 3: `LibraryScanning` gained two real requirements
 
 - **Where:** the EAS build log for the app conformer; the test mocks failed here in practice and
-  are caught by the CI run in section 6, not by EAS.
+  are caught by the opt-in test-target step in section 6, not by an ordinary EAS build.
 - Files: `VideoShrink/Services/ServiceProtocols.swift` (protocol `LibraryScanning`),
   `VideoShrink/Services/PhotoLibraryScanService.swift` (the conformer),
   `VideoShrink/Presentation/BatchViewModel.swift` (the caller).
@@ -181,7 +181,8 @@ device). Nothing here is a prediction that it fails.
   were missing the new requirements and were a hard compile failure in the test target, fixed by
   the parent. The app conformer reads as satisfied.
 - Fix: forward. Add the missing requirement to the conformer. A test-mock-only miss is not
-  visible to EAS and is found by the CI test run instead.
+  visible to an ordinary EAS build and is found by the opt-in test-target step or the CI test
+  run instead.
 
 ### 4. `DeletionEvidence`'s custom `init(from:)` alongside Codable
 
@@ -297,10 +298,10 @@ touched.
 
 ## 6. Running the 162 tests without a Mac
 
-No ordinary EAS build compiles or runs `VideoShrinkTests/`, so the 162 XCTest cases cannot be
-executed through EAS (the opt-in `verify-tests` profile below compiles the target and stops
-there; it does not run it). The honest route without a Mac is a macOS CI runner, for example
-GitHub Actions, which can run the same two commands a Mac would:
+No ordinary EAS build compiles or runs `VideoShrinkTests/`. The opt-in `verify-tests` profile
+below compiles the target and then runs it on a simulator discovered on the builder, so the EAS
+route can execute the 162 cases. A macOS CI runner, for example GitHub Actions, remains an
+alternative, and it runs the same two commands a Mac would:
 
 ```
 xcodegen generate
@@ -317,15 +318,16 @@ Two things to be plain about:
 - **This is not in place.** It requires a Git remote, and this repository currently has none
   (`git remote -v` prints nothing). No CI runner, workflow file or remote exists. Setting one up
   is a decision for the owner, not something this document has done.
-- **It is the only route that executes the tests.** A simulator build under EAS proves the core
-  compiles; it does not run a single test body. Until a macOS runner exists, the count of
-  executed XCTest cases is zero.
+- **It is no longer the only route that executes the tests, but it is the more reproducible
+  one.** The `verify-tests` profile below also executes them, on whatever simulator the EAS
+  builder happens to have. A macOS runner has a fixed, observable environment, which makes a
+  failing test easier to reproduce.
 
-### Compiling the test target on the EAS builder (opt-in)
+### Compiling and running the test target on the EAS builder (opt-in)
 
-The EAS builder is a macOS machine with Xcode, so it can also run `xcodegen` and `xcodebuild`
-against the standalone project. `scripts/verify-native-tests.mjs` uses that to compile the test
-target, and the new `verify-tests` profile turns it on:
+The EAS builder is a macOS machine with Xcode, so it can also run `xcodegen`, `xcodebuild` and
+`xcrun simctl` against the standalone project. `scripts/verify-native-tests.mjs` uses that to
+compile the test target and then run it, and the `verify-tests` profile turns it on:
 
 ```
 npx eas-cli build --platform ios --profile verify-tests
@@ -335,6 +337,8 @@ npx eas-cli build --platform ios --profile verify-tests
 Apple signing credentials. It sets `VIDEOSHRINK_VERIFY_TESTS=1` for the build, and
 `eas-build-post-install` (in `package.json`) runs, after the existing native-source sync check:
 
+**Compile phase:**
+
 1. `xcodegen` is installed with Homebrew if the builder does not already have it
    (`/opt/homebrew/bin` and `/usr/local/bin` are added to `PATH` for this).
 2. `xcodegen generate` builds `VideoShrink.xcodeproj` from `project.yml`.
@@ -342,18 +346,43 @@ Apple signing credentials. It sets `VIDEOSHRINK_VERIFY_TESTS=1` for the build, a
    -destination 'generic/platform=iOS Simulator' -derivedDataPath build/VerifyDerivedData \
    CODE_SIGNING_ALLOWED=NO build-for-testing` compiles both targets.
 
-The step prints a `===== VIDEOSHRINK TEST TARGET COMPILE =====` banner with `START`, then
-`PASSED` or `FAILED`, so the result is easy to find in a long EAS log. A compile failure fails
-the build and prints the compiler output, exactly as it appears in the log.
+**Run phase, only if the compile succeeded:**
 
-**What it proves:** the 162 XCTest cases compile. The test target is now known to build on an
-Apple toolchain, which no earlier build checked. `build-for-testing` is deliberately used
-instead of `test`: it produces the built test bundle and stops.
+4. `xcrun simctl list devices available --json` is read for an available iPhone simulator,
+   preferring the newest iOS runtime. If it yields nothing, `xcodebuild -showdestinations` is
+   tried as a second source. The device is discovered at run time rather than hardcoded,
+   because builder images change and a hardcoded model name can stop existing.
+5. `xcodebuild -project VideoShrink.xcodeproj -scheme VideoShrink \
+   -destination 'platform=iOS Simulator,id=<discovered udid>' \
+   -derivedDataPath build/VerifyDerivedData CODE_SIGNING_ALLOWED=NO test-without-building` runs
+   the 162 XCTest cases on that destination, reusing the test bundle the compile phase built.
+   Its output streams into the EAS log.
 
-**What it still does not prove:** the tests have still never been run. Not one test body is
-executed by this profile, so nothing about the app's behaviour is exercised by it; that still
-needs the macOS runner in this section, or a simulator. A pass here narrows the gap from "the
-test target has never been compiled" to "the test target compiles but has never been executed".
+The step prints two banners so the phases stay distinguishable in a long EAS log:
+`===== VIDEOSHRINK TEST TARGET COMPILE =====` with `START`, then `PASSED` or `FAILED`, followed
+by `===== VIDEOSHRINK TEST RUN =====` with `START`, then `PASSED`, `FAILED` or `SKIPPED`. A
+compile failure fails the build, prints the compiler output exactly as it appears in the log,
+and the run phase is not attempted at all.
+
+**What it proves:** the 162 XCTest cases compile, and when the builder has an iPhone simulator
+runtime they also execute. The compile phase still uses `build-for-testing` deliberately,
+because it produces the built test bundle that `test-without-building` reuses rather than
+rebuilding. A failing test exits non-zero and fails the build under the `TEST RUN` banner, and
+the log states there that the compile phase had already printed `PASSED`, so a red test cannot
+be read as a red compile.
+
+**When no simulator exists:** the run phase prints a clear line that the 162 cases compiled but
+could not be run, prints the `TEST RUN` banner with `SKIPPED`, and exits 0. A missing simulator
+on a builder image is an environment fact, not a code defect, so the build still passes on its
+compile result and the log records which of the two happened.
+
+**What a simulator run still cannot prove:** nothing about the device behaviours in section 7.
+A simulator has no real photo library, no HDR display, no incoming call or lock, no thermal
+pressure and no iCloud offload, so the executed tests exercise the app's pure logic and its
+injected fakes only. Actual deletion, audio sync, HDR appearance, interruption and crash
+windows, and iCloud retrieval still need the physical device run in
+`docs/PHYSICAL_DEVICE_TEST_PLAN.md`. A test that depends on real `PHPhotoLibrary` behaviour
+remains a gap this profile cannot close.
 
 **It is opt-in.** The variable is unset for every other profile, so `development`,
 `development-simulator`, `preview` and `production` are unchanged and do not start compiling
@@ -393,9 +422,11 @@ All three, in this order:
 
 1. `npx eas-cli build --platform ios --profile development-simulator` finishes with no compile
    errors in its log. This proves the Swift core compiles for the simulator.
-2. Every XCTest case executes and passes on a macOS runner (section 6). There are 162 cases;
-   take the number from the test result rather than counting test methods in the source. If a
-   case is disabled, skipped or crashes the runner, record which one and why.
+2. Every XCTest case executes and passes, on the EAS builder through the `verify-tests` profile
+   or on a macOS runner (section 6). There are 162 cases; take the number from the test result
+   rather than counting test methods in the source. If a case is disabled, skipped or crashes
+   the runner, or if the profile prints `TEST RUN` `SKIPPED` because no simulator was found,
+   record which of those happened and why.
 3. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is executed on a physical iPhone with expendable media
    and its results are recorded, before deletion is enabled in wider testing. Deletion stays
    off by default until that has happened.
