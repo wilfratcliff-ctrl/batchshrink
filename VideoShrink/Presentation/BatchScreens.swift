@@ -798,6 +798,19 @@ struct BatchProcessingScreen: View {
     @ObservedObject var batch: BatchViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// The shield line at the top of the working screen.
+    ///
+    /// It read "Original protected" in every mode, including the two that remove originals, and it
+    /// said so while the card beneath it was drawing rows reading "original deleted" - the same
+    /// mismatch round 10 fixed in the pre-run dialog, on the screen a user watches for the whole of
+    /// a long run. The modes that delete say what the app does *first* rather than promising the
+    /// original stays, which is what actually protects it. Static and internal so a case can state
+    /// the sentence.
+    static func eyebrow(mode: DeletionMode, pausing: Bool) -> String {
+        if pausing { return "Pausing safely" }
+        return mode.deletesOriginals ? "Copy checked first" : "Original protected"
+    }
+
     var body: some View {
         TimelineView(.periodic(from: .now, by: 5)) { _ in
             content
@@ -820,7 +833,8 @@ struct BatchProcessingScreen: View {
     private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
-                ShrinkEyebrow(title: batch.isStopping ? "Pausing safely" : "Original protected",
+                ShrinkEyebrow(title: Self.eyebrow(mode: batch.effectiveDeletionMode,
+                                                  pausing: batch.isStopping),
                               symbol: "checkmark.shield")
                 VStack(alignment: .leading, spacing: 8) {
                     Text(headline)
@@ -1090,7 +1104,12 @@ struct BatchFinishedRow: View {
             }
             switch deletion {
             case .deleted: text += " · original deleted"
-            case .skipped: text += " · original kept"
+            case .skipped(let reason):
+                // The reason is the whole point of the flag, and it was being dropped: every
+                // refusal read "original kept" whether the copy had changed, the copy had gone, or
+                // access had been withdrawn - and the stored sentence had no reader anywhere in the
+                // app. `docs/BATCH_PHASE.md` promises the reason reaches this list.
+                text += " · original kept. \(reason)"
             case .failed: text += " · original is still here"
             case .uncertain: text += " · original may already be deleted"
             default: break
@@ -1188,6 +1207,54 @@ struct BatchPausedScreen: View {
 
     private var midSave: MidSaveReport { MidSaveReport(batch) }
 
+    /// The pause headline.
+    ///
+    /// It read "Paused.\nNothing was lost." in every state. On a run that deletes originals that
+    /// can be false: a kill at Photos' own delete prompt comes back with an original *possibly*
+    /// deleted, and the line that says so was drawn only on the finished screen, one tap away. This
+    /// is the same class as round 10's fix to the pre-run dialog's "Your originals stay exactly
+    /// where they are", on the screen that stands between the user and the only irreversible thing
+    /// the app does. Static and internal so a case can state the sentence.
+    static func pauseHeadline(deletion: DeletionReport) -> String {
+        if deletion.uncertain > 0 { return "Paused.\nAn original needs a look." }
+        if deletion.deleted > 0 { return "Paused.\nSome originals are already deleted." }
+        return "Paused.\nNothing was lost."
+    }
+
+    /// What the counts on this screen account for, and what they do not.
+    ///
+    /// It read "\(finishedCount) of \(items.count) finished", and `isFinished` is true for a video
+    /// whose save Photos never confirmed - so a run of one saved, one flagged and one waiting said
+    /// "2 of 3 finished. Copies already saved are in Photos", which is a claim about a video the app
+    /// does not know the outcome of. It now counts the copies it can account for and names the ones
+    /// the user still has to look at. Static and internal so a case can state the sentence.
+    static func pauseSubhead(saved: Int, total: Int, toCheck: Int) -> String {
+        let counted = "\(saved) of \(total) saved. Copies already saved are in Photos."
+        guard toCheck > 0 else { return counted }
+        return toCheck == 1
+            ? "\(counted) One more needs a look in Photos."
+            : "\(counted) \(toCheck) more need a look in Photos."
+    }
+
+    /// What this run has *already* done with originals, in the past tense a screen mid-run needs.
+    ///
+    /// Only the two report kinds that describe something that has already happened are drawn here.
+    /// The finished screen's own line also covers the states a run is still heading into - nothing
+    /// has qualified yet, or candidates are waiting for the confirmation at the end - and saying
+    /// "no original qualified to be deleted" on a run that can still continue would be premature and
+    /// could be false by the time it is read.
+    static func settledOriginalsNote(_ report: DeletionReport) -> String? {
+        if report.deleted > 0 {
+            return report.deleted == 1
+                ? "1 original has already been deleted. It sits in Recently Deleted for 30 days."
+                : "\(report.deleted) originals have already been deleted. They sit in Recently Deleted for 30 days."
+        }
+        if report.uncertain > 0 {
+            return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
+        }
+        return nil
+    }
+
     /// Only the reasons worth putting on screen. A pause the user asked for needs no explanation,
     /// and every reason the user did not ask for brings its own wording with it.
     private var pauseReasonText: String? { batch.pauseReason?.explanation }
@@ -1197,11 +1264,13 @@ struct BatchPausedScreen: View {
             VStack(alignment: .leading, spacing: 24) {
                 ShrinkEyebrow(title: "Paused", symbol: "pause.circle")
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("Paused.\nNothing was lost.")
+                    Text(Self.pauseHeadline(deletion: batch.deletionReport))
                         .font(ShrinkStyle.headline).tracking(-1)
                         .fixedSize(horizontal: false, vertical: true)
                         .accessibilityAddTraits(.isHeader)
-                    Text("\(batch.finishedCount) of \(batch.items.count) finished. Copies already saved are in Photos.")
+                    Text(Self.pauseSubhead(saved: batch.summary.savedCount,
+                                           total: batch.items.count,
+                                           toCheck: midSave.awaitingUser))
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -1225,9 +1294,39 @@ struct BatchPausedScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // What this run has already done to originals, said here rather than only on the
+                // screen the user reaches by finishing: this is the app's one irreversible action,
+                // the return path is where its journalled intent exists to be read, and the headline
+                // above is the screen's only statement about the user's videos.
+                if let note = Self.settledOriginalsNote(batch.deletionReport) {
+                    Text(note)
+                        .font(.footnote).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if batch.summary.needsCheckCount > 0 {
                     ShrinkNotice(symbol: midSave.awaitingUser > 0 ? "questionmark.circle" : "checkmark.circle",
                                  title: midSave.title, detail: midSave.detail)
+                }
+                // The question above cannot be answered without knowing which video it is about, and
+                // this screen named none of them: the only list it drew was the pre-flight refusals.
+                // The rows that carry an identity live on the finished screen, one tap and one
+                // "Finish with what's done" away, so the control here asked the user to vouch for
+                // something they had no way to look up.
+                let flagged = batch.items.filter { $0.state == .needsCheck }
+                if !flagged.isEmpty {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("To look at in Photos").font(.subheadline.weight(.semibold))
+                            .accessibilityAddTraits(.isHeader)
+                        ForEach(flagged) { item in
+                            BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
+                                             deletion: batch.deletionOutcomes[item.id],
+                                             revision: batch.thumbnailRevision,
+                                             finding: batch.midSaveFindings[item.id],
+                                             storageDemand: batch.storageDemands[item.id])
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(20).shrinkCard()
                 }
                 if let warning = batch.queueWarning {
                     // The same notice, under the same title, that the start, summary, selection,
@@ -1302,7 +1401,7 @@ struct BatchFinishedScreen: View {
                 RefusedVideoList(assets: batch.preflightRefusals,
                                  context: "Taken out of this run before it started.")
                 failures
-                if let note = deletionNote {
+                if let note = Self.deletionNote(batch) {
                     Text(note)
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1453,7 +1552,12 @@ struct BatchFinishedScreen: View {
     }
 
     /// What the run did with originals, in one honest line.
-    private var deletionNote: String? {
+    ///
+    /// Static, internal and taking the model, because the paused screen draws the same sentence: a
+    /// run killed at Photos' own delete prompt comes back paused with an original *possibly*
+    /// deleted, and this line was drawn only on the finished screen - one tap away from a screen
+    /// whose headline said nothing was lost.
+    static func deletionNote(_ batch: BatchViewModel) -> String? {
         let report = batch.deletionReport
         let mode = batch.effectiveDeletionMode
         if report.deleted > 0 {
@@ -1465,9 +1569,17 @@ struct BatchFinishedScreen: View {
             return "\(report.uncertain) originals may already have been deleted. Check Photos before running those again."
         }
         if mode.deletesOriginals {
-            return batch.deletableItemIDs.isEmpty
-                ? "No original qualified to be deleted, so all of them are still there."
-                : nil
+            // "Delete at the end" is the one mode whose whole design is a confirmation that has not
+            // happened yet, and this line used to return nil for exactly that state - the state the
+            // mode's own description promises ("You confirm once at the end"). The screen that
+            // exists to close the run said nothing about the step it was waiting for.
+            guard !batch.deletableItemIDs.isEmpty else {
+                return "No original qualified to be deleted, so all of them are still there."
+            }
+            let count = batch.deletableItemIDs.count
+            return count == 1
+                ? "1 original is ready to confirm. Nothing has been deleted yet."
+                : "\(count) originals are ready to confirm. Nothing has been deleted yet."
         }
         return "Nothing was deleted. Keeping both copies uses more space."
     }

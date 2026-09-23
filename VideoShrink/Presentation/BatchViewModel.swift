@@ -841,6 +841,24 @@ private enum RunAccess: Equatable, Sendable {
         items = chosen.map { BatchItem(asset: $0, state: .pending) }
         // A fresh run starts with no history of cancellations against any video.
         cancelledAttempts = [:]
+        // And with no history of anything else either. Every dictionary below is keyed by a video
+        // identifier and describes what *one* run found out about it, so a new run that inherited
+        // one would be inheriting conclusions about videos it has not looked at yet. Two of those
+        // conclusions are load-bearing: `copyEvidence` is the receipt that authorises deleting an
+        // original, and `deletionBatch` is the set of originals already queued for Photos. Left in
+        // place they let a later run delete an original it never named - and, because the flush
+        // below used to ask no mode question, one it was not even allowed to delete. A run
+        // resumed from disk is a different thing and does restore these, deliberately, because it
+        // is the same run: see `restoreQueue`. This is the one entry point that is genuinely new,
+        // since `resume()` and `retryFailed()` continue an existing one.
+        copyEvidence = [:]
+        readBackOutcomes = [:]
+        revalidationOutcomes = [:]
+        deletionOutcomes = [:]
+        midSaveFindings = [:]
+        storageDemands = [:]
+        attemptedSaves = [:]
+        deletionBatch.removeAll()
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
         estimator = ProcessingEstimator()
@@ -878,7 +896,16 @@ private enum RunAccess: Equatable, Sendable {
         isStopping = true
         stopActiveWork()
         persistQueue()
-        if runTask == nil { phase = .finished }
+        if runTask == nil {
+            // A paused run has no loop left to take the fresh look the finished screen's offer
+            // depends on. So the candidates this run queued were never re-looked,
+            // `deletableItemIDs` came out empty, the "Delete N originals" control was never drawn -
+            // and the confirmation the deleting modes promise ("You confirm once at the end")
+            // quietly turned into originals that were simply never deleted. This is the same one
+            // look per candidate that `runLoop`'s tail takes before it flushes.
+            refreshDeletionLook()
+            phase = .finished
+        }
     }
 
     func resume() {
@@ -931,6 +958,10 @@ private enum RunAccess: Equatable, Sendable {
         midSaveFindings = [:]
         storageDemands = [:]
         deletionOutcomes = [:]
+        // The queue of originals waiting for one Photos transaction is per-run state too, and it
+        // was the one piece this did not clear: leaving it let the next run flush a batch of
+        // candidates the screen it came from had already been dismissed from.
+        deletionBatch.removeAll()
         activeDeletionMode = settings.deletionMode
         checkpointFailure = false
         attemptedSaves = [:]
@@ -1443,6 +1474,17 @@ private enum RunAccess: Equatable, Sendable {
     /// Intent is written down before the call and the answer is written down after it, so a stop
     /// in the middle comes back as uncertain instead of being repeated.
     private func flushDeletions() async {
+        // A flush belongs to the run that queued it, so it is authorised by that run's own mode
+        // rather than by the settings as they are now - and a run that is not deleting anything
+        // must never submit a deletion it inherited. Nothing should reach the second half of this
+        // guard (only a deleting mode queues anything), which is exactly why it is worth having:
+        // the one time it does fire, the safe direction is to keep the originals.
+        guard activeDeletionMode.deletesOriginals else {
+            guard !deletionBatch.isEmpty else { return }
+            deletionBatch.removeAll()
+            log.error("Refused to flush deletions outside a run that deletes originals")
+            return
+        }
         let candidates = deletionBatch
         deletionBatch.removeAll()
         guard !candidates.isEmpty else { return }

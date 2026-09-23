@@ -287,7 +287,10 @@ reconciled:
   make a second copy, and the app will not do that on its own.
 - Items already saved, skipped or failed keep their recorded outcome.
 
-A restored run opens on the paused screen with what finished so far. "Continue" picks up the
+A restored run opens on the paused screen with what finished so far, or on the finished screen
+when nothing is left waiting - a kill during the last video's save is exactly that case, and the
+sentence here said "paused" unconditionally until a read-only audit checked it against
+`BatchViewModel`'s own `hasPendingWork ? .paused : .finished`. "Continue" picks up the
 waiting videos; check-in-Photos items are only requeued when the user says they have looked.
 "Done" clears the stored queue by writing an empty one, and nothing is ever deleted.
 

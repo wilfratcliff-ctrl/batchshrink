@@ -380,6 +380,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 17 | see below | The shipping path: an audit of the Expo bridge, CI that builds it, and the last code items | local gates PASS | 336 tests |
 | 18 | see below | Make the shipping target compile again, observe the first rendered screen, close the kept-copy flow and the seam it opened, move the local gates into CI, and two read-only audits | local gates PASS | 345 tests |
 | 19 | see below | The two audits' nineteen findings, an early permission prompt the launch job found, twenty-two documents corrected against the code, and an independent read of the Swift nobody could compile | local gates PASS; **CI blocked, runners not starting** | 364 tests, none executed |
+| 20 | see below | Prove the guardrails guard (and fix the one that could never fire), then a deletion-journey audit and a restored-run audit, and their screen-truthfulness fixes | local gates PASS; `prove:guardrails` 54/54; **CI blocked** | 372 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -749,6 +750,29 @@ documents are the detail.
 | A9 | 3 | The app's haptics switch does not cover the quality pills | done, round 19, unverified. The key deliberately stays `completionHaptics`: a renamed key is a different preference, and everyone who had turned haptics off would have found them on |
 | A10 | 3 | Two `.contentTransition(.numericText())` modifiers have no enclosing animation and are inert | done, round 19, unverified: both got Reduce Motion-gated animations rather than deletion |
 
+### Round 20's audits — the deletion journey, and the way back in
+
+Two more read-only audits, written to disk in the same shape as the two above:
+**[docs/AUDIT_DELETION.md](docs/AUDIT_DELETION.md)** and
+**[docs/AUDIT_RESTORED_RUN.md](docs/AUDIT_RESTORED_RUN.md)** carry the evidence, the proposed fix,
+the confidence and the list of what was checked and found correct. The table is the index.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| DEL1 | 1 | Every per-item deletion dictionary and the pending Photos transaction survived a run boundary, and the flush asked no question about the mode - so a later run could delete an original it never named, during a run whose own setting said deleting was off | **done, round 20**, unverified. `beginRun` clears the run's own facts and the batch; `reset` clears the batch; the flush refuses to run outside a run whose snapshot mode deletes originals |
+| DEL2 | 2 | The row said " · original kept" for every refusal and threw the stored reason away - the sentence had no reader in the app - against `docs/BATCH_PHASE.md`'s promise that the reason reaches the list | **half done, round 20.** The reason is rendered. The dialog's count is still the tap-time one: it should say it is a ceiling, or be refreshed when the app comes back to the foreground |
+| DEL3 | 2 | The paused screen said nothing about originals this run had already deleted, under a headline reading "Nothing was lost" | done, round 20, unverified |
+| DEL4 | 2 | In "delete at the end" the finished screen said nothing about the confirmation it was waiting for - and the real cause was worse: `finishNow()` from a paused run never took the look its offer depends on, so the control was never drawn and the originals were silently kept | done, round 20, unverified: `finishNow` takes the same one look per candidate the run's own tail takes |
+| DEL5 | 3 | A cancelled Photos confirmation is stored as a save failure, so cancelling reads as a failure with the wrong sentence behind it | open, and device-dependent: which error PhotoKit returns for a declined alert decides the shape of the fix |
+| DEL6 | 3 | The working screen's shield line read "Original protected" in the two modes that remove originals | done, round 20, unverified |
+| DEL7 | 3 | A deletion left "uncertain" is a dead end: the app advises checking Photos and no control can act on the answer | open |
+| RR1 | 2 | The restored pause asked the user to check Photos and never named the video | done, round 20, unverified |
+| RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **open, the highest-value item either audit left.** It is a design change: the question must survive a scan, stay out of bulk selection, and stay re-runnable by hand |
+| RR3 | 2 | A restored run has lost why it stopped, including the storage and thermal reasons | open: a `BatchQueueRecord` change |
+| RR4 | 2 | "Nothing was lost" on a paused screen that knew an original might already be deleted | done, round 20, unverified, with DEL3 |
+| RR5 | 3 | A queue that cannot be read is indistinguishable from no queue, and says nothing | open |
+| RR6 | 3 | A video whose outcome is unknown counts as finished, on the screen and in `canLeaveFlow` | half done, round 20: the paused counts are honest now. Whether an unanswered flag should hold the flow is open, with RR2 |
+
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.
 
@@ -835,3 +859,64 @@ local gate checks. The Swift in rounds 19's two waves is not, and cannot be unti
 has been read twice - once by its author and once by a reviewer who was told to assume nothing -
 and the second read found three defects, which is the argument for doing it again if the block
 lasts.
+
+## Round 20 — prove the gate, then trace the two moments nobody had traced
+
+The blocker did not lift, so the round asked what could still be *verified* here. The answer was the
+local gates: they are the only instruments that run, and nobody had ever checked that they can fail.
+
+**The harness, and what it found.** `scripts/prove-guardrails.mjs` injects one fault per assertion in
+`scripts/validate.mjs` into a throwaway copy of the tree and requires the gate to refuse it: fifty-four
+mutations, each naming a file, the edit that should break exactly one assertion, and a fragment of the
+message that assertion should print. Four outcomes, and only one is good — `CAUGHT`, versus `MISSED`
+(the assertion is vacuous), `WRONG` (the failure was about a different assertion) and `NO MATCH` (the
+mutation itself has drifted). It copies the tree once per mutation and takes twenty seconds, so it is
+not part of `validate:native`; run it when an assertion is added, changed or doubted.
+
+The first run found that the force-unwrap guardrail was written `/\btry!\b/`, and **that expression
+cannot match anything**. `!` is not a word character, so no word boundary can follow it: it returns
+false for `try! foo()`, for `try!` at the end of a line, and for every other spelling a force unwrap
+can take. An agent could have committed a force unwrap and the gate would have said PASS. It is
+`/\btry!/` now. The other seven forbidden patterns all caught their faults, forty-six further
+assertions caught theirs, and the run is 54 of 54. The same run found one assertion that is
+unreachable rather than wrong — the queue store's `!removeItem(` check can never fire, because the
+temporary-file confinement check fails first for any file but `TemporaryFileManager.swift` — and that
+one is recorded rather than changed, because the property it protects is still protected.
+
+This is the round's most useful hour, and it is the same lesson the loop already carries about the
+other checker: an assertion nobody has tried to break is a claim, not a guard.
+
+**Two audits instead of more Swift.** With compilation unavailable, the highest-yield work left was
+tracing moments no round had traced, and both paid: the deletion journey, and what a user meets when
+the app is reopened on a queue. Their findings are in `docs/AUDIT_DELETION.md` and
+`docs/AUDIT_RESTORED_RUN.md`, indexed in the table above. Two were serious.
+
+The first: every per-item deletion dictionary and the pending Photos transaction survived a run
+boundary, and the flush asked no question about the mode. Run "delete as it goes", pause after two
+copies, "Finish with what's done", start again with deleting turned off — and the new run would flush
+the old run's queued originals, deleting an original it never named, in a run whose own setting said
+deleting was off. The destructive gate still held (a receipt and a fresh look at both assets are
+required), so nothing unverified was deleted; what broke was that the deletion happened outside any
+mode the user could see, attributed to a run that did not make it, and left no trace in the record.
+`beginRun` now clears the run's own facts, `reset` clears the batch, and the flush refuses to run
+outside a run whose snapshot mode deletes originals.
+
+The second is open, and is the most valuable thing either audit left behind: an unanswered mid-save
+question drops off every screen at the next scan and out of the record at the next run, and the video
+it names becomes selectable again — because the guard that keeps a copied original out of bulk
+selection is the history store, and the original only reaches it *after* `photos.save` returns. So a
+kill inside `performChanges` can end with "Select all N" ticking a video that may already have a
+copy. That is the outcome the area's own comment says it exists to prevent, and it is a design change
+rather than a sentence, so it wants its own round.
+
+The rest of the round's fixes were the truthfulness on the two screens a user meets while originals
+are in play: the working screen's shield line no longer says "Original protected" in the modes that
+delete, the paused screen's headline no longer says "Nothing was lost" when an original is in
+question and it now draws the deletion note and the flagged rows it was asking about, a kept original
+now says *why* it was kept instead of dropping the stored reason, and "Finish with what's done" takes
+the look its own confirmation depends on — which it never did, so in a deleting mode the
+confirmation was silently never offered and the originals were quietly kept.
+
+**All of that Swift is unverified**, and the loop's rule stands: it was written because leaving a
+known safety defect in the tree for a week is worse than leaving it there unbuilt. `npm run
+validate:native`, `npm run prove:guardrails` and the mirror check all pass; nothing has compiled it.

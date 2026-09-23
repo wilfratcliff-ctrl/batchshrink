@@ -756,6 +756,209 @@ import SwiftUI
         XCTAssertEqual(fixture.queue.stored?.items.first?.deletion, .deleted)
     }
 
+    /// A second run counts only its own deletions.
+    ///
+    /// Everything the finished screen reads is keyed by a video identifier and describes what *one*
+    /// run found out, and none of it was cleared when a new run began. So after "Shrink more
+    /// videos" the note counted originals the previous run had deleted - "2 originals deleted" over
+    /// a run that deleted none, with no rows left to explain the figure, because those items are
+    /// not in this run at all. `beginRun` now clears the run's own facts; `restoreQueue` still
+    /// restores them, deliberately, because a resumed run is the same run.
+    func testASecondRunCountsOnlyItsOwnDeletions() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 2)
+        XCTAssertEqual(fixture.photos.deletedIdentifiers, ["a", "b"])
+
+        // The user starts again and turns deleting off first, which is the arrangement in which a
+        // leftover conclusion would be most obviously wrong.
+        fixture.settings.deletionMode = .off
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 0,
+                       "the note describes this run, not the one before it")
+        XCTAssertTrue(fixture.batch.deletionOutcomes.isEmpty)
+        XCTAssertTrue(fixture.batch.deletableItemIDs.isEmpty)
+        XCTAssertEqual(fixture.photos.deletedIdentifiers, ["a", "b"],
+                       "and nothing the first run deleted is deleted again")
+    }
+
+    /// Originals one run left waiting cannot be deleted by the next one.
+    ///
+    /// This is the defect the harness under it was written for. A run in "delete as it goes" queues
+    /// candidates and flushes them to Photos when it ends - or at the end of the run, whichever
+    /// comes first - and pausing leaves that queue holding whatever had been collected. Nothing
+    /// cleared it when the next run began and the flush itself asked no question about the mode, so
+    /// a later run could delete an original it never named, during a run whose own setting said
+    /// deleting was off. The destructive gate still held - a receipt and a fresh look at both
+    /// assets are required - but the deletion happened outside any mode the user could see.
+    func testOriginalsLeftWaitingByOneRunAreNotDeletedByTheNext() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        // Let the first copy finish, then stop the second export in flight, so the run is paused
+        // with an original already queued for Photos.
+        fixture.transcoder.holdAfter = 2
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        // The second export is the one being held, so by the time the gate opens the first copy
+        // has been saved and its original queued.
+        await eventually { fixture.transcoder.gate != nil }
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        fixture.batch.pause()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .paused }
+
+        // Nothing has been deleted yet: the queued original is waiting for the flush at the end.
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty)
+
+        // "Finish with what's done", turn deleting off, and start again on the same videos.
+        fixture.batch.finishNow()
+        await eventually { fixture.batch.phase == .finished }
+        fixture.transcoder.holdAfter = nil
+        fixture.settings.deletionMode = .off
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+
+        XCTAssertTrue(fixture.photos.deletedIdentifiers.isEmpty,
+                      "a run with deleting off cannot delete the last run's waiting originals")
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 0)
+    }
+
+    // MARK: - What the screens say while originals are in play
+
+    /// The working screen's shield line follows the mode the run is actually in.
+    ///
+    /// It read "Original protected" in every mode, including the two that remove originals, and it
+    /// said so while the card beneath it drew rows reading "original deleted" - which is the same
+    /// mismatch round 10 fixed in the pre-run dialog, on the screen a user watches for the whole of
+    /// a long run.
+    func testTheWorkingScreensShieldLineFollowsTheDeletionMode() {
+        XCTAssertEqual(BatchProcessingScreen.eyebrow(mode: .off, pausing: false), "Original protected")
+        XCTAssertEqual(BatchProcessingScreen.eyebrow(mode: .afterEachCopy, pausing: false),
+                       "Copy checked first")
+        XCTAssertEqual(BatchProcessingScreen.eyebrow(mode: .afterRun, pausing: false),
+                       "Copy checked first")
+        // A stop says what it is doing, whatever the mode is doing with originals.
+        XCTAssertEqual(BatchProcessingScreen.eyebrow(mode: .afterEachCopy, pausing: true),
+                       "Pausing safely")
+    }
+
+    /// The paused headline does not deny a deletion this run has already made.
+    func testThePausedHeadlineDoesNotDenyADeletionThisRunMade() {
+        XCTAssertEqual(BatchPausedScreen.pauseHeadline(deletion: DeletionReport()),
+                       "Paused.\nNothing was lost.")
+
+        var deleted = DeletionReport()
+        deleted.deleted = 2
+        let afterDeleting = BatchPausedScreen.pauseHeadline(deletion: deleted)
+        XCTAssertFalse(afterDeleting.contains("Nothing was lost"),
+                       "the run deleted originals; the headline may not say nothing was lost")
+
+        var uncertain = DeletionReport()
+        uncertain.uncertain = 1
+        XCTAssertTrue(BatchPausedScreen.pauseHeadline(deletion: uncertain).contains("needs a look"),
+                      "an original whose fate is unknown is the one thing to send the user to Photos")
+    }
+
+    /// The paused counts account for the copies the run can vouch for, and name the rest.
+    ///
+    /// The screen read "\(finishedCount) of \(items.count) finished", and a video whose save Photos
+    /// never confirmed counts as finished - so a run of one saved, one flagged and one waiting said
+    /// "2 of 3 finished. Copies already saved are in Photos", which is a claim about a copy the app
+    /// does not know the outcome of.
+    func testThePausedCountsDescribeOnlyWhatIsAccountedFor() {
+        XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 2, total: 3, toCheck: 0),
+                       "2 of 3 saved. Copies already saved are in Photos.")
+        XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 3, toCheck: 1),
+                       "1 of 3 saved. Copies already saved are in Photos. One more needs a look in Photos.")
+        XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 4, toCheck: 2),
+                       "1 of 4 saved. Copies already saved are in Photos. 2 more need a look in Photos.")
+    }
+
+    /// The paused screen names a deletion that has happened, and never a state the run has not
+    /// reached.
+    func testThePausedScreenNamesOnlyDeletionsThatHaveAlreadyHappened() {
+        XCTAssertNil(BatchPausedScreen.settledOriginalsNote(DeletionReport()),
+                     "a run that has not deleted anything says nothing here")
+
+        var deleted = DeletionReport()
+        deleted.deleted = 1
+        XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(deleted),
+                       "1 original has already been deleted. It sits in Recently Deleted for 30 days.")
+
+        var uncertain = DeletionReport()
+        uncertain.uncertain = 2
+        XCTAssertEqual(BatchPausedScreen.settledOriginalsNote(uncertain),
+                       "2 originals may already have been deleted. Check Photos before running those again.")
+
+        // A run that is merely waiting for a confirmation has not reached anything reportable.
+        var waiting = DeletionReport()
+        waiting.skipped = 3
+        XCTAssertNil(BatchPausedScreen.settledOriginalsNote(waiting))
+    }
+
+    /// A kept original says why it was kept, in the policy's own words.
+    ///
+    /// The row rendered " · original kept" for every refusal and dropped the reason with it, so a
+    /// copy that had changed, a copy that had gone, an original Photos could no longer find and a
+    /// withdrawn permission all read the same. `docs/BATCH_PHASE.md` promises the reason reaches
+    /// this list.
+    func testAKeptOriginalSaysWhyItWasKept() {
+        let item = BatchItem(asset: asset("a", bytes: 1_000),
+                             state: .saved(Savings(originalBytes: 1_000, compressedBytes: 500)))
+        let reason = "The copy changed after it was checked, so the original stays."
+        let row = BatchFinishedRow(item: item, deletion: .skipped(reason))
+
+        XCTAssertEqual(row.detail, "Saved a smaller copy · original kept. \(reason)")
+        // And a deletion that did happen still says just that.
+        XCTAssertEqual(BatchFinishedRow(item: item, deletion: .deleted).detail,
+                       "Saved a smaller copy · original deleted")
+    }
+
+    /// "Finish with what's done" in a deleting mode offers the confirmation that mode promises.
+    ///
+    /// A paused run has no loop left to take the fresh look the finished screen's offer depends on,
+    /// so the candidates it had queued were never re-looked, `deletableItemIDs` came out empty and
+    /// the "Delete N originals" control was never drawn - the confirmation became originals that
+    /// were simply never deleted, and the note claimed none had qualified. Taking the look here is
+    /// the same single look per candidate that the run's own tail takes before it flushes.
+    func testFinishingEarlyStillOffersTheConfirmationTheModePromises() async {
+        let fixture = BatchFixture(assets: [asset("a", bytes: 1_000), asset("b", bytes: 1_000)])
+        fixture.settings.deletionMode = .afterEachCopy
+        fixture.transcoder.holdAfter = 2
+        await scan(fixture)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        fixture.batch.start()
+        await eventually { fixture.transcoder.gate != nil }
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        fixture.batch.pause()
+        fixture.transcoder.release()
+        await eventually { fixture.batch.phase == .paused }
+
+        fixture.batch.finishNow()
+        await eventually { fixture.batch.phase == .finished }
+
+        // The original whose copy was made is offered, nothing has been deleted yet, and the note
+        // says exactly that rather than claiming no original qualified.
+        XCTAssertEqual(fixture.batch.deletableItemIDs, ["a"])
+        XCTAssertEqual(fixture.batch.deletionReport.deleted, 0)
+        XCTAssertEqual(BatchFinishedScreen.deletionNote(fixture.batch),
+                       "1 original is ready to confirm. Nothing has been deleted yet.")
+    }
+
     func testAnOriginalStaysWhenItsCopyCannotBeReadBack() async {
         let fixture = BatchFixture(assets: [asset("a", bytes: 1_000)])
         fixture.settings.deletionMode = .afterEachCopy
@@ -2107,6 +2310,11 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
 @MainActor private final class BatchMockTranscoder: VideoTranscoding {
     var error: PipelineError?
     var hold = false
+    /// Hold every export from the `holdAfter`th call onwards, counting from one. `hold` stops the
+    /// first one, which is what most cases want; this exists for the ones that need a run to make
+    /// real progress and *then* be stopped while it still has a copy waiting - the state in which a
+    /// run can be paused with an original already queued for Photos.
+    var holdAfter: Int?
     var cancelCalled = false
     /// Whether the task this export runs in was cancelled while the export was held open. Cancel
     /// reaches only the session running at that instant, and the real service starts another
@@ -2121,7 +2329,8 @@ private func queuedRecord(_ items: [BatchQueueRecord.Item]) -> BatchQueueRecord 
                    progress: @escaping @MainActor (Double) -> Void) async throws -> URL {
         receivedSettings.append(settings)
         if let error { throw error }
-        if hold { await withCheckedContinuation { gate = $0 } }
+        let holdsThisCall = hold || (holdAfter.map { receivedSettings.count >= $0 } ?? false)
+        if holdsThisCall { await withCheckedContinuation { gate = $0 } }
         workWasStopped = Task.isCancelled
         try Task.checkCancellation()
         return written
