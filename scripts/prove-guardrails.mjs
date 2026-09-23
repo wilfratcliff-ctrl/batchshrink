@@ -41,6 +41,22 @@
 // This is not part of `npm run validate:native` and should not be: it copies the tree once per
 // mutation and takes about a minute. Run it when an assertion is added, changed or doubted.
 //
+// WHAT IS NOT INJECTED, SO THAT "67 OF 67" IS NOT READ AS "EVERY ASSERTION"
+// Three assertions in `validate.mjs` have no mutation here, and each for its own reason:
+//
+//   - the icon's inflated byte length. Proving it would mean re-encoding a valid PNG with one
+//     wrong length, which is a different kind of work from editing a file;
+//   - `!removeItem(` in the queue store, which is *unreachable* rather than unproven: the
+//     temporary-file confinement check runs earlier and fails first for any file but
+//     `TemporaryFileManager.swift`. The property it protects is protected; that line cannot be the
+//     thing that protects it, and `AGENT_LOOP.md` records it rather than changing it;
+//   - the source-wide `isNetworkAccessAllowed = true`, which is *redundant* rather than unprovable:
+//     it is the same string the thumbnail assertion guards, and the string cannot go missing from
+//     the tree without that earlier assertion failing first, so no mutation can isolate it.
+//
+// A mutation that does not apply, or that fails for a reason other than the one it names, is
+// reported as such rather than counted.
+//
 // PLATFORM
 // Node only, no Xcode, so it runs anywhere validate.mjs runs - including the Windows machine this
 // repository is normally edited on.
@@ -528,6 +544,51 @@ const mutations = [
     addFile: { path: 'ios/.keep', content: '' },
     gate: 'prebuild',
     expect: 'already exists'
+  },
+
+  // --- The version facts, one assertion each ---
+  {
+    id: 'the product version stops being a semantic version',
+    file: 'app.json',
+    find: '"version": "0.1.0"',
+    replace: '"version": "0.1"',
+    expect: 'must be a semantic version'
+  },
+  {
+    id: 'the shipping build number stops being declared',
+    file: 'app.json',
+    find: '    "buildNumber": "11",\n',
+    replace: '',
+    expect: 'must declare expo.ios.buildNumber'
+  },
+  {
+    id: 'the shipping build number stops being digits',
+    file: 'app.json',
+    find: '"buildNumber": "11"',
+    replace: '"buildNumber": "11a"',
+    expect: 'buildNumber must be digits'
+  },
+  {
+    id: 'a target-level override hides the harness version from the check',
+    file: 'project.yml',
+    find: '    MARKETING_VERSION: "0.1.0"\n',
+    replace: '    MARKETING_VERSION: "0.1.0"\n    MARKETING_VERSION: "0.1.0"\n',
+    expect: 'must declare MARKETING_VERSION exactly once'
+  },
+  {
+    id: 'the harness build number stops being digits',
+    file: 'project.yml',
+    find: 'CURRENT_PROJECT_VERSION: "1"',
+    replace: 'CURRENT_PROJECT_VERSION: "one"',
+    expect: 'CURRENT_PROJECT_VERSION must be digits'
+  },
+  {
+    id: 'the app icon stops being 1024 pixels tall',
+    file: 'VideoShrink/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon.png',
+    find: null,
+    replace: null,
+    expect: '1024',
+    patchByte: { offset: 23, value: 1 }
   }
 ];
 
