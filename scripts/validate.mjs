@@ -22,7 +22,13 @@ for (const path of ['README.md', 'project.yml', '.gitignore', 'docs/CLOUD_MAC_SE
 }
 for (const forbidden of [/\bPHAssetCollectionChangeRequest\b/, /\bPHCollectionListChangeRequest\b/,
   /\bURLSession\b/, /\bWKWebView\b/, /\bData\s*\(\s*contentsOf:/,
-  /\btry!\b/, /\bas!\s/, /value\(forKey:\s*"fileSize"/]) {
+  // `\btry!\b` was here and could never match anything. `!` is not a word character, so a word
+  // boundary cannot follow it: the expression returns false for `try! foo()`, for `try!` at the
+  // end of a line, and for every other spelling a force unwrap can take. It was found by
+  // scripts/prove-guardrails.mjs, which injects a fault per assertion and requires the gate to
+  // refuse it - the one mutation it could not make it refuse was this one. The pattern is now
+  // just the token, which is what the rest of this list does and what the guardrail meant.
+  /\btry!/, /\bas!\s/, /value\(forKey:\s*"fileSize"/]) {
   assert(!forbidden.test(source), `Forbidden application pattern: ${forbidden}`);
 }
 // Deleting an original is allowed now, but only from one place and only behind the policy gate.

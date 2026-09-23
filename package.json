@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit",
     "check:swift": "node scripts/swift-call-site-check.mjs",
     "validate:native": "node scripts/validate.mjs && node scripts/swift-call-site-check.mjs",
+    "prove:guardrails": "node scripts/prove-guardrails.mjs",
     "verify:expo": "node scripts/verify-expo-build.mjs",
     "sync:native": "node scripts/sync-native-sources.mjs",
     "postinstall": "node scripts/sync-native-sources.mjs",

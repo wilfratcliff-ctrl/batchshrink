@@ -18,6 +18,28 @@ application Swift for forbidden patterns (`try!`, `as!`, `URLSession`, `value(fo
 `Data(contentsOf:)`, `WKWebView`, `PHAssetCollectionChangeRequest`) and asserts that Photos
 deletion and change requests appear only in `PhotoLibraryService.swift`.
 
+**One of those patterns was broken, and `npm run prove:guardrails` is why we know.**
+`scripts/prove-guardrails.mjs` injects one fault per assertion into a throwaway copy of the tree
+and requires the gate to refuse it: fifty-four mutations, each naming a file, the edit that
+should break exactly one assertion, and a fragment of the message that assertion should print.
+Only `CAUGHT` is proof; `MISSED` means the assertion is vacuous, `WRONG` that the failure was
+about a different assertion, and `NO MATCH` that the mutation itself has drifted. It is not part
+of `validate:native` (it copies the tree fifty-four times and takes twenty seconds) and it is
+worth running whenever an assertion is added, changed or doubted.
+
+Its first run found this: the force-unwrap guardrail was written `/\btry!\b/`, and **that
+expression cannot match anything**. `!` is not a word character, so no word boundary can follow
+it - it returns false for `try! foo()`, for `try!` at the end of a line, and for every other way
+a force unwrap can be written. An agent could have committed `try!` and the gate would have said
+PASS. It is now `/\btry!/`, which is what the rest of the list does and what the guardrail always
+meant. The other seven patterns in that list were checked by injection and all caught their
+faults.
+
+The harness also found one assertion that is **unreachable rather than wrong**: the queue store's
+`!removeItem(` check can never fire, because the temporary-file confinement check runs earlier
+and fails for any file but `TemporaryFileManager.swift` first. The property it protects still
+holds - the confinement check is what protects it - so it is recorded rather than changed.
+
 It now also runs `scripts/swift-call-site-check.mjs`, added after the cloud builds found that
 every compile error this project has ever produced was one of two mechanical mistakes. That
 checker catches both without a compiler:
@@ -332,6 +354,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N40 | 1 | **The app had never rendered a screen, and nothing could observe a launch.** Every status block in the repository says so, and no instrument existed that could change it without a device or EAS build minutes | done, round 18: a `VideoShrinkUITests` target launches the standalone app on a simulator, waits for the introduction, taps Skip and waits for the batch screen. Job 3 runs it on every push. It proves a screen renders and one navigation works; it proves nothing about Photos, iCloud or any pipeline step |
 | N41 | 1 | **The app asked for Photos access at launch, before the user asked for anything.** `LibraryChangeMonitor.start()` reached for `PHPhotoLibrary.shared()` from `BatchViewModel`'s initialiser, which puts iOS's permission alert on screen - breaking the promise the app's own introduction makes, "Photos access is requested when you scan" | done, round 19: the change observer is registered only once the authorization status says the app may read, and the foreground re-check registers it the moment a grant arrives. Found by the round-18 launch test, from the alert in its log |
 | N42 | 2 | A `.denied` report with nothing in hand moves the flow off `.start`, so on a device where Photos was already refused the introduction is replaced by a recovery screen | **considered and deliberately left, round 19.** `testAccessRefusedOnTheWayInStillFailsTheFlow` pins it, with the reasoning that a refusal is the one access state the user can undo in Settings and a start screen whose only button fails is less useful than the route back. With N41 fixed nothing reaches this on a first launch, and the intro-versus-recovery question only arises for a refusal that predates the app's first run. Revisit if that is ever seen on a device |
+| N43 | 1 | **The guardrail against force-unwrapping could never fire.** `scripts/validate.mjs`'s forbidden-pattern list had `/\btry!\b/`, and no word boundary can follow `!`, so the expression returned false for every way a force unwrap can be written | done, round 20: the pattern is `/\btry!/`, and `npm run prove:guardrails` now proves it fires. Found by the fault-injection harness below, which also proves the other seven patterns and forty-six further assertions |
 
 ## Round log
 
