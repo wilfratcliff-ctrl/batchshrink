@@ -2,11 +2,20 @@
 
 A native SwiftUI, one-video feasibility prototype. It retrieves a selected Photos video, exports a 1080p HEVC copy on the iPhone, verifies that file, previews it and saves a separate Photos item only after an explicit save action.
 
-The project now includes an **Expo development app** that embeds the native SwiftUI harness through a local Swift module. [EAS_DEVELOPMENT_BUILD.md](docs/EAS_DEVELOPMENT_BUILD.md) describes the Windows-to-EAS setup; [EXPO_INTEGRATION.md](docs/EXPO_INTEGRATION.md) explains the shared source arrangement. No EAS cloud build has started yet.
+The project now includes an **Expo development app** that embeds the native SwiftUI harness through a local Swift module. [EAS_DEVELOPMENT_BUILD.md](docs/EAS_DEVELOPMENT_BUILD.md) describes the Windows-to-EAS setup; [EXPO_INTEGRATION.md](docs/EXPO_INTEGRATION.md) explains the shared source arrangement. EAS built and signed this app repeatedly, ending with the production build 10 recorded in [RELEASE_10.md](docs/RELEASE_10.md); the build ids that survive in the record are listed in [VALIDATION.md](docs/VALIDATION.md).
 
-**Status: implemented source, not yet compiled or device-proven.** Created on Windows on 2026-09-17. Git, Node.js and ripgrep were available; Swift, Xcode and XcodeGen were not. The Python command was a Windows app alias, not a verified runtime. See [validation evidence](docs/VALIDATION.md). No simulator, XCTest, TestFlight or physical-device success is claimed. Phase 0 is only complete after the device acceptance test below passes.
+**Status: implemented source, never compiled in its current form.** Every status statement in this repository is one of three kinds, and they are not interchangeable:
 
-## Batch phase (build 5)
+- **Historical** - a past build or a past decision, recorded as it stood then. Real builds were compiled, archived and signed by EAS, most recently build 10. That is compilation evidence for the source as it was at that build, not for the tree as it is now.
+- **Implemented source** - present in the tree, never compiled. Round 1 landed at commit `559f693` and that is the reference point for the "in the tree at `559f693`" statements below; anything later is recorded by the loop in `AGENT_LOOP.md`, not here. Everything Swift here is plausible, not proven, until `scripts/validate-mac.sh` runs on a Mac.
+- **Observed** - something that actually ran, with the evidence named beside it. No XCTest execution, simulator run or physical-device acceptance result is claimed anywhere in this repository.
+
+Created on Windows on 2026-09-17. Git, Node.js and ripgrep were available; Swift, Xcode and XcodeGen were not. The Python command was a Windows app alias, not a verified runtime. See [validation evidence](docs/VALIDATION.md). Phase 0 is only complete after the device acceptance test below passes.
+
+## Batch phase (historical)
+
+The notes in this section are **historical**: each records what one build contained at the time.
+They are not claims about the tree today, and they are not device results.
 
 The app now opens on the batch: look through the library, choose videos, watch a running
 count with a time estimate, and read a measured summary. The one-video flow with a preview
@@ -38,6 +47,16 @@ rules and the limits. In short: the scan downloads nothing, sizes come only from
 documented Photos API or from originals already on the iPhone, savings and time are reported
 as ranges with their basis, and no released iCloud space is claimed.
 
+After build 10, the round 1 reliability work changed this source further and none of it is
+compiled. In the tree at `559f693`: a failed queue write stops a run before it touches Photos and
+a committed save is never repeated after a failed follow-up write; deletion stores an
+original-to-copy receipt, revalidates both assets immediately before deleting and refuses a
+receipt that is missing, stale or from an older algorithm; verification requires every sample
+window to decode, decodes audio instead of trusting track duration and compares the imported copy
+against the output the run measured. XCTest cases went from 102 to 145 and none has ever run. See
+[VALIDATION.md](docs/VALIDATION.md) for the entry and [BATCH_PHASE.md](docs/BATCH_PHASE.md) for
+the current rules.
+
 ## What this proves once tested
 
 - Genuine `PHAsset` lookup using the system video picker’s identifier and read/write PhotoKit permission.
@@ -46,7 +65,7 @@ as ranges with their basis, and no released iCloud space is claimed.
 - Output validation and preview before an explicit, separate Photos save.
 - Cancellation, failure reporting, bounded-memory file processing and app-owned temporary cleanup.
 
-**Nothing here lowers an iCloud bill.** The displayed byte difference is the measured saving between two files. Adding a second item initially consumes more storage, and deleting an original only moves it to Recently Deleted for 30 days before the space comes back. Build 7 adds opt-in deletion; it is off until the user turns it on, it needs a copy that Photos handed back, and the one-video flow never deletes.
+**Nothing here lowers an iCloud bill.** The displayed byte difference is the measured saving between two files. Adding a second item initially consumes more storage, and deleting an original only moves it to Recently Deleted for 30 days before the space comes back. Opt-in deletion exists from build 7; it is off until the user turns it on, and in the tree at `559f693` it additionally needs a stored receipt naming the copy this run created plus a fresh look at both assets immediately before Photos is asked. The one-video flow never deletes.
 
 ## Defaults and deliberate limits
 
@@ -59,8 +78,8 @@ as ranges with their basis, and no released iCloud space is claimed.
 | Ordinary, unedited, file-backed video only | Rejects adjustment resources, edited full-size resources, PhotoKit slow-motion/time-lapse/spatial subtypes, compositions, multiple video tracks and more than one audio track. This avoids silently discarding special behavior. |
 | Genuine PhotoKit access required | No picker file-provider fallback that would obscure whether Photos/iCloud integration worked. With limited access, the selected asset must already be permitted. A missing/inaccessible identifier gives instructions for Settings. |
 | Original representation after rejecting detected edits | File-size comparison uses measured bytes of the retrieved original AVURLAsset. This is not all associated Photos resources, caches, or iCloud allocation. Special-format detection is conservative, not exhaustive. |
-| Foreground only | Going to the background cancels download/export/verification. No background entitlement or idle-timer override. |
-| Creation date copied to the new item | New item gets a new identity. Location, albums, favorites, captions and editing history are not intentionally copied. Export descriptive metadata is empty; retained technical tags still need inspection. |
+| Foreground only | Going to the background cancels download/export/verification. No background entitlement. The display can be held awake by the opt-in "keep screen awake while working" setting, which is released the moment work stops or the app leaves the foreground. |
+| Metadata copied to the new item | The copy keeps the original's creation date, filename, location and favourite/hidden flags at Photos level, and the transcoder writes the original's own descriptive metadata into the file. Album membership, captions, keywords, ratings and editing history are not copied. What a given container retains still needs inspection on a device. |
 
 There is still no overnight or background feature, subscription, user account, product analytics, advertisement, backend or app-managed media upload. Deletion exists from build 7 but is opt-in and gated. The standalone harness uses Apple frameworks. The Expo development wrapper adds Expo/React Native and their development tooling, including a local network connection to Metro. Photos can download from and sync the new item to **Apple’s existing iCloud Photos service** according to the user’s settings. “On-device” describes transcoding; it does not mean Photos operates without a network.
 
@@ -91,9 +110,9 @@ XcodeGen is a free development-time project generator for the standalone harness
 
 Recoverable paths terminate as Failed or Cancelled and allow a fresh selection. Preparing/verification/save use indeterminate indicators; cloud and export percentages come only from their APIs. These are per-operation percentages, never invented overall progress. Source measurements appear after retrieval, since public PhotoKit APIs do not supply a reliable original byte-size property before retrieval. No undocumented KVC size lookup is used.
 
-Verification checks a real, nonempty regular file, a playable single video track, finite positive duration, HEVC codec, audio track count and display aspect ratio. Duration tolerance is the greater of 0.25 seconds or 0.1% of source duration. Aspect tolerance is 2% for encoded dimension rounding. It decodes the first output frame and rechecks the output immediately before saving. **This is not full-file decode, listening, HDR fidelity assessment or a guarantee every later frame is intact.** Those are physical-device tests.
+Verification checks a real, nonempty regular file, a playable single video track, finite positive duration, the expected codec, audio track count and display aspect ratio. Duration tolerance is the greater of 0.25 seconds or 0.1% of source duration. Aspect tolerance is 2% for encoded dimension rounding. In the tree at `559f693` it requires a frame from every applicable sample window (near the start, the middle and the end), decodes audio samples instead of trusting the track's duration, and compares the copy Photos handed back against the properties this run measured before saving. **This is not full-file decode, listening, HDR fidelity assessment or a guarantee every later frame is intact.** Those are physical-device tests.
 
-1. Photos writes are three: creating a new asset, reading a created asset back, and — only when the user has turned deleting on and the copy has been saved, verified and read back — deleting one original through `PHAssetChangeRequest.deleteAssets`. No code path deletes without that gate, and the one-video flow never deletes.
+1. Photos writes are three: creating a new asset, reading a created asset back, and - only when the user has turned deleting on, the copy has been saved, verified and read back, a receipt naming that copy is stored, and a fresh look at both assets still matches - deleting one original through `PHAssetChangeRequest.deleteAssets`. No code path deletes without that gate, and the one-video flow never deletes. A queue written before the receipt existed carries none, and its originals are never deleted.
 2. Cleanup accepts no media URL. It removes only `VideoShrink-Phase0` within this app’s temporary directory. PhotoKit source URLs are never moved, overwritten or removed.
 3. Cancelling stops the request/export and waits for the writer to unwind before cleanup. Operation tokens ignore late PhotoKit callbacks. Permission prompts cannot be dismissed programmatically.
 4. A Photos save transaction cannot be cancelled once submitted. Save disables cancellation and repeated taps, keeps the file until the callback, then cleans it. Failure asks the user to inspect Photos before retrying. Process termination during save can leave an unacknowledged successful copy; durable reconciliation is next-phase work.
@@ -126,7 +145,7 @@ xcrun simctl list devices available
 SIMULATOR_UDID="PASTE_AN_AVAILABLE_IPHONE_SIMULATOR_UDID" bash scripts/validate-mac.sh
 ```
 
-No build artifacts, certificates, provisioning profiles or credentials belong in Git. No commits or pushes were made during implementation. See [.gitignore](.gitignore).
+No build artifacts, certificates, provisioning profiles or credentials belong in Git. Two local commits exist (`10ab65f` baseline, `559f693` round 1); no remote is configured and nothing has been pushed. See [.gitignore](.gitignore).
 
 ## Unverified assumptions and release gate
 
@@ -138,6 +157,7 @@ No build artifacts, certificates, provisioning profiles or credentials belong in
 - Low storage, thermal pressure, interruptions, lock/background transitions, process termination and cleanup latency are unverified. An OS-terminated process cannot run cleanup immediately.
 - The disk-space privacy reason, app icon, archive/export compliance answers and App Store Connect validation need checking in the submitted archive. No App Review approval is implied.
 - This iPhone-targeted prototype has no separately validated iPad interface. No claim is made about unreleased or untested device models.
+- The round 1 reliability work (persistence-gated Photos mutations, deletion receipts and revalidation, decoded audio and all-window verification) is source only. It has never been compiled, and the 145 XCTest cases in `VideoShrinkTests/` have never executed. The first Mac run is the real test of all of it, and a change as strict as revalidated deletion needs device validation before it is trusted.
 
 **Acceptance:** a TestFlight build on the iPhone 15 Pro Max selects an allowed video whose original must download from iCloud, exports a smaller HEVC file, passes verification and saves a separate playable Photos item with measured potential savings. The original must remain unchanged. Record build, OS, source characteristics and evidence in the [device test plan](docs/PHYSICAL_DEVICE_TEST_PLAN.md).
 

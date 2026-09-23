@@ -4,11 +4,16 @@ TestFlight needs a different kind of build from the one used for development. Th
 build talks to Metro over the local network; a TestFlight build carries the JavaScript bundle
 inside the app and runs on its own. That is what the `production` profile in `eas.json` is for.
 
+**Status (historical):** the production build 10 submission recorded in
+[RELEASE_10.md](RELEASE_10.md) has been uploaded. App Store Connect processing, internal and
+external tester availability, and the beta review were not independently checked. This page is the
+setup record; the steps below describe what was done, not a pending plan.
+
 ## What has to be true first
 
-- **An app record in App Store Connect.** The bundle identifier `com.wilfr.videoshrink` is
-  already registered with the Apple team; the record itself has to be created in the web UI,
-  because EAS cannot create it for you.
+- **An app record in App Store Connect.** Done: the record exists with App Store Connect app ID
+  `6813894354`, saved in `eas.json` under `submit.production.ios.ascAppId`. The bundle identifier
+  `com.wilfr.videoshrink` is registered with the Apple team.
 - **A distribution certificate and an App Store provisioning profile.** EAS manages these. If
   the stored Apple session has expired, `eas build` will ask you to sign in again.
 - **Export compliance.** Already answered in `app.json` with

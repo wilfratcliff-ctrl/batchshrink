@@ -41,6 +41,12 @@ enum BatchPhase: Equatable {
     @Published private(set) var completedIdentifiers: Set<String> = []
     @Published private(set) var isStopping = false
     @Published var selection: Set<String> = []
+    /// Videos whose Photos metadata changed in the last reconciliation, so a picture drawn from
+    /// the older version is out of date. Kept here for the thumbnail cache to invalidate against;
+    /// nothing in this file redraws or caches an image.
+    @Published private(set) var changedThumbnailIdentifiers: [String] = []
+    /// Bumped whenever the thumbnail cache is dropped, so a view can re-key the picture it draws.
+    @Published private(set) var thumbnailRevision = 0
 
     let settings: ShrinkSettings
 
@@ -53,6 +59,15 @@ enum BatchPhase: Equatable {
     private let queueStore: any BatchQueueStoring
     private let screenAwake: any ScreenAwakeControlling
     private let log = Logger(subsystem: "VideoShrink", category: "Batch")
+    /// Watches Photos for edits made outside the app and for the app coming back to the front,
+    /// where access can have changed while it was suspended. Photos reports on its own queue and
+    /// the monitor comes back to the main actor before it says anything.
+    private let libraryChanges = LibraryChangeMonitor()
+    /// The scanner's metadata-only half, when the scanner has one, so that noticing a change
+    /// re-lists the library without the on-device size pass.
+    private let libraryReconciler: (any LibraryReconciling)?
+    /// The refresh in flight, so a newer report replaces an older listing instead of racing it.
+    private var libraryRefresh: Task<Void, Never>?
     private var runTask: Task<Void, Never>?
     private var stopRequested = false
     private var finishRequested = false
@@ -90,10 +105,17 @@ enum BatchPhase: Equatable {
         self.queueStore = queueStore
         self.screenAwake = screenAwake
         self.settings = settings
+        self.libraryReconciler = scanner as? LibraryReconciling
         completedIdentifiers = history.completedIdentifiers()
         measurements = history.copyMeasurements()
         cleanWorkspace()
         restoreQueue()
+        // The library can change under the app, and access can change while it is suspended. The
+        // monitor reports both and decides nothing itself; what they mean is decided here.
+        libraryChanges.onChange = { [weak self] reason in
+            self?.libraryChanged(reason)
+        }
+        libraryChanges.start()
     }
 
     // MARK: - Derived state
@@ -263,6 +285,9 @@ enum BatchPhase: Equatable {
     func scan() {
         guard runTask == nil else { return }
         guard [.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
+        // A scan reads the library from scratch, so a listing a change already started is
+        // superseded rather than left to land on top of its answer.
+        libraryRefresh?.cancel()
         phase = .scanning
         message = nil
         scanProgress = LibraryScanProgress(phase: .listing, scanned: 0, total: 0)
@@ -282,6 +307,8 @@ enum BatchPhase: Equatable {
                 self.scanResult = result
                 self.items = []
                 self.selection.removeAll()
+                // The library was just read from scratch, so no picture is out of date yet.
+                self.changedThumbnailIdentifiers = []
                 self.phase = .scanned
                 self.log.info("Library scan finished")
             } catch {
@@ -301,6 +328,88 @@ enum BatchPhase: Equatable {
         guard phase == .scanning else { return }
         scanner.cancel()
         runTask?.cancel()
+    }
+
+    // MARK: - Library changes
+
+    /// One report from the monitor: Photos changed outside the app, or the app came back to the
+    /// front, where access can have changed while it was suspended.
+    private func libraryChanged(_ reason: LibraryChangeReason) {
+        limitedAccess = libraryChanges.isLimited
+        guard libraryChanges.canReadLibrary else {
+            libraryAccessLost()
+            return
+        }
+        log.info("Photos reported a change (\(String(describing: reason), privacy: .public))")
+        refreshLibrary()
+    }
+
+    /// Folds a fresh look at Photos into the library the app already has in hand.
+    ///
+    /// The listing and the selection are the only things this touches. A video a run is working
+    /// on keeps exactly the entry it started with, which is what `running` is for, so nothing
+    /// here can point a job at a different video.
+    ///
+    /// A refresh is the metadata-only half of a scan: it never measures a size on device, so
+    /// noticing an edit cannot turn into a scan of its own.
+    private func refreshLibrary() {
+        // A scan already in flight is producing a newer, complete listing.
+        guard phase != .scanning else { return }
+        // With no library in hand there is nothing to keep honest, and the next scan reads
+        // Photos from scratch.
+        guard scanResult != nil || !items.isEmpty else { return }
+        // A newer report replaces an older listing rather than racing it.
+        libraryRefresh?.cancel()
+        libraryRefresh = Task { [weak self] in
+            guard let self, let reconciler = self.libraryReconciler else { return }
+            // Read as late as they can be, because the listing is the part that takes time.
+            let previous = self.scanResult
+            let selection = self.selection
+            let running = LibraryScanResult.runningIdentifiers(in: self.items)
+            do {
+                let reconciled = try await reconciler.reconcile(previous: previous,
+                                                                selection: selection,
+                                                                running: running)
+                guard !Task.isCancelled else { return }
+                self.apply(reconciled)
+            } catch {
+                // A change this app could not read changes nothing. The listing in hand is still
+                // its best answer, and the next report tries again.
+                if PipelineError.normalize(error, fallback: .libraryScan) != .cancelled {
+                    self.log.error("Reconciling the library failed")
+                }
+            }
+        }
+    }
+
+    /// Takes the answer to one refresh. Nothing here touches `items`.
+    private func apply(_ reconciliation: LibraryReconciliation) {
+        scanResult = reconciliation.result
+        selection = reconciliation.selection
+        changedThumbnailIdentifiers = reconciliation.changedIdentifiers
+        // A picture drawn from the older listing is out of date, and a thumbnail is only ever
+        // fetched once per identifier, so the cache has to be dropped before the view redraws.
+        if !changedThumbnailIdentifiers.isEmpty {
+            ThumbnailService.shared.invalidate(identifiers: changedThumbnailIdentifiers)
+            thumbnailRevision += 1
+        }
+        if reconciliation.changedSomething {
+            log.info("Photos no longer matches the library in hand")
+        }
+    }
+
+    /// Photos access is gone.
+    ///
+    /// This is the path `scan()` takes when Photos refuses it: the flow says so rather than
+    /// holding a library it can no longer read, and it is taken only from the phases a scan
+    /// itself may start in. A run in flight, or one paused with work left, keeps the screen and
+    /// its own record of what happened to each video.
+    private func libraryAccessLost() {
+        guard runTask == nil,
+              [BatchPhase.start, .scanned, .selecting, .finished, .failed].contains(phase) else { return }
+        phase = .failed
+        message = PipelineError.permissionDenied.localizedDescription
+        log.error("Photos access was withdrawn")
     }
 
     // MARK: - Choosing
@@ -779,6 +888,11 @@ enum BatchPhase: Equatable {
     /// what it means and confirmed; nothing here runs on its own.
     func deleteOriginalsNow() {
         guard runTask == nil, !deletionInProgress else { return }
+        // The offer was drawn from a look taken earlier, and a copy can have changed since. The
+        // candidates the screen offered are looked at again here, at the moment of the tap, and
+        // the list is built from that fresh answer, so it can only be smaller than the offer. A
+        // copy with no current look is left out and its original stays.
+        refreshDeletionLook(for: deletableItemIDs)
         let ids = items.filter { deletionDecision(for: $0) == .delete }.map(\.id)
         guard !ids.isEmpty else { return }
         deletionInProgress = true
@@ -906,3 +1020,18 @@ enum BatchPhase: Equatable {
         }
     }
 }
+
+/// The scanner's metadata-only half: a fresh listing folded into the library the app already has
+/// in hand, without the on-device size pass.
+///
+/// `LibraryScanning` in `Services/ServiceProtocols.swift` states only the two requirements a
+/// scan needs, and this flow is the only caller of the rest, so the capability is declared here
+/// beside its caller rather than widening that protocol. A scanner that cannot do this simply
+/// leaves a library change unreconciled, which is what happened before this was wired at all.
+@MainActor protocol LibraryReconciling {
+    func reconcile(previous: LibraryScanResult?,
+                   selection: Set<String>,
+                   running: Set<String>) async throws -> LibraryReconciliation
+}
+
+extension PhotoLibraryScanService: LibraryReconciling {}

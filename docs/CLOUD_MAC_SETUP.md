@@ -10,7 +10,7 @@ No paid project-generation tool is needed. XcodeGen is free, used only to genera
 
 ## Transfer, generate and build
 
-The Windows workspace is prepared but has not been committed or pushed. Before cloning, you must explicitly arrange an initial commit and push to **your private repository**, or securely copy the source tree to the Mac. There is no repository URL to assume.
+The Windows workspace now has two local commits (`10ab65f` baseline, `559f693` round 1) but no configured remote and nothing pushed. Before cloning, you must explicitly arrange a push to **your private repository**, or securely copy the source tree to the Mac. There is no repository URL to assume.
 
 Use your own Mac user account on the rented host. Authenticate to private GitHub through its credential manager or a short-lived SSH key; never put a token into the clone URL.
 

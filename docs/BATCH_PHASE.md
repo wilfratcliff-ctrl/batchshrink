@@ -7,6 +7,12 @@ single-video path with a preview before saving is still there, one tap away.
 A smaller copy is added to Photos as a separate item, and only after it passes the existing
 checks. Deleting an original is opt-in, applies to batch runs, and is described below.
 
+**Status: implemented source, never compiled.** This document describes the batch as it exists in
+the tree at commit `559f693`. Earlier builds compiled earlier states of it. The round 1
+reliability work changed the queue write boundaries, the deletion gate and verification
+afterwards, and none of that has been compiled. Later round 2 work is recorded by the loop in
+`AGENT_LOOP.md`, not here. Nothing in this document is a device result.
+
 ## What the prescan can see
 
 The scan is built from PhotoKit metadata. It downloads nothing.
@@ -108,19 +114,23 @@ Before a copy is saved, and again immediately before the save, VideoShrink check
 
 - it is a real, non-empty file that plays;
 - exactly one video track, with a duration within 0.25 s or 0.1% of the original;
-- the same audio track count, and non-empty audio when the original had sound;
+- the same audio track count, and decoded audio samples when the original had sound;
 - the same display shape within 2%;
 - the expected codec, no more pixels than the original, and no more frames than the original;
-- a frame decodes near the start, the middle and the end of the track.
+- a frame decodes from every applicable sample window near the start, the middle and the end of
+  the track. A window that fails to decode fails the check; a window is only left out when the
+  remaining track is too short to hold one, and a clip too short for any window is sampled as a
+  single window over the whole clip rather than skipped.
 
-After Photos accepts the save, the app asks for the new item back and inspects that. This is what
-turns "Photos said yes" into "the copy is there and readable". A copy Photos cannot hand back yet
-is not treated as a failure: the finished screen reports how many copies were read back and how
-many were not.
+After Photos accepts the save, the app asks for the new item back, compares it against the output
+properties this run measured before saving, and decodes it under the same rules. This is what
+turns "Photos said yes" into "the copy is there, readable and the one this run approved". A copy
+Photos cannot hand back yet is not treated as a failure: the finished screen reports how many
+copies were read back and how many were not.
 
-None of this is an end-to-end playback proof. Three decoded frames are not a decoded file, audio
-presence is not audio fidelity, and reading a copy back on this iPhone says nothing about whether
-iCloud has finished uploading it.
+None of this is an end-to-end playback proof. A few decoded windows are not a decoded file,
+decodable audio is not audio fidelity or sync, and reading a copy back on this iPhone says nothing
+about whether iCloud has finished uploading it.
 
 ## What travels with a copy
 
@@ -154,11 +164,16 @@ these hold:
 - a copy was saved and it is smaller than the original;
 - that copy passed verification;
 - Photos handed the copy back when the app asked for it;
+- the run stored a receipt naming that copy and what both assets looked like when the copy was
+  checked;
+- both assets were looked up again immediately before Photos was asked, and that fresh look still
+  matches the receipt;
 - the original has not already been dealt with.
 
 Anything else returns a reason, the original stays, and the reason appears in the run's list. The
 app never deletes on the strength of an export alone: a copy that cannot be read back keeps its
-original.
+original, and so does one that changed, disappeared or was checked by an older algorithm. A queue
+written before the receipt existed carries none, so its originals are never deleted.
 
 Deleted items go to Photos' Recently Deleted, which keeps them for 30 days. That is also when the
 space comes back, and only once the devices have synced. The interface says so before the setting
@@ -251,14 +266,15 @@ The list is capped at the 2,000 most recent identifiers and 60 measured bitrates
 
 - No iCloud storage is freed, and no subscription tier is lowered. Keeping both copies uses
   more storage until the user manages the originals themselves.
-- No background or overnight processing. There is no background entitlement, the screen is
-  not kept awake, and leaving the foreground pauses the run.
+- No background or overnight processing. There is no background entitlement, the screen is held
+  awake only when the user turns that option on, and leaving the foreground pauses the run.
 - The stored queue survives a close, but there is still no exactly-once guarantee: a save that
   Photos committed just before the app stopped is flagged for the user to check rather than
   reconciled automatically.
 - No prediction of a copy's exact size, and no promise that every video gets smaller.
 - Deletion is opt-in and gated. There is no bulk "delete everything" action, nothing is deleted
-  without a copy that Photos handed back, and the one-video flow never deletes at all.
+  without a stored receipt and a fresh look that both still match, and the one-video flow never
+  deletes at all.
 - No supported media beyond ordinary, unedited, single-video, at-most-one-audio-track files.
 
 ## What still needs a device
@@ -296,3 +312,12 @@ The list is capped at the 2,000 most recent identifiers and 60 measured bitrates
     original, plus a final one for the remainder.
 16. Leave a batch running with the screen-awake option on and confirm the display stays on, then
     that it is released when the batch finishes or the app is backgrounded.
+17. Run the XCTest suite on a Mac with `scripts/validate-mac.sh`. The tree now holds 145 cases and
+    none has ever executed; the round 1 cases for queue boundaries, deletion receipts and
+    verification have not been compiled either.
+18. With deleting on, edit or remove a copy in Photos after a run, then confirm the original is
+    kept and the kept reason appears, because the fresh look no longer matches the receipt.
+19. Restore a queue written by an earlier build (7 through 10) and confirm none of its originals
+    can be deleted, because those records carry no receipt.
+20. Make the queue file unwritable during a run and confirm the app stops before it saves a copy or
+    asks Photos to delete anything, rather than mutating Photos without a record.

@@ -12,9 +12,24 @@ import UIKit
 
     private let manager = PHImageManager.default()
     private let cache = NSCache<NSString, UIImage>()
+    /// The cache keys held for each video, per identifier. `NSCache` cannot be enumerated, so
+    /// this is what lets a change reported by Photos drop exactly the stale previews.
+    private var keysByIdentifier: [String: Set<NSString>] = [:]
 
     private init() {
         cache.countLimit = 240
+    }
+
+    /// Drops every cached preview of the given videos, at every size.
+    ///
+    /// Photos keeps the same identifier when a video is edited, so without this the app would
+    /// keep showing the picture from before the edit. The next request asks Photos again at
+    /// `.current` and caches the new picture.
+    func invalidate(identifiers: [String]) {
+        for identifier in identifiers {
+            guard let keys = keysByIdentifier.removeValue(forKey: identifier) else { continue }
+            for key in keys { cache.removeObject(forKey: key) }
+        }
     }
 
     func image(identifier: String, size: CGSize) async -> UIImage? {
@@ -38,7 +53,10 @@ import UIKit
                 continuation.resume(returning: image)
             }
         }
-        if let image { cache.setObject(image, forKey: key) }
+        if let image {
+            cache.setObject(image, forKey: key)
+            keysByIdentifier[identifier, default: []].insert(key)
+        }
         return image
     }
 

@@ -1,21 +1,21 @@
 # Expo development application
 
-The repository now contains an Expo SDK 57 application with a local iOS module that hosts the existing SwiftUI prototype. The native Photos/HEVC implementation remains in `VideoShrink/`. TypeScript, bundling and module discovery can be checked on Windows; the Swift module still requires an actual iOS build and physical-device testing.
+The repository now contains an Expo SDK 57 application with a local iOS module that hosts the existing SwiftUI prototype. The native Photos/HEVC implementation remains in `VideoShrink/`. TypeScript, bundling and module discovery can be checked on Windows. The Swift module has been compiled and signed by EAS through build 10, but the media pipeline still needs physical-device testing.
 
 The Expo entry point renders `VideoShrinkNative`, a native view backed by a child `UIHostingController`. All existing Photos selection, states, measurements, preview, verification and save controls remain in SwiftUI for this proof. Expo Go displays a clear unsupported-build message; it does not simulate compression. See [Expo custom native code](https://docs.expo.dev/workflow/customizing/) and [Modules setup](https://docs.expo.dev/modules/get-started/).
 
 ## Current build arrangement
 
 - `package.json` and `package-lock.json`: npm dependencies based on Expo's official blank TypeScript template. `expo-dev-client` supplies the development launcher. EAS CLI is installed globally, outside app dependencies.
-- `app.json`: iOS-only app, Photos permission strings, native deployment target of iOS 18, icon and EAS project link. `com.wilfr.videoshrink` is the proposed bundle identifier; Apple registration/signing is not yet verified.
+- `app.json`: iOS-only app, Photos permission strings, native deployment target of iOS 18, icon and EAS project link. `com.wilfr.videoshrink` is the bundle identifier; Apple signing and device registration are configured, and EAS has signed builds for it through build 10.
 - `eas.json`: `development` produces a physical-iPhone internal/ad hoc build; `development-simulator` is a separate simulator-only profile. Neither profile submits to TestFlight.
 - `modules/videoshrink-native`: Apple-only module scaffolded with `create-expo-module`, then adapted to host the existing interface. A process-wide model prevents React remounts from starting competing cleanup operations. App backgrounding and module teardown explicitly reach the native cancellation policy.
-- `scripts/sync-native-sources.mjs`: copies only the ten shared Swift files and the privacy manifest into the module's ignored generated directory. It excludes the standalone `@main` app and standalone Info.plist. `postinstall` recreates these copies on EAS; the EAS post-install hook checks their hashes. Edit the original files, then run `npm run sync:native`.
-- A privacy resource bundle accompanies the pod. CocoaPods installation, Xcode compilation, runtime view containment/sheet presentation and lifecycle forwarding remain unverified until the cloud build and device tests.
+- `scripts/sync-native-sources.mjs`: copies the 36 shared Swift files and the privacy manifest into the module's ignored generated directory. It excludes the standalone `@main` app and standalone Info.plist. `postinstall` recreates these copies on EAS; the EAS post-install hook checks their hashes. Edit the original files, then run `npm run sync:native`.
+- A privacy resource bundle accompanies the pod. CocoaPods installation and Xcode compilation have happened in the EAS builds through build 10. Runtime view containment, sheet presentation and lifecycle forwarding still need device tests.
 
 The Expo development client uses the local network to connect to Metro and includes development tooling. This is separate from the native media pipeline: no video bytes cross into JavaScript or an app upload endpoint. Review release-build privacy separately when replacing this development setup with a commercial build.
 
-Follow [EAS_DEVELOPMENT_BUILD.md](EAS_DEVELOPMENT_BUILD.md). Setup has not started a cloud build; the user explicitly requested confirmation first.
+Follow [EAS_DEVELOPMENT_BUILD.md](EAS_DEVELOPMENT_BUILD.md). EAS has produced builds for this app; build 10 is the production submission recorded in [RELEASE_10.md](RELEASE_10.md). The round 1 reliability work is not in any build.
 
 ## Reuse boundary
 

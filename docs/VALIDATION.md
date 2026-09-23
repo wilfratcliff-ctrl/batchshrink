@@ -1,6 +1,42 @@
 # Validation record
 
-## September 21: selection previews and a clarity pass (not built yet)
+Every entry below is one of three things, and says which: **historical** (a past build or a past
+decision), **implemented source** (in the tree, never compiled), or **observed** (it ran, with the
+evidence named). See the status legend in [README.md](../README.md).
+
+## September 23: round 1 reliability work (implemented source at 559f693, never compiled)
+
+This entry records round 1 as it landed at commit `559f693`. Later round 2 work is recorded by the
+loop in `AGENT_LOOP.md` and is not described here.
+
+- P0-1, P0-2 and P0-3 from `DEVELOPMENT_REVIEW.md`, plus the `LibraryChangeMonitor` mechanism, are
+  in the tree at commit `559f693`. None of it has been compiled and no XCTest case has run.
+- `BatchViewModel` now reports whether each queue write reached disk, and a checkpoint that fails
+  stops the run before it submits a Photos mutation: before a save, before a delete transaction,
+  and before work starts on a video. A copy Photos has already accepted is never put back on the
+  waiting list after a failed follow-up write, so a second copy cannot be made.
+- Deletion stores a receipt naming the copy Photos created, and what both assets looked like when
+  that copy was checked. Immediately before Photos is asked, both assets are looked up again and
+  the delete is refused unless the fresh look matches. A receipt that is missing, stale or written
+  by an older algorithm never authorises a delete, so a queue written before the change still
+  decodes and keeps every original.
+- `VideoVerificationService` requires every applicable sample window to decode, decodes audio
+  samples instead of trusting the track's duration, and compares the imported copy against the
+  output properties this run measured before saving.
+- `LibraryChangeMonitor` and the pure reconciliation rules landed with unit tests, but at `559f693`
+  nothing constructed the monitor, so the library did not refresh after an edit made outside the
+  app. This is N1 in `AGENT_LOOP.md`.
+- The stricter deletion gate and its caller were developed separately, and deletion was briefly
+  dead code because no caller passed the new evidence in. An integration pass rewired the receipt
+  from read-back through the persisted queue into the gate, and the old unrevalidated delete call
+  now has no caller. A change that strict needs device validation before it is trusted.
+- XCTest cases went from 102 to 145. None has ever executed. Portable checks after round 1:
+  `npm run validate:native` passes (37 application Swift files, 145 XCTest cases present) and
+  `npm run typecheck` passes. Those are pattern scans, not a compiler.
+- **NOT RUN**: compilation, XCTest execution, simulator, any build, any device run, deletion
+  against a real library, the queue-failure paths on a device, and the new revalidation lookups.
+
+## September 21: selection previews and a clarity pass (historical: compiled into production build 10)
 
 - Selection thumbnails are larger and now carry the video's length, so a shot can be recognised
   rather than guessed at from a date.
@@ -16,10 +52,12 @@
   arrive with are when space actually comes back, whether anything downloads, and how trustworthy
   the numbers are.
 - Build number moved to 10 so the next build is distinguishable from the submitted build 9.
-- No build was created for these changes, as requested. They are unverified: nothing here has been
-  compiled, and nothing has been tried on a device.
+- No build was created for these changes at the time, as requested. Historical note: they were
+  later compiled into the production build 10 recorded in [RELEASE_10.md](RELEASE_10.md). They are
+  still unverified on a device: no rendered layout, accessibility result or media test exists for
+  them.
 
-## September 19: deletion, metadata preservation and a reliability pass (build 7)
+## September 19: deletion, metadata preservation and a reliability pass (build 7, historical)
 
 - Added opt-in deletion of originals with two modes: after each confirmed copy, or at the end
   after the user reviews. One gate, `DeletionPolicy`, requires a saved, smaller, verified copy
@@ -68,7 +106,7 @@
 - **NOT RUN**: XCTest execution, deletion on a real library, Recently Deleted behaviour, the
   metadata comparison against an original, the thermal stop, and every interface state above.
 
-## September 19: durable queue (build 5)
+## September 19: durable queue (build 5, historical)
 
 - The batch queue is now written to a small JSON file in the app's own Application Support
   directory, excluded from backup and behind `completeFileProtectionUntilFirstUserAuthentication`.
@@ -97,7 +135,7 @@
   restoring a large queue, and the interaction between a restored queue and Photos access being
   changed while the app was closed.
 
-## September 18: thumbnails and quality options (build 4)
+## September 18: thumbnails and quality options (build 4, historical)
 
 - Added thumbnails to the batch list, the current video and the finished rows. Thumbnails are
   the only thing the app fetches without the user starting a job: Photos may hand over a
@@ -137,7 +175,7 @@
   the H.264 720p preset, frame-rate reduction, thumbnails over a large library, and estimate
   accuracy for each option.
 
-## September 18: batch queue, library prescan and time estimate (build 3)
+## September 18: batch queue, library prescan and time estimate (build 3, historical)
 
 - Added the batch flow: library scan, a sortable selection list, an in-memory queue, a processing display with remaining files and a time estimate, pause/resume, and a measured summary. The single-video flow keeps its behaviour and moved into `SingleVideoFlow.swift`.
 - Eligibility rules now live once, in `AssetRules`, and are used by both the scan and the retrieval path. The retrieval path also rejects Live Photo video pairs, which the subtype check alone could not see.
@@ -148,7 +186,7 @@
 - **NOT RUN**: Swift compilation, XCTest execution, simulator, signing, Photos/iCloud access and every device behaviour above. What the `dataSize` probe returns at runtime, whether the on-device pass ever triggers a download, the accuracy of the estimate, and the batch UI on a real library are all unverified.
 - EAS build 3 (`3d8d6b29-936a-4546-a104-e32b30b46205`) finished successfully at 22:15 UTC on the same image (Xcode 26.6, iPhoneOS26.5.sdk). The batch view model and screens, the library scan service, the estimate model, the shared eligibility rules and the history store compiled into the `VideoShrinkCore` pod, archived and signed for the registered iPhone. Installation link: https://expo.dev/accounts/wilfrat1/projects/videoshrink/builds/3d8d6b29-936a-4546-a104-e32b30b46205 . **The build is compilation evidence only.** Estimate accuracy, scan coverage, the runtime result of the `dataSize` probe, whether the on-device pass ever fetches bytes, and every batch interaction still need the device.
 
-## September 18: physical build and interface redesign
+## September 18: physical build and interface redesign (historical)
 
 - EAS build 1 (`8441943f-fcb8-4584-ae19-cf691b7b7205`) finished successfully. The user completed signing/device registration, installed it and confirmed the native app opened through Metro on their iPhone.
 - Replaced the initial form with focused welcome, processing, review, success and recovery screens. Native services and model behavior are unchanged.

@@ -11,6 +11,10 @@ quality and deletion changes), a run (retrieval, transcode, verification, disk, 
 heat, background, pause, finish early, force quit), deletion in both modes, the one-video flow
 end to end, and the queue file across every transition.
 
+This pass was made against the build-7-era source. Round 1 later changed verification, deletion
+evidence and the queue write boundaries, in source only and never compiled. Those changes are
+recorded in [VALIDATION.md](VALIDATION.md); they are not covered by the route walk below.
+
 ## Fixed in this pass
 
 1. **A double callback could crash the scan.** The on-device size pass resumed a continuation
@@ -48,7 +52,7 @@ end to end, and the queue file across every transition.
    inconsistent behaviour until they read the sheet.
 9. **Recently Deleted holds the space for 30 days.** The app cannot shorten that and says so
    wherever deletion is offered.
-10. **Nothing has run.** 95 XCTest cases exist and none have executed, because there is no Mac
+10. **Nothing has run.** 145 XCTest cases exist and none has executed, because there is no Mac
     here. Everything in this document is reasoning about code, not observed behaviour.
 11. **Estimates are planning bands** until three copies have been measured at that size on this
     device. A 60 fps original keeps more than the band assumes, which the selector says.
@@ -59,8 +63,9 @@ end to end, and the queue file across every transition.
 
 ## Routes that look sound
 
-- Deleting cannot happen without a saved, smaller, verified copy that Photos handed back; with
-  deleting off, nothing in the code path can remove an original.
+- Deleting cannot happen without a saved, smaller, verified copy that Photos handed back, a stored
+  receipt naming that copy, and a fresh look at both assets that still matches; with deleting off,
+  nothing in the code path can remove an original.
 - A stored queue reconciles in one place, and an interrupted save or delete is always flagged
   rather than repeated.
 - Leaving the app pauses; a save already accepted by Photos is allowed to settle; the pause reason

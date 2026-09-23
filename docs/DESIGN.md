@@ -26,7 +26,7 @@ The Expo host and fallback use the same dark background. Photos permission descr
 
 ## Validation for this pass
 
-No build requested or performed. Portable repository guardrails and TypeScript checking pass. Native source copies are synchronized and checked against their manifest. These checks do not compile Swift or execute XCTest.
+No build was requested or performed for this pass. Portable repository guardrails and TypeScript checking pass. Native source copies are synchronized and checked against their manifest. These checks do not compile Swift or execute XCTest. Historical: the redesign was later compiled into the production build 10 recorded in [RELEASE_10.md](RELEASE_10.md); that is compilation evidence, not a rendered-layout or accessibility result.
 
 When the user requests a build, review on iPhone:
 

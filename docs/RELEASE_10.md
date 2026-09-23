@@ -13,3 +13,8 @@ Includes the dark mint/lilac redesign, three-step onboarding, thumbnail gallery,
 Validation: repository guardrails, TypeScript check and native-source synchronization passed. EAS compiled and signed the native iOS app successfully. Physical-device UI and media tests are still pending; XCTest was not run by this build.
 
 The existing App Store Connect app ID is now saved in `eas.json` for future non-interactive submissions. No credentials are stored in source. Build numbers are local; the next new upload should use 11 or later.
+
+**Scope of this record.** This build carries the source as it stood at build 10. The round 1
+reliability work - persistence-gated Photos mutations, deletion receipts and revalidation,
+decoded-audio and all-window verification - landed afterwards in commit `559f693` and is not in
+this build. None of it has been compiled; see [VALIDATION.md](VALIDATION.md).

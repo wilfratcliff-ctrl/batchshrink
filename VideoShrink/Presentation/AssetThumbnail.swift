@@ -10,12 +10,15 @@ struct AssetThumbnail: View {
     var badge: String? = nil
     /// Shown when tapping the thumbnail opens a player rather than selecting it.
     var showsPlayBadge = false
+    /// Bumped by the view model when Photos reports a change to this video. The request below
+    /// keys on it, so an edited video is fetched again instead of showing the cached picture.
+    var revision: Int = 0
 
     @State private var image: UIImage?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var requestID: String {
-        "\(identifier)-\(Int(size.width.rounded()))-\(Int(size.height.rounded()))"
+        "\(identifier)-\(revision)-\(Int(size.width.rounded()))-\(Int(size.height.rounded()))"
     }
 
     var body: some View {

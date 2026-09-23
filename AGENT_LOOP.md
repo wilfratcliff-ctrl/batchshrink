@@ -42,15 +42,20 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | P0-2 | 0 | Persist copy identity, revalidate copy and original immediately before deletion, migrate old queues conservatively | done, round 1 |
 | P0-3 | 0 | Verification must match its claim: all sample windows, decoded audio, imported copy compared to expectations | done, round 1 |
 | P1-1 | 1 | Run XCTest on a Mac via `scripts/validate-mac.sh`; produce `DEVICE_RESULTS.md` | blocked, needs macOS |
-| P1-2 | 1 | Photos change observer plus foreground authorization refresh | partly done, round 1: mechanism built, not yet wired |
+| P1-2 | 1 | Photos change observer plus foreground authorization refresh | done, round 2 |
 | P1-3 | 1 | Establish source-control checkpoints | done, commit `10ab65f` |
-| P1-4 | 1 | Status documents conflict with implemented behaviour | open |
-| N1 | 0 | `LibraryChangeMonitor` is built and tested but nothing constructs it, so the library never actually reconciles | open |
-| N2 | 1 | `ThumbnailService` cache is never invalidated, so an edit in Photos shows the old picture; needs an invalidation keyed on `LibraryReconciliation.changedIdentifiers` | open |
-| N3 | 1 | `queueWarning` is invisible on the summary and start screens, so a failed queue clear during reset has no notice | open |
-| N4 | 2 | A count of deletion candidates can be offered before a copy changes; the tap re-checks and keeps the original, but a look refreshed at tap time would be clearer | open |
+| P1-4 | 1 | Status documents conflict with implemented behaviour | done, round 2 |
+| N1 | 0 | `LibraryChangeMonitor` is built and tested but nothing constructs it, so the library never actually reconciles | done, round 2 |
+| N2 | 1 | Thumbnail cache never invalidated, so an edit in Photos shows the old picture | done, round 2 |
+| N3 | 1 | `queueWarning` invisible on the screens a failed write can leave the run resting on | done, round 2 |
+| N4 | 2 | A deletion candidate could be offered before its copy changed | done, round 2 |
 | N5 | 1 | Exactly-once save reconciliation and app-created copies excluded from bulk selection (NEXT_PHASE) | open, now unblocked by P0-2 |
 | N6 | 0 | None of the round 1 Swift has ever been compiled; the first Mac run is the real test of all of it | blocked, needs macOS |
+| N7 | 2 | `LibraryReconciling` is a workaround declared beside its caller; fold `refreshListing()`/`reconcile` into `LibraryScanning` and update `BatchMockScanner` | open |
+| N8 | 1 | No test covers the reconciliation wiring: a scanner mock cannot satisfy `LibraryReconciling` as written | open |
+| N9 | 2 | `ThumbnailService.keysByIdentifier` is never pruned when `NSCache` evicts on its own | open |
+| N10 | 2 | `LibraryChangeMonitor.stop()` is never called; safe only while the view model lives as long as the app | open |
+| N11 | 1 | No test has ever run: 145 XCTest cases exist and zero have executed | blocked, needs macOS |
 
 ## Round log
 
@@ -58,6 +63,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 |-------|--------|-------|-------|-------|
 | 0 | `10ab65f` | Baseline checkpoint before any agent work | all three PASS | 81 files, clean tree |
 | 1 | see below | P0-1, P0-2, P0-3 and the P1-2 mechanism, by four parallel agents on disjoint file lists | all three PASS | 13 files, ~1890 insertions, 102 -> 145 XCTest cases |
+| 2 | see below | N1, N2, N3, N4 and P1-4, by four parallel agents on disjoint file lists | all three PASS | 17 files, ~390 insertions |
 
 ### Round 1 detail
 
@@ -87,3 +93,28 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
   test target would not compile without them.
 - The revalidation pass is synchronous and runs only from the three points that offer deletions,
   never from a view body, so it cannot fetch from PhotoKit on every view update.
+
+### Round 2 detail
+
+- `wire_change_monitor` closed N1: `BatchViewModel` now constructs the monitor, starts it, and on
+  each report updates limited access, takes the permission path when access is gone, and applies
+  a metadata-only reconciliation. `items` is never rewritten, so a run keeps the identity it
+  started with. It also closed N4: the deletion look is refreshed at tap time, so the offered list
+  can only shrink.
+- `warning_visibility` closed N3 by adding one `QueueWarningNotice` and drawing it on the start,
+  summary, selection, processing and recovery screens. It corrected the brief with evidence:
+  `BatchFinishedScreen` already drew the warning, so it was left alone rather than duplicated.
+- `thumbnail_invalidation` closed N2 by adding `ThumbnailService.invalidate(identifiers:)` and a
+  `revision` key on `AssetThumbnail`.
+- `docs_truth` closed P1-4 across 13 documents: the three kinds of claim are now separated, and
+  the contradictions it found are listed in its report.
+
+### Round 2 integration decisions
+
+- The thumbnail work was built but unreachable, the same shape of gap as round 1's N1. The parent
+  wired it: `BatchViewModel.apply(_:)` drops the cache and bumps `thumbnailRevision`, and the
+  three `AssetThumbnail` call sites plus `BatchFinishedRow` carry that revision. Left unwired,
+  N2 would have changed nothing on screen.
+- `LibraryReconciling` is a deliberate workaround, not an oversight. `BatchViewModel` holds
+  `any LibraryScanning`, so a protocol-extension default would have statically dispatched a full
+  scan instead of the metadata-only listing. See N7 for the clean version.

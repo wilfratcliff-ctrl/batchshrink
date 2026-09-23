@@ -2,6 +2,8 @@
 
 All cases are **NOT RUN** at creation. Use expendable or separately backed-up test clips, starting on the iPhone 15 Pro Max. No test instructs you to remove your original media. TestFlight distribution and a passing simulator test suite are prerequisites, not proof of the media pipeline.
 
+These cases describe the source at commit `559f693`. The build-10 app predates the round 1 queue, deletion and verification changes, so a pass against build 10 does not cover them. The round 1 work has never been compiled; its first run is part of this plan, not a prerequisite.
+
 Record: app version/build, Git revision once available, iOS/Xcode versions, device, permission mode, codec/resolution/HDR/frame rate, duration, audio, network/power/thermal conditions, source/output byte counts, observed outcome and pass/fail. Do not put private filenames, library identifiers, locations or personal footage in the repository.
 
 ## First five tests
@@ -34,10 +36,12 @@ Record: app version/build, Git revision once available, iOS/Xcode versions, devi
 | Low storage | On a controlled test device, reduce available space using expendable test data. Test preflight rejection, download failure, mid-export disk-full, and save requiring another copy. No success claim from a preflight alone. Space can change at any time. |
 | Incoming call/interruption | Receive a call during export. Record whether iOS only makes the scene inactive or backgrounds it. Inactive alone need not cancel; background must request cancellation. No automatic save or false success. |
 | Lock/Home/app switch | Lock or background during cloud/export/verification. App requests cancellation, possibly completes cleanup only after resuming. It must not claim processing continues overnight. Background while ready-to-save may retain the temporary output until discard/save or restart. |
-| Process termination | Force quit during export, reopen and check startup cleanup. Repeat during save: Photos may have committed despite no completion UI. Inspect Photos before manually retrying; automatic resumption/deduplication is not implemented. |
+| Process termination | Force quit during export, reopen and check startup cleanup. Repeat during save: Photos may have committed despite no completion UI. A stored queue flags a mid-save item for a look rather than repeating it, but automatic exactly-once reconciliation is not implemented; inspect Photos before manually retrying. |
 | Thermal pressure | Observe a naturally warm device during long processing; never deliberately overheat it. Record slowdowns, OS interruptions, failures and battery impact. No thermal throughput promise. |
 | Playback after import | Play in Photos from beginning through end, seek around, listen, inspect HDR and rotation. Preview success is not proof that the imported representation plays correctly. |
-| Metadata | Compare creation date, duration, codec, resolution, frame rate, location, HDR/color tags, audio channels, favorites, album membership, captions and edit history. Only creation date is deliberately copied at Photos level. Record all differences. |
+| Metadata | Compare creation date, duration, codec, resolution, frame rate, location, HDR/color tags, audio channels, favorites, album membership, captions and edit history. Creation date, filename, location and favourite/hidden flags are deliberately copied at Photos level, and the file's own descriptive metadata is written into the copy; album membership, captions, keywords and ratings are not. Record all differences. |
+| Copy changed after a run | With deleting on, edit or remove a copy in Photos after its run, then confirm the original is kept and the reason is shown, because the fresh look no longer matches the stored receipt. |
+| Failed queue write | Make the queue file unwritable during a run. Confirm the run stops before it saves a copy or asks Photos to delete anything, and that a committed save is never repeated after its follow-up record cannot be written. |
 | Original safety | Before/after compare original item, dimensions, duration, visual quality and edit state. With separate trusted export tooling, compare original resource hashes where practical. Check no item was moved to Recently Deleted and no original content changed. |
 | Accessibility | Largest Dynamic Type, VoiceOver, landscape and increased contrast. Read all controls, sizes and errors; ensure text is not clipped and progress announces the current operation clearly. |
 | Cleanup/privacy | After cancel/failure/save and next launch, inspect the app sandbox where development tooling permits. Only app-owned output is removed. Inspect console for absence of media paths, identifiers and content. Inspect the archive’s privacy manifest. |

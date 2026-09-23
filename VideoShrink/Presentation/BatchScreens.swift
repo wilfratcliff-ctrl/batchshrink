@@ -39,6 +39,7 @@ struct BatchStartScreen: View {
                      ? "Deleting is on. A copy is saved and checked first, then the original goes."
                      : "Nothing is deleted. You keep the original and the copy.")
                     .font(.footnote).foregroundStyle(.secondary)
+                QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -157,6 +158,7 @@ struct BatchSummaryScreen: View {
                         .font(.footnote).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -305,6 +307,7 @@ struct BatchSelectionScreen: View {
                 }
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 700)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 24)
@@ -390,7 +393,8 @@ struct BatchSelectionScreen: View {
                     AssetThumbnail(identifier: asset.id,
                                    size: CGSize(width: geometry.size.width, height: geometry.size.height),
                                    badge: ShrinkFormat.duration(asset.duration),
-                                   showsPlayBadge: true)
+                                   showsPlayBadge: true,
+                                   revision: batch.thumbnailRevision)
                 }
                 .aspectRatio(0.92, contentMode: .fit)
             }
@@ -500,6 +504,7 @@ struct BatchProcessingScreen: View {
                 if let warning = batch.cleanupWarning {
                     ShrinkNotice(symbol: "exclamationmark.triangle", title: "Cleanup needs attention", detail: warning)
                 }
+                QueueWarningNotice(warning: batch.queueWarning)
                 Text(processingFootnote)
                     .font(.footnote).foregroundStyle(.secondary)
             }
@@ -559,7 +564,8 @@ struct BatchProcessingScreen: View {
                               label: batch.currentStage?.title ?? "Preparing next video")
             if let asset = batch.currentAsset, let number = batch.currentNumber {
                 HStack(alignment: .center, spacing: 14) {
-                    AssetThumbnail(identifier: asset.id, size: CGSize(width: 96, height: 60))
+                    AssetThumbnail(identifier: asset.id, size: CGSize(width: 96, height: 60),
+                                   revision: batch.thumbnailRevision)
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Video \(number) of \(batch.items.count)")
                             .font(.subheadline.weight(.semibold))
@@ -621,7 +627,8 @@ struct BatchProcessingScreen: View {
                 Text("Just finished").font(.subheadline.weight(.semibold))
                 ForEach(finished) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
-                                     deletion: batch.deletionOutcomes[item.id])
+                                     deletion: batch.deletionOutcomes[item.id],
+                                     revision: batch.thumbnailRevision)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -634,10 +641,12 @@ struct BatchFinishedRow: View {
     let item: BatchItem
     var readBack: CopyReadBack? = nil
     var deletion: DeletionOutcome? = nil
+    var revision: Int = 0
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
-            AssetThumbnail(identifier: item.asset.id, size: CGSize(width: 44, height: 44))
+            AssetThumbnail(identifier: item.asset.id, size: CGSize(width: 44, height: 44),
+                           revision: revision)
             VStack(alignment: .leading, spacing: 3) {
                 Text(ShrinkFormat.date(item.asset.creationDate))
                     .font(.subheadline.weight(.medium))
@@ -957,7 +966,8 @@ struct BatchFinishedScreen: View {
                 Text("Needs attention").font(.subheadline.weight(.semibold))
                 ForEach(needing) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
-                                     deletion: batch.deletionOutcomes[item.id])
+                                     deletion: batch.deletionOutcomes[item.id],
+                                     revision: batch.thumbnailRevision)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -989,6 +999,7 @@ struct BatchRecoveryScreen: View {
                 Text("Nothing was changed. Looking through your library only reads dates, durations and sizes.")
                     .font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+                QueueWarningNotice(warning: batch.queueWarning)
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -1003,6 +1014,24 @@ struct BatchRecoveryScreen: View {
                 Button("Shrink one video instead", action: useSingleVideo)
                     .font(.subheadline.weight(.medium)).frame(minHeight: 44)
             }
+        }
+    }
+}
+
+// MARK: - Queue notices
+
+/// A queue that could not be written down, or a stored queue that could not be cleared.
+///
+/// The view model sets this from more than one place, and the run can come to rest on several
+/// screens afterwards, so every one of them draws it. `BatchPausedScreen` and
+/// `BatchFinishedScreen` keep their own wording because they explain it in their own terms.
+struct QueueWarningNotice: View {
+    let warning: String?
+
+    var body: some View {
+        if let warning {
+            ShrinkNotice(symbol: "exclamationmark.triangle",
+                         title: "Something wasn't written down", detail: warning)
         }
     }
 }

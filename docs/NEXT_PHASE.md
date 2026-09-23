@@ -1,23 +1,33 @@
 # From one-video proof to a safe batch product
 
-Start only after the physical acceptance test passes. Expand supported media and failure recovery before monetization or library-wide operations. The prototype contains no deletion code; deletion below is future design work only.
+Start only after the physical acceptance test passes. Expand supported media and failure recovery before monetization or library-wide operations. Deletion is not future design work any more: an opt-in implementation has been in the source since build 7, and round 1 hardened its gate. The deletion section below is design intent for the product version, not a statement that nothing exists.
 
-**Status (build 5):** the library scan, the batch selection screen, the queue with a measured
-time estimate, quality options, thumbnails, the on-device history of completed videos and a
-durable queue file are implemented and described in [BATCH_PHASE.md](BATCH_PHASE.md). The
-durable queue is reconciled on launch: in-flight items wait again and mid-save items are
-flagged for the user rather than repeated. Exactly-once save reconciliation, observable
-library changes and a richer job store (expected metadata, verification evidence, receipts)
-remain open. Verification now samples three points in each copy, checks that audio is present
-when the original had sound, and reads every saved copy back from Photos; the batch also stops
-itself when iOS reports a critical thermal state. Deletion, purchases and background processing
-are untouched.
+**Status.** Three states, kept apart throughout this document:
+
+- **Historical (build 5):** the library scan, the batch selection screen, the queue with a
+  measured time estimate, quality options, thumbnails, the on-device history of completed videos
+  and a durable queue file compiled into build 5 and described in
+  [BATCH_PHASE.md](BATCH_PHASE.md). The durable queue is reconciled on launch: in-flight items
+  wait again and mid-save items are flagged for the user rather than repeated.
+- **Historical (build 7):** opt-in deletion with two modes, the `DeletionPolicy` gate, persisted
+  deletion intent and the sampled verification path compiled into build 7.
+- **Implemented source (round 1, commit `559f693`, never compiled):** deletion now requires a
+  stored original-to-copy receipt and revalidates both assets immediately before Photos is asked;
+  a failed queue write stops a run before it touches Photos; verification requires every sample
+  window to decode, decodes audio rather than trusting track duration, and compares the imported
+  copy against the output the run measured; a Photos change monitor exists but nothing constructs
+  it at that commit, so the library did not reconcile (N1 in `AGENT_LOOP.md`).
+
+Open: exactly-once save reconciliation, wiring the change monitor into the library view, a richer
+job store, purchases and background processing.
 
 The final product will use Expo. After the native proof, follow [EXPO_INTEGRATION.md](EXPO_INTEGRATION.md): retain the Swift media engine, wrap it in a local Expo module, and replace the SwiftUI harness with the product UI. Re-run the full safety matrix across that bridge.
 
 ## Library scanning and filtering
 
 Use PhotoKit fetches for metadata and a `PHPhotoLibraryChangeObserver` for changes. Respect limited access as the actual accessible library; never label that subset “your entire library.” Paginate work, avoid downloading everything merely to scan, and handle revoked authorization or assets removed outside the app.
+
+Round 1 (commit `559f693`, never compiled) built `LibraryChangeMonitor` and the pure reconciliation rules, but constructed the monitor nowhere, so a library edited outside the app still went stale. Wiring it into the library view remains open (N1 in `AGENT_LOOP.md`).
 
 Define eligibility explicitly: ordinary video versus adjusted, slow-motion, time-lapse, cinematic, HDR, ProRes, spatial/MV-HEVC, shared or otherwise restricted resources. Test each separately. Live Photos contain paired still/video resources and must not be treated as an ordinary movie replacement. Exclude them until there is a tested preservation design. Spatial and cinematic semantics may not survive a flat HEVC export.
 
@@ -33,30 +43,45 @@ Introduce a durable local store for job IDs, source identifiers/resource identit
 
 Start with one encoder at a time. Bound disk usage and reserve headroom; adapt to power and thermal state. AVFoundation export is not assumed resumable at an arbitrary frame—checkpoint between complete files and restart a partial export after cleanup. On relaunch reconcile partial files and jobs, permission changes, removed assets and Photos operations that may have committed before a crash. Exactly-once saving needs a deliberate idempotency/reconciliation strategy; merely retrying can create duplicates.
 
+Round 1 (commit `559f693`, never compiled) implements part of this: the queue records a versioned receipt naming the created copy and what both assets looked like when it was checked, and a queue write that fails now blocks the next Photos mutation instead of being ignored. Exactly-once save reconciliation is still open.
+
 ## Duplicate and identity handling
 
 Record relationships between original and newly created Photos items. Avoid reprocessing app-created copies. A Photos local identifier is useful locally but is not a universal stable cross-device content hash. Any hashing of source/output data must stream bytes and consider battery/download costs. Handle separately imported duplicates, edited variants, multiple resource representations and shared-library permissions deliberately. Do not merge user memories based only on timestamps and dimensions.
+
+Round 1 (commit `559f693`, never compiled) records the original-to-copy relationship in the deletion receipt. Keeping app-created copies out of bulk selection is still open (N5 in `AGENT_LOOP.md`).
 
 ## Verification records and quality
 
 Store measured bytes, codec, duration, video/audio properties, display transform, verification algorithm/version, save result and created asset identifier. Strengthen Phase 0’s first-frame check with sampled or full decoding, end-of-file checks, audio decode/sync validation and playback of the asset returned by Photos after import. Compare color/HDR metadata, orientation/mirroring, frame rate and relevant descriptive metadata. Keep user-visible preview and explain intentional quality changes.
 
+Round 1 (commit `559f693`, never compiled) implements part of this: every applicable sample window must decode, audio is decoded rather than inferred from track duration, and the imported copy is compared against the output the run measured. Full-file decode, audio sync, orientation and HDR fidelity still need a device.
+
 A successful local file export is not proof of Photos import durability or completed iCloud sync. Define what evidence is sufficient for each claim. Do not promise that an app can verify every aspect of iCloud replication from a PhotoKit success callback.
 
 ## User-confirmed deletion
 
-**Status (build 7):** a first implementation exists. Deleting is off by default, applies to batch
-runs only, and offers two modes: after each confirmed copy, or at the end after a review. One gate,
-`DeletionPolicy`, requires a saved, smaller, verified copy that Photos handed back; anything less
-keeps the original and says why. Intent is persisted before each delete, so an interrupted one
-comes back `uncertain` rather than being retried. Photos' Recently Deleted window is stated in the
-interface wherever the choice is offered.
+**Status (build 7, historical):** a first implementation compiled. Deleting is off by default,
+applies to batch runs only, and offers two modes: after each confirmed copy, or at the end after a
+review. One gate, `DeletionPolicy`, requires a saved, smaller, verified copy that Photos handed
+back; anything less keeps the original and says why. Intent is persisted before each delete, so an
+interrupted one comes back `uncertain` rather than being retried. Photos' Recently Deleted window
+is stated in the interface wherever the choice is offered.
 
-Still open before this is a product feature rather than a prototype: verifying that the source has
-not changed since verification, comparing quality and metadata differences in the review step,
-designing recovery for an interrupted delete beyond a flag, and testing every interruption between
-save and removal on a device. There is no bulk "delete everything" action and no permanent
-deletion, and the one-video flow never deletes.
+**Status (implemented source, round 1, never compiled):** the gate is stricter now. A run records
+a receipt naming the copy Photos created, and what both assets looked like when that copy was
+checked. Immediately before Photos is asked, both assets are looked up again and the delete is
+refused unless the fresh look matches the receipt. A receipt that is missing, stale or written by
+an older algorithm can never authorise a delete, so a queue written before the change still
+decodes and keeps every original. Deletion was briefly dead code while the stricter gate and its
+caller were developed separately; an integration pass rewired the receipt from read-back through
+the persisted queue into the gate, and the old unrevalidated call now has no caller. None of that
+rewiring has been compiled.
+
+Still open before this is a product feature rather than a prototype: comparing quality and
+metadata differences in the review step, designing recovery for an interrupted delete beyond a
+flag, and testing every interruption between save and removal on a device. There is no bulk
+"delete everything" action and no permanent deletion, and the one-video flow never deletes.
 
 ## StoreKit and commercial release
 
@@ -65,6 +90,8 @@ Only after the core experience is trustworthy, define a purchase model and add S
 Before App Review: provide a truthful privacy policy and App Privacy answers, keep required-reason manifests aligned with actual APIs, justify Photos access, respect limited authorization, include clear compression-loss and storage claims, and document any implemented background mode. Test on all supported devices/OS versions. Accessibility, localization, energy use and failure recovery are release requirements. Confirm App Store requirements and any payment rules from current Apple sources when that phase begins.
 
 ## Suggested milestones
+
+Written while the batch was still future work. Since then the durable queue has shipped (build 5) and opt-in deletion has shipped (build 7), both compiled but not device-proven; crash-safe save reconciliation and the device acceptance run are still open. See the status block at the top of this document.
 
 1. Compile, run tests and pass physical Phase 0 acceptance; retain sanitized evidence.
 2. Establish a supported-format matrix, improve verification and measure compression/energy tradeoffs.

@@ -1,13 +1,15 @@
 # Optional overnight processing: feasibility spike
 
-**Research only. Phase 0 implements no overnight mode or background scheduler.** It cancels active retrieval/export/verification when its scene enters the background. It does not disable the idle timer. An already submitted Photos save is allowed to settle because it cannot be rolled back or cancelled by this app.
+**Research only. The app implements no overnight mode or background scheduler.** It cancels active retrieval/export/verification when its scene enters the background, and an already submitted Photos save is allowed to settle because it cannot be rolled back or cancelled by this app.
+
+One related piece is implemented source, not research: from build 9 the foreground batch has an opt-in "keep screen awake while working" setting, which holds the idle timer only while a run is active and releases it when work stops or the app leaves the foreground. That is not background processing and it is not the spike described below; it only stops the display sleeping during a foreground run. It has never been measured on a device.
 
 ## What iOS offers
 
 | Approach | Useful behavior | Limits and experiment |
 | --- | --- | --- |
 | Foreground processing | User starts an operation and sees actual progress. This is the Phase 0 baseline. | Auto-lock, app switching, incoming calls, thermal/resource pressure and process termination can interrupt work. Measure long clips and cleanup after interruption. |
-| Foreground with `UIApplication.isIdleTimerDisabled` | A future explicit “keep screen awake” option can prevent automatic idle sleep while work is active. | It does not stop the user manually locking the phone, create a background entitlement or guarantee runtime. Restore the setting on every exit. Evaluate power, brightness and accessibility rather than silently keeping the screen on. |
+| Foreground with `UIApplication.isIdleTimerDisabled` | Implemented in source from build 9: an opt-in "keep screen awake while working" setting prevents automatic idle sleep while work is active. | It does not stop the user manually locking the phone, create a background entitlement or guarantee runtime. The setting is released on every exit. Power, brightness and accessibility still need device measurement rather than assumption. |
 | `BGProcessingTask` | System-scheduled maintenance-style processing can request external power and network connectivity. | iOS chooses whether/when it runs; an earliest start is not an appointment. Tasks can expire or be interrupted. Work must be cancellable, checkpointed between videos and resubmitted responsibly. Do not promise a full-library overnight finish. |
 | `BGContinuedProcessingTask` (iOS 26+) | A user-initiated task can start in foreground and continue with system-visible progress after backgrounding. Apple identifies media export as a use case. | Investigate availability, resource support, queued-versus-immediate submission, system UI, cancellation and expiration. It is not a general recurring overnight scheduler or proof of unlimited locked-screen encoding. Keep an iOS 18 fallback. |
 | Short `beginBackgroundTask` allowance | May help finish a small critical handoff or cleanup. | Finite allowance with expiration; not a design for encoding hours of video. No fake audio/location session to keep the process alive. |
