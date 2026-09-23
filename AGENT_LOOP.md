@@ -392,6 +392,62 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 27 | see below | The launch label now reaches the screen before the restore that blocks the runloop, the uncertain-original advisory says what the app has decided, and the quick look speaks for itself when Photos cannot hand a video over to play | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 406 tests, none executed |
 | 28 | see below | Both previews now say what is happening, and the test suite that will be the only gate in October had four cases repaired that could not fail or pinned the wrong thing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 410 tests, none executed |
 | 29 | see below | A visual pass: one shared rhythm, a shorter hero, and one fewer card on each screen that opens a flow | local gates PASS; **CI blocked** | 410 tests, none executed |
+| 30 | see below | The app stops looking like a different product from the one it is: a brand icon, one radius scale, one comparison component and one page inset, and the working screen stops drawing three progress meters | local gates PASS; **CI blocked** | 411 tests, none executed |
+
+### Round 30 — the surfaces stop disagreeing with each other
+
+Rounds 20 to 29 were almost all about what the app *says*. This one is about the parts of the app
+that were not saying anything at all, and about the places where two screens described the same
+thing differently. It was prompted by the owner saying, plainly, that the loop had spent its time
+verifying and too little of it polishing.
+
+**The icon was the worst of it, and it was the most visible surface the product has.** It was a
+blue square with a download arrow on it. Nothing in the app looked like that: the app is a dark
+canvas with a mint accent, and its own logo - the badge `ShrinkBrand` draws at 28 points and
+`ShrinkHeroArtwork` enlarges - is a mint rounded square carrying a dark shrink mark. The splash
+screen showed the same picture, so a new user's first frame and their home-screen icon were both a
+different product. `scripts/make-app-icon.mjs` now draws the icon from the same fractions the badge
+is drawn at, and writes the splash image too - the badge alone, on transparency, rather than a
+square snapshot of an icon on a screen that is otherwise one flat colour. It is dependency-free: a
+PNG is a header, one zlib stream and a checksum, and Node has zlib. Both files are compared byte for
+byte by `npm run validate:native`, proved by flipping one byte of the icon and watching the check
+fail and name the file.
+
+**Eight corner radii became five named ones.** Video tiles were 22, cards 24, the help button 15,
+quality pills 14, thumbnails 12, a 16:9 preview 18 and both sheets' own corners 32 - a tile and a
+card doing the same job two points apart on different screens, which reads as a mistake rather than
+a decision. The brand mark's rounding is now a *fraction* of its side, so the same badge is the same
+shape at 28 points, at 60 and at 216, and the icon above draws itself from that same fraction.
+
+**The one-video result drew its own version of the app's before-and-after bars, and its version was
+wrong.** It used a different colour, drew no track behind the bars so the copy's bar stopped in
+mid-air, and scaled against the original - which is the one thing it cannot do on the one screen
+that can report a copy which did *not* get smaller: a 180 MB copy of a 120 MB video drew the same
+length as the video it came from. There is one `ShrinkSizeComparison` now, scaled against whichever
+file is larger, and a case pins the rule.
+
+**Round 29's own claim was not true, and the tree said so.** Its message said "every card and
+screen-level stack in both flows" used the new spacing; the one-video flow's screen stack was still
+24 where the batch flow's was 20, so the two flows have had different vertical rhythm since. Five
+more literals were sitting at 20, and every screen repeated the same three page paddings by hand -
+eight times in the batch flow, once in the one-video flow, with two sheets and the introduction
+writing a fourth shape each. That repetition is exactly how the drift happened, so it is one
+`shrinkPageInsets()` now.
+
+**The working screen reported one number three times**: an orb with a ring and the percentage
+inside it, a linear bar under the card drawing the same fraction, and a line under the bar printing
+the figure again - three statements of one fact, in a card that already sits above a second card
+counting the videos left. The orb is the app's whole progress language (the one-video flow uses it
+and nothing else), so the bar and its printed figure are gone. The warning colour was `Color.orange`
+written out at three sites, which made it the one colour in the palette nobody could find; it is
+`ShrinkStyle.danger` now.
+
+Validation: `npm run validate:native` PASS (38 app files, 411 XCTest cases present, the icon and the
+splash image both matching their script, the call-site checker 0 findings over 8,104 call sites),
+`npm run typecheck` PASS, the pod mirror verified. **None of the visual result can be seen from this
+machine** - there is still no simulator and no renderer here - so the icon is the one item in this
+round that was actually looked at (it was rendered and inspected at 1024 before it was committed),
+and everything else is a judgement from the source.
 
 ### Round 17 — the path that actually ships
 

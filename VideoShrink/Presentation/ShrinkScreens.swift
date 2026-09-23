@@ -163,10 +163,10 @@ struct ShrinkResult: View {
                     Label(Self.notSmaller(savings).text, systemImage: Self.notSmaller(savings).symbol)
                         .font(.headline)
                 }
-                VStack(spacing: 18) {
-                    ShrinkSizeComparison(original: source.bytes, copy: output.bytes,
-                                         originalTitle: "Original", copyTitle: "New copy")
-                }
+                // A stack held two rows here until both became one component, and it was left
+                // wrapping a single child: a spacing value that spaced nothing.
+                ShrinkSizeComparison(original: source.bytes, copy: output.bytes,
+                                     originalTitle: "Original", copyTitle: "New copy")
             }
             .padding(ShrinkStyle.cardPadding).shrinkCard()
             Text("Your original is still stored. Keeping both copies uses more space; no iCloud storage has been freed.")

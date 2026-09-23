@@ -40,7 +40,7 @@ struct VideoScrubSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
+                VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                     playerArea
                     problemLine
                     // Both notes describe a look that is happening. They used to be drawn whatever
@@ -60,7 +60,7 @@ struct VideoScrubSheet: View {
                     }
                 }
                 .frame(maxWidth: 540)
-                .padding(20)
+                .shrinkPageInsets()
                 .frame(maxWidth: .infinity)
             }
             .background(ShrinkStyle.canvas)
