@@ -49,12 +49,16 @@ leaves out, with the sentence explaining why and the rows that make them recogni
 stays tickable by hand, which is the same arrangement a copy this app made has. `beginRun` no longer
 clears `midSaveFindings`, so the exclusion survives a scan and a new run inside the session.
 
-**Still open: the record.** A relaunch after the next run's first checkpoint loses the question,
-because `persistQueue()` writes this run's items and the open question has no field in the record. So
-the protection lasts as long as the app does. Closing it means a field on `BatchQueueRecord` for
-outstanding questions (optional, so older records decode conservatively, like every field added
-since version 1) which the restore merges back into `midSaveFindings`. That is a queue-schema change
-and wants a round with a compile gate.
+**Closed in round 23, and not in the shape this section predicted.** A relaunch after the next run's
+first checkpoint used to lose the question, because `persistQueue()` writes this run's items and the
+open question had no field in the record, so the protection lasted as long as the app did. The field
+is `BatchQueueRecord.questions`, but it is *not* an item merged back into the run - a question is a
+fact about the library, and the run it came from is over, so nothing may be continued from it. It is
+the identifier and the kind of question and nothing else; every checkpoint writes the questions none
+of that run's items already describes, `reset()` ("Done") writes the outstanding ones on their own
+instead of clearing the queue, and a launch reads them back into `midSaveFindings`, which is what
+keeps the video out of `selectableAssets` and what the selection screen already names. A video the
+user ticks by hand clears its own question at the tick. Unverified: the round could not compile.
 
 ### RR3 — [P2] A restored run has lost why it stopped, including the two reasons about the device
 `BatchViewModel.swift` (`pauseReason`); `BatchQueueRecord`; the paused screen
@@ -64,8 +68,9 @@ off." The sentence appears only after the user taps Continue and the same check 
 record has no field for it, so nothing on that screen can be stale - this is a missing sentence, not
 a false one.
 
-**Open.** Persisting the reason (or at least the storage and thermal kinds) with the record is the
-fix; it is a `BatchQueueRecord` change and so wants its own round.
+**Fixed in round 23**, unverified: `BatchQueueRecord.pause` holds a `PauseKind` (the four reasons, by
+kind and never by sentence), a checkpoint writes it, and the launch draws `BatchPauseReason`'s own
+`explanation` again - so the restored screen says what the stopped one said.
 
 ### RR4 — [P2] "Nothing was lost." on a paused screen that knew an original might already be deleted
 `BatchQueueRecord` (`.deleting` → `.uncertain`); `BatchViewModel.deletionReport`; the paused screen
@@ -85,8 +90,12 @@ deleted (a delete still needs a receipt and a fresh look), so the loss is the ru
 the mid-save question. The unreadable record is not cleared either; it stands until the next run's
 first checkpoint overwrites it.
 
-**Open.** `load()` should distinguish "absent or empty" from "present but unusable" and let the
-launch say so once, in the existing `queueWarning` wording, without claiming to know what it held.
+**Fixed in round 23**, unverified, and deliberately *not* in the `queueWarning` wording this section
+suggested. `BatchQueueStoring.hasUnreadableRecord()` tells "no file, or an empty queue" from "a file
+this build cannot read", and the launch says so once - but in its own notice, because
+`QueueWarningNotice` is headed "Something wasn't written down", which is a claim about a write that
+failed and not what an undecodable file or a newer build's record is. It is drawn on the launch screen
+and on the screen where videos are chosen, because choosing is where its advice is acted on.
 
 ### RR6 — [P3] A video whose outcome is unknown counted as "finished", on the screen and in the rule that decides the flow may be left
 `VideoShrink/Models/BatchModels.swift` (`isFinished`); `BatchViewModel` (`canLeaveFlow`); the paused

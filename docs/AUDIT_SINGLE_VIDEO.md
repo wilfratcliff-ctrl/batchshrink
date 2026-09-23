@@ -65,8 +65,11 @@ and the glyph, and `ShrinkResult.notSmaller` is static so a case can state both.
 Closing the picker puts the flow at `.cancelled`, so the user meets "No rush. Your original is
 safe." and "Choose another video" about a video that does not exist and a run that never happened.
 
-**Open.** The narrowest fix is for `pickerCancelled()` to return to `.idle`, which needs the one
-`(.choosing, .idle)` case in `PipelineStage.allows`. No test exercises `pickerCancelled` at all.
+**Fixed in round 23**, unverified, with the fix this section named: `pickerCancelled()` returns to
+`.idle`, and `PipelineStage.allows` gained the `(.choosing, .idle)` case. There is a case for it now
+(`testClosingThePickerReturnsToTheWelcomeScreen`, which also pins the second delivery of one
+dismissal as a no-op). The `.choosing -> .cancelled` edge is still allowed and now has no caller;
+that is recorded as a candidate for tightening rather than pruned in the same round.
 
 ### SV6 — [P3] Two failure sentences named something other than what was found
 `VideoShrink/Models/PipelineError.swift`
@@ -90,8 +93,11 @@ The same class round 19 fixed twice on the batch side. **Fixed in round 21**: "p
 The shared sheet's footer says "These are estimates. Real sizes appear when it finishes", and the
 one-video caller can only ever show the placeholder, because this flow has no library to size.
 
-**Open, cosmetic.** Give the sheet an optional footer, or make the sentence conditional on an
-estimate being possible.
+**Fixed in round 23**, unverified: `QualitySheet.estimateNote` is the sentence and its default is the
+batch's own, so a caller whose card can never show a figure passes nil. Checking the two call sites
+for that fix turned up a **second half this section had not named**: the *batch* sheet is reachable
+from the summary screen, before anything is chosen, and its estimate closure answers nil there too -
+so it had the same untrue sentence, and now passes nil for the same reason.
 
 ## Checked and correct — do not re-walk
 

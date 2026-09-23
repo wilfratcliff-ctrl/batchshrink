@@ -93,7 +93,12 @@ struct SingleVideoFlow: View {
         .sheet(isPresented: $showQuality) {
             QualitySheet(settings: model.settings,
                          estimate: { _ in nil },
-                         placeholder: "Pick a video and BatchShrink measures the copy it makes.")
+                         placeholder: "Pick a video and BatchShrink measures the copy it makes.",
+                         // No line about estimates here: this sheet is opened before a video is
+                         // chosen and the closure above answers nil at every picture size, so the
+                         // card can only draw its placeholder and there is no figure for a sentence
+                         // about estimates to describe.
+                         estimateNote: nil)
         }
         .confirmationDialog(confirmation?.title ?? "", isPresented: Binding(
             get: { confirmation != nil }, set: { if !$0 { confirmation = nil } }

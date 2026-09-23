@@ -23,7 +23,15 @@ struct BatchFlow: View {
             }
             .sheet(isPresented: $showHelp) { ShrinkHelp(settings: batch.settings) }
             .sheet(isPresented: $showQuality) {
-                QualitySheet(settings: batch.settings) { batch.estimate(for: $0) }
+                QualitySheet(settings: batch.settings,
+                             estimate: { batch.estimate(for: $0) },
+                             // The card counts the current selection, and this sheet is reachable
+                             // from the summary screen, where nothing is chosen yet: the line about
+                             // estimates describes figures that are not on the screen then, so it
+                             // is drawn only where there is a selection for it to describe.
+                             estimateNote: batch.selectedAssets.isEmpty
+                                 ? nil
+                                 : QualitySheet.defaultEstimateNote)
             }
             .sheet(isPresented: $showDeletion) { DeletionSheet(settings: batch.settings) }
             .confirmationDialog("Shrink \(selectionCount) \(selectionNoun)?", isPresented: $confirmStart,

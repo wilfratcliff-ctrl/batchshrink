@@ -813,6 +813,248 @@ import Photos
                               pixelWidth: 3840, pixelHeight: 2160, bytes: 3_000_000_000, state: state)
     }
 
+    // MARK: - A question a run leaves behind
+
+    /// The file keeps a question with no run beside it, and reads it back as a question rather than
+    /// as no queue - which is the whole reason the field exists.
+    func testTheFileStoreKeepsAQueueOfQuestionsRatherThanReadingItAsNoQueue() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileBatchQueueStore(directory: directory)
+
+        let record = BatchQueueRecord(
+            settings: .init(resolution: "hd1080", frameRate: "original"),
+            items: [],
+            questions: [.init(identifier: "a", kind: .unknown),
+                        .init(identifier: "b", kind: .limitedAccess)])
+        XCTAssertFalse(record.isEmpty)
+        try store.save(record)
+
+        XCTAssertEqual(store.load(), record)
+        XCTAssertFalse(store.hasUnreadableRecord())
+
+        // And the app's own "no run" is still no run, not a queue of nothing.
+        store.clear()
+        XCTAssertNil(store.load())
+        XCTAssertFalse(store.hasUnreadableRecord())
+        XCTAssertTrue(BatchQueueRecord(settings: .init(resolution: "hd1080", frameRate: "original"),
+                                       items: []).isEmpty)
+    }
+
+    func testAQueueFileThisBuildCannotReadIsToldApartFromNoQueueAtAll() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("queue-tests-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = FileBatchQueueStore(directory: directory)
+
+        // Nothing there is no queue.
+        XCTAssertNil(store.load())
+        XCTAssertFalse(store.hasUnreadableRecord())
+
+        // A queue from a build this one does not read, with something in it, is the record being set
+        // aside: there is nothing to restore, and no way to say what it held.
+        var newer = BatchQueueRecord(settings: .init(resolution: "hd1080", frameRate: "original"),
+                                     items: [item("a", .pending)])
+        newer.version = BatchQueueRecord.currentVersion + 1
+        try store.save(newer)
+        XCTAssertNil(store.load())
+        XCTAssertTrue(store.hasUnreadableRecord())
+    }
+
+    /// A file that is present and is not a queue at all - a write that never finished - is the same
+    /// answer, and the launch is where the user is told.
+    func testALaunchWithAQueueItCannotReadSaysSoRatherThanLookingLikeAFreshInstall() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.unreadable = true
+
+        let batch = fixture.makeBatch()
+
+        // Not `queueWarning`: that one is headed as a write that failed, and a record another build
+        // wrote perfectly is not that statement.
+        XCTAssertNil(batch.queueWarning)
+        XCTAssertNotNil(batch.queueReadWarning)
+        XCTAssertTrue(batch.items.isEmpty)
+        XCTAssertEqual(batch.phase, .start)
+
+        // Nothing is claimed about what the record held, and the one thing the user can act on is
+        // named: what to look at before running the same videos again.
+        XCTAssertTrue(batch.queueReadWarning?.contains("Photos") == true)
+
+        // A run writes a record of its own, and that is the moment the old one stops being anything
+        // the user has to act on.
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.selectAll()
+        batch.start()
+        await eventually { batch.phase != .processing }
+        XCTAssertEqual(batch.summary.savedCount, 1)
+        XCTAssertNil(batch.queueReadWarning)
+    }
+
+    /// A launch that finds a question reads it as one: the video is named on the screen where videos
+    /// are chosen, and no automatic selection picks it.
+    func testALaunchWithASavedQuestionLeavesThatVideoOutOfSelectAll() async {
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        // The quality the record names is the *ended run's* choice, and the user may have changed
+        // theirs since: giving the flow a different one is what makes the assertion below about the
+        // record rather than about the app's own default happening to be the same resolution.
+        fixture.settings.resolution = .uhd4k
+        fixture.store.stored = BatchQueueRecord(
+            settings: .init(resolution: CopyResolution.hd720.rawValue, frameRate: "original"),
+            items: [],
+            questions: [.init(identifier: "a", kind: .limitedAccess)])
+
+        let relaunched = fixture.makeBatch()
+
+        // A question describes no run, so nothing is offered to continue and no run's screen is
+        // drawn. What it does is travel to the library the launch scans.
+        XCTAssertTrue(relaunched.items.isEmpty)
+        XCTAssertEqual(relaunched.phase, .start)
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.limitedAccessQuestion))
+        XCTAssertEqual(relaunched.unaccountedIdentifiers, ["a"])
+
+        await scan(fixture, relaunched)
+        relaunched.beginSelecting()
+        relaunched.selectAll()
+        // Nothing about a record that describes no run is imposed on this flow, not even the quality
+        // the run it came from was using.
+        XCTAssertEqual(relaunched.settings.resolution, .uhd4k)
+        XCTAssertEqual(relaunched.selection, ["b"])
+        XCTAssertEqual(relaunched.unaccountedAssets.map(\.id), ["a"])
+        XCTAssertEqual(relaunched.midSaveQuestion(for: "a"), MidSaveFinding.limitedAccessQuestion)
+    }
+
+    /// The route RR2 named: a run started after the question, and a relaunch after *that*, which is
+    /// the moment the question used to be lost and the video became one Select all would copy again.
+    func testAVideoAnEarlierRunCouldNotAccountForSurvivesTheNextRunAndItsRelaunch() async {
+        let fixture = QueueFixture(assets: [queueAsset("a"), queueAsset("b")])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .unavailable
+        let batch = fixture.makeBatch()
+        XCTAssertEqual(batch.items.first?.state, BatchItemState.needsCheck)
+
+        // The user leaves that run behind, scans again and runs another video. The question about
+        // "a" is not this run's business, and the record this run writes is the only place left to
+        // keep it.
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.selectAll()
+        XCTAssertEqual(batch.selection, ["b"])
+        batch.start()
+        await eventually { batch.phase != .processing }
+        XCTAssertEqual(batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.store.stored?.questions?.map(\.identifier), ["a"])
+        XCTAssertEqual(fixture.store.stored?.items.map(\.identifier), ["b"])
+
+        // And a launch after that still leaves "a" out of every automatic selection.
+        let relaunched = fixture.makeBatch()
+        XCTAssertEqual(relaunched.midSaveFindings["a"],
+                       MidSaveFinding.unresolved(question: MidSaveFinding.unknownQuestion))
+        await scan(fixture, relaunched)
+        relaunched.beginSelecting()
+        relaunched.selectAll()
+        // Nothing may be ticked: "b" was saved by the run above - this fixture's history is shared,
+        // so "b" is one of this iPhone's shrunk videos now - and "a" is the question. Asserted on the
+        // sets rather than on the selection alone, so the two reasons cannot hide behind each other.
+        XCTAssertEqual(relaunched.completedIdentifiers.contains("b"), true)
+        XCTAssertEqual(relaunched.unaccountedIdentifiers, ["a"])
+        XCTAssertFalse(relaunched.selectableAssets.contains { $0.id == "a" },
+                       "a video whose copy may already exist is never picked by an automatic selection")
+        XCTAssertTrue(relaunched.selection.isEmpty)
+    }
+
+    /// Ending a run with a question keeps that question on disk, and ending one with nothing
+    /// outstanding still clears the record.
+    func testEndingARunKeepsItsQuestionButClearsEverythingElse() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .unavailable
+        let batch = fixture.makeBatch()
+        XCTAssertEqual(batch.items.first?.state, BatchItemState.needsCheck)
+
+        batch.reset()
+
+        XCTAssertTrue(batch.items.isEmpty)
+        XCTAssertEqual(batch.phase, .start)
+        XCTAssertEqual(fixture.store.stored?.items.isEmpty, true)
+        XCTAssertEqual(fixture.store.stored?.questions?.map(\.identifier), ["a"])
+        XCTAssertEqual(fixture.store.stored?.questions?.first?.kind, .unknown)
+        XCTAssertNil(fixture.store.stored?.pause)
+
+        // A run with nothing outstanding clears the record instead: the user asked for it to be over.
+        let other = QueueFixture(assets: [queueAsset("a")])
+        let saved = other.makeBatch()
+        await scan(other, saved)
+        saved.beginSelecting()
+        saved.selectAll()
+        saved.start()
+        await eventually { saved.phase != .processing }
+        XCTAssertEqual(saved.summary.savedCount, 1)
+        saved.reset()
+        XCTAssertNil(other.store.stored)
+    }
+
+    /// A video the user ticks by hand and runs is a question answered - the same answer the
+    /// "I checked Photos" tap gives - so the record stops carrying it.
+    func testAVideoTickedByHandAndRunIsNoLongerAQuestion() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        fixture.store.stored = midSaveRecord("a")
+        fixture.photos.revalidation = .unavailable
+        let batch = fixture.makeBatch()
+        XCTAssertEqual(batch.unaccountedIdentifiers, ["a"])
+
+        await scan(fixture, batch)
+        batch.beginSelecting()
+        batch.toggle("a")
+        XCTAssertEqual(batch.selection, ["a"])
+        batch.start()
+        await eventually { batch.phase != .processing }
+
+        XCTAssertNil(batch.midSaveFindings["a"])
+        XCTAssertTrue(batch.unaccountedIdentifiers.isEmpty)
+        XCTAssertEqual(batch.summary.savedCount, 1)
+        XCTAssertEqual(fixture.photos.saveCount, 1)
+        XCTAssertEqual(fixture.store.stored?.questions?.isEmpty, true)
+    }
+
+    // MARK: - Why a restored run stopped
+
+    func testARestoredRunRemembersWhyItStopped() async {
+        let fixture = QueueFixture(assets: [queueAsset("a")])
+        var record = BatchQueueRecord(
+            settings: .init(resolution: "hd1080", frameRate: "original"),
+            items: [item("a", .pending)])
+        record.pause = .tooWarm
+        fixture.store.stored = record
+
+        let relaunched = fixture.makeBatch()
+
+        XCTAssertEqual(relaunched.phase, .paused)
+        XCTAssertEqual(relaunched.pauseReason, .tooWarm)
+        // The sentence is `BatchPauseReason`'s own, so the restored screen says what the stopped one
+        // said rather than a second wording of the same fact.
+        XCTAssertEqual(relaunched.pauseReason?.explanation, BatchPauseReason.tooWarm.explanation)
+
+        // Continuing clears it, exactly as continuing a run stopped in this session does.
+        relaunched.resume()
+        await eventually { relaunched.phase != .processing }
+        XCTAssertNil(relaunched.pauseReason)
+        XCTAssertNil(fixture.store.stored?.pause)
+    }
+
+    func testEveryReasonARunCanStopForHasAKindTheFileCanKeep() {
+        for reason in BatchPauseReason.allCases {
+            let kind = BatchQueueRecord.PauseKind(reason)
+            XCTAssertEqual(kind.reason, reason)
+            // And one that is not stopped deliberately still says what stopped it.
+            if reason != .asked {
+                XCTAssertNotNil(kind.reason.explanation)
+            }
+        }
+    }
+
     // MARK: - Helpers
 
     private func scan(_ fixture: QueueFixture, _ batch: BatchViewModel) async {
@@ -977,8 +1219,13 @@ private var preflightHDRReason: String {
     var failWrites: ((BatchQueueRecord) -> Bool)?
     /// Leaves the record where it is, the way a clear that cannot write an empty queue behaves.
     var clearKeepsRecord = false
+    /// Reports a saved queue this build cannot read, the way a store with a file it cannot decode
+    /// does. Set by a test that wants the launch's own answer to that rather than a real bad file.
+    var unreadable = false
 
     func load() -> BatchQueueRecord? { stored }
+
+    func hasUnreadableRecord() -> Bool { unreadable }
 
     func save(_ record: BatchQueueRecord) throws {
         if failWrites?(record) == true { throw PipelineError.temporaryFiles }

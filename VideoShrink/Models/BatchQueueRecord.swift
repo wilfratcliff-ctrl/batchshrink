@@ -25,6 +25,38 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
     /// existed carries no list, and a restored run simply names none, exactly as it did before.
     var refusals: [Refusal]? = nil
 
+    /// The videos an earlier run left an unanswered question about, kept past the end of that run.
+    ///
+    /// A question about a video - "Photos may have taken a copy of this one, so running it again
+    /// could make a second" - outlives the run it was raised in. It belongs to the library rather
+    /// than to the run: finishing the run and saying so does not answer it, and the app has no
+    /// other way to remember that a video must be left out of an automatic selection until someone
+    /// looks. So a question is written here beside the run, and a launch reads it back as a fact
+    /// about the library.
+    ///
+    /// It is deliberately the identifier and the kind alone, and not one of `Item`: no screen draws
+    /// a question from this file. The row that names the video is drawn from the library the launch
+    /// scans - which is the only place that knows what the video looks like now - and the question
+    /// is attached to it there by identifier. A queue written before this existed carries none, and
+    /// a launch that reads one simply has no question to restore, exactly as it did before.
+    var questions: [Question]? = nil
+
+    /// Why a run stopped, for the launch that picks it up again.
+    ///
+    /// A run left behind by a warm iPhone or by not enough room comes back to a screen that says
+    /// "picked up where you left off" and nothing about why it went away. The reason belongs to the
+    /// run that stopped, so it is written down with it, and the restored screen draws the same
+    /// sentence the stopped one did. `asked` is in the set because a record has to be able to name
+    /// every reason a run can stop; it draws nothing, which is what the live reason does too.
+    var pause: PauseKind? = nil
+
+    /// Whether this record holds nothing at all.
+    ///
+    /// An empty record is how the app writes "no run", and the store reads one as no queue. A record
+    /// holding only a question is not empty: it is a run that ended with something still owed to the
+    /// user, and dropping it would be dropping the one thing the record exists to carry.
+    var isEmpty: Bool { items.isEmpty && (questions ?? []).isEmpty }
+
     struct Settings: Codable, Equatable, Sendable {
         var resolution: String
         var frameRate: String
@@ -161,6 +193,68 @@ struct BatchQueueRecord: Codable, Equatable, Sendable {
         case skipped(reason: String)
         case failed(code: BatchFailureCode)
         case needsCheck
+    }
+
+    /// One video a run could not account for, and which question it left.
+    ///
+    /// The sentence is deliberately absent, for the same reason `Refusal` keeps a kind: a stored
+    /// wording freezes one build's words into every later one, and `MidSaveFinding` already owns
+    /// both of the questions this file can name again.
+    struct Question: Codable, Equatable, Sendable {
+        var identifier: String
+        var kind: Kind
+
+        /// The two questions the app can ask about a video it could not account for.
+        ///
+        /// Both are `MidSaveFinding`'s own questions, and the mapping is one-way on purpose: any
+        /// other sentence a live run may have used for the same situation - Photos not confirming a
+        /// save, for instance - is the question about a copy that may have been taken, which is what
+        /// `unknown` says.
+        enum Kind: String, Codable, Equatable, Sendable {
+            case unknown
+            case limitedAccess
+
+            /// The question, asked of the type that owns it rather than written down here, so a
+            /// wording change moves the writing and the reading together.
+            var question: String {
+                switch self {
+                case .unknown: return MidSaveFinding.unknownQuestion
+                case .limitedAccess: return MidSaveFinding.limitedAccessQuestion
+                }
+            }
+
+            /// The kind a question's sentence is. Everything but the one where access covers only
+            /// part of the library is the question about a copy that may have been taken.
+            init(question: String) {
+                self = question == MidSaveFinding.limitedAccessQuestion ? .limitedAccess : .unknown
+            }
+        }
+    }
+
+    /// The reasons a run can be stopped for, as the file keeps them.
+    enum PauseKind: String, Codable, Equatable, Sendable {
+        case asked
+        case leftApp
+        case tooWarm
+        case storage
+
+        init(_ reason: BatchPauseReason) {
+            switch reason {
+            case .asked: self = .asked
+            case .leftApp: self = .leftApp
+            case .tooWarm: self = .tooWarm
+            case .storage: self = .storage
+            }
+        }
+
+        var reason: BatchPauseReason {
+            switch self {
+            case .asked: return .asked
+            case .leftApp: return .leftApp
+            case .tooWarm: return .tooWarm
+            case .storage: return .storage
+            }
+        }
     }
 }
 

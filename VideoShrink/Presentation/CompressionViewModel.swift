@@ -175,7 +175,17 @@ import Photos
 
     func pickerCancelled() {
         showingPicker = false
-        if stage == .choosing { move(to: .cancelled) }
+        // Closing the sheet chose nothing and ran nothing, so the flow goes back to the welcome
+        // screen rather than to `.cancelled`: the recovery screen a cancelled run lands on is
+        // written for a run that ended, and its "Your original is safe" would name an original
+        // that was never chosen.
+        //
+        // The stage guard is also what makes two deliveries of one dismissal harmless. Closing the
+        // picker delivers this from the picker's own cancelled callback and again from the sheet's
+        // `onDismiss`; picking a video delivers it once, after `selected` has already moved the
+        // flow on. Either way a later caller meets a flow that has left `.choosing` and moves
+        // nothing.
+        if stage == .choosing { move(to: .idle) }
     }
 
     func save() {

@@ -385,6 +385,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 20 | see below | Prove the guardrails guard (and fix the one that could never fire), then a deletion-journey audit and a restored-run audit, and their screen-truthfulness fixes | local gates PASS; `prove:guardrails` 54/54; **CI blocked** | 372 tests, none executed |
 | 21 | see below | The highest-value open finding from round 20's audits: a video that may already have a copy was bulk-selectable again | local gates PASS; `prove:guardrails` 67/67; **CI blocked** | 375 tests, none executed |
 | 22 | see below | The gate could not see a leading-dot member call, enum cases with associated values, or a member that does not exist | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 380 tests, none executed |
+| 23 | see below | The question a run leaves behind outlives the run - in the record and across a relaunch - and a restored run says why it stopped; with it, two of the one-video flow's own findings | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 390 tests, none executed |
 
 ### Round 17 — the path that actually ships
 
@@ -771,10 +772,10 @@ the confidence and the list of what was checked and found correct. The table is 
 | DEL6 | 3 | The working screen's shield line read "Original protected" in the two modes that remove originals | done, round 20, unverified |
 | DEL7 | 3 | A deletion left "uncertain" is a dead end: the app advises checking Photos and no control can act on the answer | open |
 | RR1 | 2 | The restored pause asked the user to check Photos and never named the video | done, round 20, unverified |
-| RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **half done, round 21**, unverified. The video is kept out of automatic selection (for a question the app could not answer as much as for a copy it can see), the finding survives a scan and a new run within the session, and the selection screen names the videos it leaves out with the sentence explaining why. **Still open: the record** - a relaunch after the next run's checkpoint loses the question, which needs an optional field on `BatchQueueRecord` and a restore that merges it back |
-| RR3 | 2 | A restored run has lost why it stopped, including the storage and thermal reasons | open: a `BatchQueueRecord` change |
+| RR2 | 2 | An unanswered mid-save question drops off every screen at the next scan and out of the record at the next run - and the video becomes selectable again, which is the second copy that area exists to prevent | **done, rounds 21 and 23**, unverified. Round 21 kept the video out of automatic selection, made the finding survive a scan and a new run inside the session, and named the videos on the selection screen. Round 23 closed the record with a **different shape from the one this row predicted**: not an item merged back, but `BatchQueueRecord.questions` - the identifier and the kind of question, written beside the run and *not* as an item, because a question outlives the run it came from and is a fact about the library rather than a piece of a run. Every checkpoint writes it, `reset()` ("Done") writes it on its own instead of clearing the queue, and a launch reads it back into `midSaveFindings`, where it keeps the video out of Select all and names it on the selection screen. A tick by hand is the answer and clears it |
+| RR3 | 2 | A restored run has lost why it stopped, including the storage and thermal reasons | **done, round 23**, unverified: `BatchQueueRecord.pause` holds `PauseKind` (the four reasons, by kind and not by sentence), a checkpoint writes it and a launch draws `BatchPauseReason.explanation` again |
 | RR4 | 2 | "Nothing was lost" on a paused screen that knew an original might already be deleted | done, round 20, unverified, with DEL3 |
-| RR5 | 3 | A queue that cannot be read is indistinguishable from no queue, and says nothing | open |
+| RR5 | 3 | A queue that cannot be read is indistinguishable from no queue, and says nothing | **done, round 23**, unverified: `BatchQueueStoring.hasUnreadableRecord()` tells "no file, or an empty queue" from "a file this build cannot read", and the launch screen draws that in its own notice - not under `QueueWarningNotice`, whose heading claims a write failed |
 | RR6 | 3 | A video whose outcome is unknown counts as finished, on the screen and in `canLeaveFlow` | half done, round 20: the paused counts are honest now. Whether an unanswered flag should hold the flow is open, with RR2 |
 
 ### Round 21's audit — the one-video flow
@@ -787,10 +788,10 @@ The flow that had never been traced, written up in **[docs/AUDIT_SINGLE_VIDEO.md
 | SV2 | 2 | The recovery screen's "Shrink one video instead" was live and did nothing | done, round 21, unverified. The deeper question - whether a *failed* batch should hold the user at all - is open and is a `canLeaveFlow` change |
 | SV3 | 3 | The ready-to-save screen said preview "before saving" when its own text said saving was off | done, round 21, unverified |
 | SV4 | 3 | A copy that came out bigger was drawn as "No size reduction" under an equals sign over two different figures | done, round 21, unverified |
-| SV5 | 3 | Cancelling the picker lands on a recovery screen about a video that was never chosen | open: needs `pickerCancelled()` to return to `.idle`, and the stage transition with it |
+| SV5 | 3 | Cancelling the picker lands on a recovery screen about a video that was never chosen | **done, round 23**, unverified: `pickerCancelled()` moves to `.idle`, with `(.choosing, .idle)` added to the stage rule. The `.choosing -> .cancelled` edge is still allowed and now has no caller - kept deliberately, and a candidate for tightening |
 | SV6 | 3 | "HEVC export failed" for a 720p H.264 export, and "larger" for a pixel mismatch | done, round 21, unverified |
 | SV7 | 3 | The welcome promised "your smaller copy" before anything had been measured | done, round 21, unverified |
-| SV8 | 3 | The shared quality sheet promises estimates the one-video flow cannot show | open, cosmetic |
+| SV8 | 3 | The shared quality sheet promises estimates the one-video flow cannot show | **done, round 23**, unverified: `QualitySheet.estimateNote` is the sentence and its default is the batch's own, so the one-video caller passes nil. **The same defect had a second half the finding did not name**: the batch sheet is reachable from the summary screen, where nothing is chosen, so `BatchFlow` now passes nil there too rather than only when the flow has no library |
 
 ### Round 22's review findings — the tooling, and two in the app
 
@@ -807,6 +808,17 @@ The whole-pile review's findings, beyond the three tooling gaps the round fixed:
 
 Everything that compiles is still unverified until CI is green. A clean local gate run is
 evidence, never proof.
+
+### Round 23's own findings — the question outlives the run, and two of the one-video flow's
+
+Round 23 closed `RR2`, `RR3` and `RR5` and two of the one-video flow's findings, and it left the
+two below behind. The second was found by taking the first auditor's own observation to the code
+rather than trusting the revision it was written against.
+
+| ID | Priority | Item | Status |
+|----|----------|------|--------|
+| Q1 | 3 | **A video the app has *concluded* has a copy would be reachable by Select all again.** `unaccountedIdentifiers` holds only an *open* question, and the app's own answer to one - `.copyInPhotos` - both keeps the video out of that set and records only the **copy's** identifier (`rememberCreatedCopy`), never the original's. An item that keeps that conclusion without settling into `.saved` (a receipt with no measured sizes, which `resolveMidSaveItems` refuses to claim) would leave the **original** in `selectableAssets` | **open, and an independent read that doubted the reachability was checked against the code that writes the receipt.** The reviewer argued from field dates - `copyEvidence` arrived in round 1, `attemptedSave` in round 6 - that a build in between could leave that shape. The writer settles it the other way: rounds 1 and 5 both persist `.saved` **before** `confirmReadBack` writes the receipt, so a `.saving` record on disk never carried one, and the repo's own `LegacyMidSaveQueue` fixture asserts exactly that (`copyEvidence: nil`). Rounds 6 and later write the identity and the sizes in the same checkpoint. So the door needs a hand-edited or corrupt file, which is why this is 3 rather than 2 - and the fix is unchanged: one set to decide automatic selection, and a third card sentence for "the copy is there", so a video the app has *concluded* about is not named with a sentence about not being able to tell |
+| Q2 | 3 | The `.choosing -> .cancelled` edge in `PipelineStage.allows` now has no caller, after SV5 moved picker cancellation to `.idle` | open, and a decision rather than a fix: it is the only move into `.cancelled` from a stage `canCancel` is false for, and pruning it is the riskier edit of the two |
 
 ## Round 19 — the numbers tell the truth, and the app stops asking too early
 
@@ -1076,3 +1088,78 @@ the retrieval had a 10 ms margin against a 60 ms delay; the margin is 100 ms now
 covers four gates and seventy mutations, and everything it says is about what it was built to inject.
 The leading-dot hole survived two rounds of "local gates PASS" because nothing had tried to break
 that shape. A gate's numbers are evidence about the code; they are not evidence about the gate.
+
+### Round 23 — the question outlives the run
+
+`RR2` had been half done for two rounds. Round 21 stopped the *session* from forgetting the question
+a mid-save stop leaves - the video is kept out of automatic selection, the finding survives a scan
+and a new run, and the selection screen names it. What it could not survive was a **relaunch after
+the next run's checkpoint**, and that route was ordinary: relaunch, finish with what is done, shrink
+some more videos, and the record the new run writes describes only its own items. The question was
+gone, and the video it was about was, from the app's point of view, an ordinary video that Select all
+would cheerfully copy a second time.
+
+**The round chose a different shape from the one the backlog predicted.** That row said the fix was
+"an optional field on `BatchQueueRecord` and a restore that merges it back" - an item merged back into
+the run. It is not that, because a question is not a piece of a run: the run it came from is over, so
+nothing may be continued from it and no run's screen should pretend otherwise. `BatchQueueRecord`
+gained `questions`, which is the identifier and the kind of question and nothing else, and a launch
+reads one back into `midSaveFindings` - the same place the session already keeps questions, which is
+what makes the video leave `selectableAssets` and what the card on the selection screen already
+names. No screen draws a question from the file: the row that names the video is drawn from the
+library the launch scans, which is the only thing that knows what the video looks like now.
+
+Written from three places, deliberately. Every checkpoint carries the questions **none of this run's
+own items describes** (an item that is waiting to be checked already travels in `items`, with its
+identity and its evidence); "Done" writes the outstanding questions on their own instead of clearing
+the queue, because the user ending the run does not answer a question about their library; and a
+video the run was handed by hand clears its own question, because running it is the same answer the
+"I checked Photos" tap gives. The store's empty-record convention is what makes the third case
+possible: `load()` now reads a record holding only questions as a record, and an empty one as no
+queue, exactly as before.
+
+**Two of the round's findings were older than the round.** `RR3`: a run left behind by a warm iPhone
+or by not enough room came back saying only "picked up where you left off", so the reason is now
+`BatchQueueRecord.pause` - the four reasons by kind, and the sentence asked of `BatchPauseReason` as
+before. `RR5`: a queue file that could not be read was indistinguishable from never having run, so
+`BatchQueueStoring.hasUnreadableRecord()` tells the two apart and the launch screen says so - in its
+**own** notice rather than under `QueueWarningNotice`, whose heading claims a write failed, which is
+not what an undecodable file or a newer version's record is.
+
+The same round took two findings from the one-video flow's audit: closing the video picker now returns
+to the welcome screen instead of a recovery screen written for a run that ended, and the shared
+quality sheet's sentence about estimates is now drawn only where the sheet can produce a figure -
+including the second half of that finding, which the audit had not named: the *batch* sheet is
+reachable from the summary screen, before anything is chosen, and had the same untrue sentence there.
+
+**What this round did not do.** A carried question is the user's to answer and the app will not
+answer it for them: the receipt and the measured sizes are deliberately not written beside a
+question, so a launch cannot look the copy up, and it must not claim a save it cannot describe. A
+question whose video the app *can* see a copy of is `Q1` above. And `RR6`'s open half - whether an
+unanswered question should hold the flow - is answered by construction rather than by a rule change:
+a restored question is not an item, so `remainingCount` is zero and the user may leave the flow, and
+the question goes on protecting the video from Select all wherever they go next.
+
+**An independent read of the round found three things worth changing.** A new case could not have
+passed as written - `testAVideoAnEarlierRunCouldNotAccountForSurvivesTheNextRunAndItsRelaunch`
+asserted the relaunched selection was `["b"]`, but "b" is the video the run above saved and the
+fixture's history is shared with the second model, so nothing was tickable at all; the case now
+tests the two reasons separately (`"b"` completed, `"a"` unaccounted) rather than the one number that
+could not distinguish them. A second assertion held for the wrong reason: a record that describes no
+run imposes nothing on the flow, and the case asserted a value that only matched because the app's own
+default is the same resolution - it now gives the sheet a different quality so the assertion tests
+the restore rather than the default. And "Done" had begun reaching `write(_:)`'s failure sentence,
+which says the run stops before changing anything else in Photos; there is no run left to stop, so a
+failed end-of-run record now says what a failed clear says, from one shared sentence. The fourth
+finding was the reachability argument recorded as `Q1` above, where the evidence went the other way.
+
+Validation, all of it on Windows and none of it a compiler: `npm run validate:native` PASS (38 app
+files, 390 XCTest cases present), the call-site checker PASS over 52 files, 1,201 declarations and
+7,804 call sites with 0 findings, `npm run typecheck` clean, the pod mirror verified, and
+`prove:guardrails` 70 of 70 caught across four gates. Nine new cases pin the round: the file keeps a
+questions-only record and reads it back, an unreadable file is told apart from no queue, a launch
+with an unreadable queue says so, a saved question leaves its video out of Select all and is named
+with the right sentence, the video survives a later run *and* that run's relaunch, ending a run keeps
+its question while a run with nothing outstanding still clears the record, a hand tick answers the
+question, a restored run remembers why it stopped, and every reason maps through the file. **None of
+it has been compiled.**

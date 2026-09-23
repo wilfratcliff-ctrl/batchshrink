@@ -55,6 +55,16 @@ private enum RunAccess: Equatable, Sendable {
     @Published private(set) var message: String?
     @Published private(set) var cleanupWarning: String?
     @Published private(set) var queueWarning: String?
+    /// A warning about the saved queue itself: a record this launch found and could not read.
+    ///
+    /// Deliberately not `queueWarning`. That notice is drawn under a heading which says something
+    /// was not written down, and that is a claim about a write that failed - a record this build
+    /// cannot read is not that claim, because the build that wrote it may have written it perfectly.
+    /// The launch screen and the screen where videos are chosen draw it, because those are the two
+    /// places its advice is actionable: a record nothing could be restored from leaves no run for any
+    /// other screen to show, and the risk it warns about - an automatic selection running a video
+    /// whose copy that record may have named - is taken on the choosing screen.
+    @Published private(set) var queueReadWarning: String?
     @Published private(set) var restoredRun = false
     @Published private(set) var pauseReason: BatchPauseReason?
     @Published private(set) var readBackOutcomes: [String: CopyReadBack] = [:]
@@ -883,6 +893,14 @@ private enum RunAccess: Equatable, Sendable {
     /// changed except the list it was handed.
     private func beginRun(with chosen: [LibraryAsset]) {
         items = chosen.map { BatchItem(asset: $0, state: .pending) }
+        // A video this run was handed by hand is no longer a question. Ticking it is the user's own
+        // decision to run it - the same decision the "I checked Photos" tap records - and the hand
+        // tick is the route every video left out of a bulk selection has. Keeping the finding would
+        // leave the video listed as one the app cannot account for while the run it was handed to is
+        // busy making the copy that answers it. The decision is taken at the tick and not when the
+        // video is reached: a run that refuses this video before touching it does not put the
+        // question back, because the user's own choice is not the app's guess to overrule.
+        for asset in chosen { midSaveFindings[asset.id] = nil }
         // A fresh run starts with no history of cancellations against any video.
         cancelledAttempts = [:]
         // And with no history of anything else either. Every dictionary below is keyed by a video
@@ -907,9 +925,10 @@ private enum RunAccess: Equatable, Sendable {
         // *question the user still has to answer*, and it is what keeps that video out of a bulk
         // selection until they do. Clearing it would put a video that may already have a copy back
         // within reach of Select all on the next run, which is the second copy this area exists to
-        // prevent. What it cannot survive is a relaunch: the record written below describes this
-        // run's items and carries no open question, so the next launch would not know. That gap is
-        // recorded as RR2's remaining half in docs/AUDIT_RESTORED_RUN.md.
+        // prevent. The videos this run was handed are cleared above, and that is the whole of the
+        // exception: a tick by hand is an answer, and the questions left over belong to videos this
+        // run never looks at. They travel in the record as their own list rather than as items, so a
+        // launch after this run still knows about them - see `openQuestionRecords`.
         activeSettings = settings.transcode
         activeDeletionMode = settings.deletionMode
         estimator = ProcessingEstimator()
@@ -1023,7 +1042,19 @@ private enum RunAccess: Equatable, Sendable {
         attemptedSaves = [:]
         cancelledAttempts = [:]
         queueWarning = nil
-        clearStoredQueue()
+        queueReadWarning = nil
+        // The run is over; a question it raised is not. "Photos may have taken a copy of this video"
+        // is still true after the user has finished with the run, and it is what keeps that video out
+        // of the next automatic selection. Clearing the record took the question with it, so a launch
+        // after that had no way to know - and the video it was about became one Select all would
+        // cheerfully copy a second time. Everything else about the run goes, which is what the user
+        // asked for; the question is written on its own instead.
+        let questions = openQuestionRecords
+        if questions.isEmpty {
+            clearStoredQueue()
+        } else {
+            endRunRecord(with: questions)
+        }
         selection.removeAll()
         estimator = ProcessingEstimator()
         stopRequested = false
@@ -1672,31 +1703,66 @@ private enum RunAccess: Equatable, Sendable {
     @discardableResult
     private func persistQueue() -> Bool {
         guard !items.isEmpty else { return clearStoredQueue() }
-        let record = BatchQueueRecord(
-            settings: BatchQueueRecord.Settings(resolution: activeSettings.resolution.rawValue,
-                                                frameRate: activeSettings.frameRate.rawValue,
-                                                deletion: activeDeletionMode.rawValue),
-            items: items.map { item in
-                BatchQueueRecord.Item(identifier: item.asset.id,
-                                      creationDate: item.asset.creationDate,
-                                      duration: item.asset.duration,
-                                      pixelWidth: item.asset.pixelWidth,
-                                      pixelHeight: item.asset.pixelHeight,
-                                     bytes: item.asset.bytes,
-                                      state: BatchQueueReconciliation.persisted(item.state),
-                                      readBack: readBackOutcomes[item.asset.id],
-                                      deletion: deletionOutcomes[item.asset.id],
-                                      copyEvidence: copyEvidence[item.asset.id],
-                                      attemptedSave: attemptedSaves[item.asset.id].map { AttemptedSave($0) })
-            },
+        return write(BatchQueueRecord(
+            settings: storedSettings,
+            items: items.map(stored),
             // The videos this run began without, so a run that is picked up again can still
             // account for them wherever it ends. The record holds the identity the screens draw
             // and `AssetRules`' own stable kind, never the sentence itself.
-            refusals: preflightRefusals.compactMap { BatchQueueRecord.Refusal(asset: $0) })
+            refusals: preflightRefusals.compactMap { BatchQueueRecord.Refusal(asset: $0) },
+            questions: openQuestionRecords,
+            pause: pauseReason.map { BatchQueueRecord.PauseKind($0) }))
+    }
+
+    /// One item, as the queue file keeps it.
+    private func stored(_ item: BatchItem) -> BatchQueueRecord.Item {
+        BatchQueueRecord.Item(identifier: item.asset.id,
+                              creationDate: item.asset.creationDate,
+                              duration: item.asset.duration,
+                              pixelWidth: item.asset.pixelWidth,
+                              pixelHeight: item.asset.pixelHeight,
+                              bytes: item.asset.bytes,
+                              state: BatchQueueReconciliation.persisted(item.state),
+                              readBack: readBackOutcomes[item.asset.id],
+                              deletion: deletionOutcomes[item.asset.id],
+                              copyEvidence: copyEvidence[item.asset.id],
+                              attemptedSave: attemptedSaves[item.asset.id].map { AttemptedSave($0) })
+    }
+
+    /// The questions this record has to carry: the ones none of this run's own items describes.
+    ///
+    /// A video this run flagged travels in `items`, where its identity and everything the app found
+    /// out about it already are. These are the videos an *earlier* run could not account for - the
+    /// ones this run leaves out of an automatic selection and never looks at - and they are written
+    /// separately because a run that started after them would otherwise have nothing left to tell
+    /// the next launch about them. Sorted, so a record written from the same state twice is the same
+    /// file.
+    private var openQuestionRecords: [BatchQueueRecord.Question] {
+        let inThisRun = items.map(\.id)
+        return unaccountedIdentifiers.subtracting(inThisRun).sorted().map { identifier in
+            BatchQueueRecord.Question(
+                identifier: identifier,
+                kind: BatchQueueRecord.Question.Kind(question: midSaveQuestion(for: identifier)))
+        }
+    }
+
+    /// The settings and mode the run is using, as the queue file keeps them.
+    private var storedSettings: BatchQueueRecord.Settings {
+        BatchQueueRecord.Settings(resolution: activeSettings.resolution.rawValue,
+                                  frameRate: activeSettings.frameRate.rawValue,
+                                  deletion: activeDeletionMode.rawValue)
+    }
+
+    /// Writes a record and says whether it reached disk.
+    @discardableResult
+    private func write(_ record: BatchQueueRecord) -> Bool {
         do {
             try queueStore.save(record)
             // A notice is only dropped once the run has a written record to put in its place.
             if !checkpointFailure { queueWarning = nil }
+            // A record is on disk again, so what could not be read about the old one no longer
+            // describes anything left for the user to act on.
+            queueReadWarning = nil
             return true
         } catch {
             queueWarning = "BatchShrink couldn't write its place on this iPhone. It stops before changing anything else in Photos."
@@ -1714,16 +1780,69 @@ private enum RunAccess: Equatable, Sendable {
     private func clearStoredQueue() -> Bool {
         queueStore.clear()
         guard queueStore.load() != nil else { return true }
-        queueWarning = "BatchShrink couldn't clear the queue it had saved. The next launch may offer this run again, so check Photos before letting it run."
+        queueWarning = Self.recordStillThereWarning
         log.error("Clearing the stored queue left a record behind")
         return false
     }
 
+    /// Writes the record a run leaves behind, which is the questions it could not answer.
+    ///
+    /// Deliberately not `write(_:)`: that one's failure sentence says the run stops before changing
+    /// anything else in Photos, and there is no run left to stop - the user has just ended it. What
+    /// can fail here is the *replacement* of a record, and the record still on disk is the run's own,
+    /// so the honest sentence is the one a failed clear uses: the same record is left standing and a
+    /// launch may offer the whole run again.
+    private func endRunRecord(with questions: [BatchQueueRecord.Question]) {
+        do {
+            try queueStore.save(BatchQueueRecord(settings: storedSettings, items: [], refusals: nil,
+                                                 questions: questions))
+            queueReadWarning = nil
+        } catch {
+            queueWarning = Self.recordStillThereWarning
+            log.error("Storing the run's questions failed")
+        }
+    }
+
+    /// What the app says when the record it wanted to replace is still on disk.
+    ///
+    /// A clear that did not clear and a write that did not replace leave the same thing behind - the
+    /// run's own record - and have the same consequence for the user, which is why they share one
+    /// sentence rather than growing two that could drift apart.
+    private static let recordStillThereWarning = "BatchShrink couldn't replace the record it had saved, so the next launch may offer that run again. Check Photos before letting it run."
+
     private func restoreQueue() {
-        guard let record = queueStore.load() else { return }
+        guard let record = queueStore.load() else {
+            // No record, or one this build cannot read. The second is not the same as no run at all:
+            // it may have named a video whose copy Photos was taking, and that video is the one the
+            // next selection has to leave alone. Nothing can be restored from it, and nothing can
+            // say what it held, so the only honest thing left is to say that much where the user
+            // lands.
+            if queueStore.hasUnreadableRecord() {
+                queueReadWarning = "BatchShrink has set it aside, and nothing about the library was changed by this launch. If you had a run going, look in Photos before running the same videos again."
+                log.error("A stored queue could not be read")
+            }
+            return
+        }
         let reconciled = BatchQueueReconciliation.reconcile(record)
+        // The questions a run left behind. They are deliberately not items: a question is a fact
+        // about the library rather than a piece of a run, and the run it came from is over, so
+        // nothing here may be continued or drawn as part of one. What they do is keep their videos
+        // out of an automatic selection, and name them on the screen where videos are chosen, until
+        // someone has looked. See `BatchQueueRecord.Question`.
+        for question in reconciled.questions ?? [] {
+            guard !reconciled.items.contains(where: { $0.identifier == question.identifier }) else {
+                continue
+            }
+            midSaveFindings[question.identifier] = .unresolved(question: question.kind.question)
+        }
         guard !reconciled.items.isEmpty else {
-            clearStoredQueue()
+            // With no items this record is the questions alone - `load()` answers nothing for a
+            // record that holds nothing at all, so `questions` is not empty here - and they are
+            // already in hand. There is nothing to continue and no run's screen to draw, so the
+            // flow stays on the one it would have shown anyway, and nothing about the record is
+            // imposed on it - not even the quality it was using, which was the ended run's choice
+            // and may not be the user's any more. That is why this return sits above the settings.
+            log.info("Restored saved questions with no run to continue")
             return
         }
         if let resolution = CopyResolution(rawValue: reconciled.settings.resolution) {
@@ -1735,6 +1854,10 @@ private enum RunAccess: Equatable, Sendable {
         if let deletion = reconciled.settings.deletion.flatMap(DeletionMode.init(rawValue:)) {
             activeDeletionMode = deletion
         }
+        // Why the run stopped, in the run's own kind rather than a sentence, so the restored paused
+        // screen says what the stopped one said. It is drawn only while there is work waiting, and
+        // `Continue` clears it the same way a live stop's reason is cleared.
+        pauseReason = reconciled.pause?.reason
         activeSettings = settings.transcode
         items = reconciled.items.map { item in
             BatchItem(asset: item.asset, state: BatchQueueReconciliation.live(item.state))

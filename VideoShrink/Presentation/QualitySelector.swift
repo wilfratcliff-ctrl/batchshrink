@@ -177,6 +177,21 @@ struct QualitySheet: View {
     @ObservedObject var settings: ShrinkSettings
     let estimate: (CopyResolution) -> SavingsEstimate?
     var placeholder: String = "Choose videos to see how much smaller they could get."
+    /// The sentence under the chooser, shown only where the sheet can produce a figure.
+    ///
+    /// The batch sheet counts the current selection, so the line tells the user what the numbers
+    /// above it are and that the real sizes arrive at the end. The one-video sheet is opened before
+    /// any video is chosen and its estimate answers nil at every resolution, so that card can only
+    /// ever draw its placeholder - a sentence about estimates would name figures that are not on
+    /// the screen. That caller says so by passing nil; the default here is the batch's own line.
+    var estimateNote: String? = QualitySheet.defaultEstimateNote
+
+    /// The batch's own line about its estimate card, named rather than written twice.
+    ///
+    /// A caller that draws the card only sometimes - the batch sheet on the summary screen, where
+    /// nothing is chosen yet - has to hand back the same sentence the default carries, and a second
+    /// literal is a second place for a wording change to be missed.
+    static let defaultEstimateNote = "These are estimates. Real sizes appear when it finishes."
 
     @Environment(\.dismiss) private var dismiss
 
@@ -190,8 +205,10 @@ struct QualitySheet: View {
                             .font(.body).foregroundStyle(.secondary)
                     }
                     QualitySelector(settings: settings, estimate: estimate, placeholder: placeholder)
-                    Text("These are estimates. Real sizes appear when it finishes.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                    if let estimateNote {
+                        Text(estimateNote)
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 .frame(maxWidth: 540)
                 .padding(24)

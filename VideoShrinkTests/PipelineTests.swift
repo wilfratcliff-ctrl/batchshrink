@@ -50,6 +50,27 @@ import Combine
         XCTAssertEqual(fixture.photos.retrieveCount, 0)
     }
 
+    func testClosingThePickerReturnsToTheWelcomeScreen() async {
+        let fixture = Fixture()
+        await choose(fixture)
+        XCTAssertEqual(fixture.model.stage, .choosing)
+        fixture.model.pickerCancelled()
+        // The welcome screen and not the recovery screen: closing the picker chose no video and
+        // ran nothing, so there is no original to reassure the user about and no run to describe.
+        XCTAssertEqual(fixture.model.stage, .idle)
+        XCTAssertFalse(fixture.model.showingPicker)
+        XCTAssertNil(fixture.model.message)
+        XCTAssertEqual(fixture.photos.retrieveCount, 0)
+        // The picker's own cancelled callback and the sheet's `onDismiss` both call this, so the
+        // second delivery has to meet a flow already answered and leave it where it is.
+        fixture.model.pickerCancelled()
+        XCTAssertEqual(fixture.model.stage, .idle)
+        // Let the choosing task's defer clear its handle before asking the model whether it is at
+        // rest, as `ready` does.
+        await Task.yield()
+        XCTAssertTrue(fixture.model.canChoose)
+    }
+
     func testCloudFailureStopsBeforeExport() async {
         let fixture = Fixture()
         fixture.photos.retrievalError = .retrieval

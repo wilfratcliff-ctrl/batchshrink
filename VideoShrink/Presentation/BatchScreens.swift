@@ -44,6 +44,13 @@ struct BatchStartScreen: View {
                      : "Nothing is deleted. You keep the original and the copy.")
                     .font(.footnote).foregroundStyle(.secondary)
                 QueueWarningNotice(warning: batch.queueWarning)
+                // A record this launch could not read is not a write that failed, so it is not drawn
+                // under that notice's heading. This is the only screen that can show it: nothing was
+                // restored from that record, so no run's screen ever comes up.
+                if let warning = batch.queueReadWarning {
+                    ShrinkNotice(symbol: "exclamationmark.triangle",
+                                 title: "A saved run couldn't be read", detail: warning)
+                }
             }
             .frame(maxWidth: 540)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 28)
@@ -486,6 +493,13 @@ struct BatchSelectionScreen: View {
                 Text(footer).font(.footnote).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 QueueWarningNotice(warning: batch.queueWarning)
+                // The same notice the launch screen draws, on the screen where its advice is acted
+                // on: a record nothing could be read from may have named a video whose copy Photos
+                // already holds, and the automatic selection is what would run that video again.
+                if let warning = batch.queueReadWarning {
+                    ShrinkNotice(symbol: "exclamationmark.triangle",
+                                 title: "A saved run couldn't be read", detail: warning)
+                }
             }
             .frame(maxWidth: 700)
             .padding(.horizontal, 24).padding(.top, 20).padding(.bottom, 24)

@@ -37,13 +37,18 @@ enum PipelineStage: String, CaseIterable {
     /// A refusal is silent at the call site: the run stays exactly where it is. So every stage a
     /// failure can start from has to have a move that failure may take, and that is `.failed` for
     /// all of them. This refuses more moves than it allows on purpose.
+    ///
+    /// `.choosing -> .idle` is the way back out of the video picker, and it is the only move here
+    /// that returns to the welcome screen. Closing the sheet without choosing anything picked no
+    /// video and ran nothing, so that is where the flow belongs; the recovery screen a `.cancelled`
+    /// run lands on is written about an original and a run that do not exist yet.
     func allows(_ next: PipelineStage) -> Bool {
         if next == .cancelled { return canCancel || self == .choosing }
         if next == .failed { return ![.idle, .saved, .cancelled].contains(self) }
         switch (self, next) {
         case (.idle, .waitingForPermission), (.saved, .waitingForPermission),
              (.failed, .waitingForPermission), (.cancelled, .waitingForPermission),
-             (.waitingForPermission, .choosing), (.choosing, .retrieving),
+             (.waitingForPermission, .choosing), (.choosing, .idle), (.choosing, .retrieving),
              (.retrieving, .preparing), (.preparing, .transcoding),
              (.transcoding, .verifying), (.verifying, .readyToSave),
              (.readyToSave, .saving), (.saving, .saved): return true
