@@ -24,11 +24,13 @@ the first Mac session. Neither has been compiled or executed.
   valid), `npm run typecheck` passes, and `node scripts/sync-native-sources.mjs --check` passes
   (36 Swift source files and the privacy manifest). Those are pattern scans and a TypeScript check,
   not a compiler.
-- `docs/MAC_VALIDATION_HANDOFF.md` was written for the first Mac session. It carries the commands to
-  run (`scripts/validate-mac.sh` with `SIMULATOR_UDID` set), a ranked list of the eight things a round
-  said it could not compile-check, a symptom-to-file-to-commit triage table for `10ab65f`, `559f693`
-  and `65d6a09`, what a simulator run cannot prove, and the milestone's definition of done. It claims
-  no result.
+- `docs/MAC_VALIDATION_HANDOFF.md` was written for the first Mac session. That assumed a Mac with
+  Xcode, and the owner uses Expo only and does not own a Mac, so the document could not be run. It
+  has been replaced by `docs/VERIFICATION_HANDOFF.md`, which routes verification through an EAS cloud
+  build (`npx eas-cli build --platform ios --profile development-simulator`), states what that build
+  compiles and what it does not, gives the exact commands for each profile in `eas.json`, keeps the
+  ranked list of things a round said it could not compile-check, and keeps the symptom-to-file-to-commit
+  triage table for `10ab65f`, `559f693`, `65d6a09` and `dcd0695`. It claims no result.
 - **NOT RUN**: compilation, XCTest execution, simulator, any build, any device run, deletion against a
   real library, the queue-failure paths on a device, and the new revalidation lookups.
 

@@ -110,7 +110,10 @@ enum BatchPhase: Equatable {
         self.history = history
         self.queueStore = queueStore
         self.screenAwake = screenAwake
-        self.libraryChanges = libraryChanges ?? LibraryChangeMonitor()
+        // A local name, so the rest of the initialiser cannot accidentally reach for the optional
+        // parameter: `libraryChanges` inside `init` means the argument, not the stored property.
+        let monitor = libraryChanges ?? LibraryChangeMonitor()
+        self.libraryChanges = monitor
         self.settings = settings
         completedIdentifiers = history.completedIdentifiers()
         createdCopyIdentifiers = history.createdCopyIdentifiers()
@@ -119,10 +122,11 @@ enum BatchPhase: Equatable {
         restoreQueue()
         // The library can change under the app, and access can change while it is suspended. The
         // monitor reports both and decides nothing itself; what they mean is decided here.
-        libraryChanges.onChange = { [weak self] reason in
-            self?.libraryChanged(reason)
+        monitor.onChange = { [weak self] reason in
+            guard let self else { return }
+            self.libraryChanged(reason)
         }
-        libraryChanges.start()
+        monitor.start()
     }
 
     // MARK: - Derived state
