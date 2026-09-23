@@ -54,7 +54,10 @@ import Photos
 
     init(photos: any PhotoLibraryServing, transcoder: any VideoTranscoding,
          verifier: any VideoVerifying, temporary: any TemporaryFileManaging,
-         history: any ShrinkHistoryStoring = UserDefaultsShrinkHistoryStore(),
+         // Built inside the initialiser rather than as a default argument: the store is
+         // main-actor isolated, and a default argument is evaluated in a nonisolated context.
+         // `BatchViewModel` takes its change monitor the same way, for the same reason.
+         history: (any ShrinkHistoryStoring)? = nil,
          settings: ShrinkSettings,
          authorizationStatus: @escaping () -> PHAuthorizationStatus = {
              PHPhotoLibrary.authorizationStatus(for: .readWrite)
@@ -63,7 +66,7 @@ import Photos
         self.transcoder = transcoder
         self.verifier = verifier
         self.temporary = temporary
-        self.history = history
+        self.history = history ?? UserDefaultsShrinkHistoryStore()
         self.settings = settings
         self.authorizationStatus = authorizationStatus
         cleanTemporaryFiles() // Remove interrupted exports from an earlier launch.
