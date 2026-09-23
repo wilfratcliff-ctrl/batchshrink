@@ -12,6 +12,22 @@ The next milestone is a reliability release focused on safe saves, deletion and 
 - Git has no commits or configured remote. The current source cannot be tied to a release through a commit SHA.
 - README, NEXT_PHASE, VALIDATION and the physical test plan contain historical statements that conflict with implemented behavior and the build-10 release record. Examples include no deletion, no builds, no idle-timer override, and metadata copying limited to creation date.
 
+**Since this review was written.** Nothing in this document has been edited, because it is the
+review of record and its findings are what the backlog above it was built from. Four of its
+state statements have moved, and a reader should not take them for today's:
+
+- Git now has a history and a remote. The tree is on `main` with a private GitHub remote, pushed
+  through round 19, so the current source *is* tied to a commit SHA; this bullet's opposite was
+  true on 21 September and is not now.
+- The XCTest suite executes. CI compiles both targets and runs the suite on a macOS runner; it
+  did not on the day of this review. The account's runners have since stopped starting, so
+  nothing on `main` after `31b6245` has been compiled.
+- The three Priority 0 items below were implemented in round 1 and compiled, and the suite passes;
+  they have still never run against a real library, which is what this review asked for.
+- The document-state problem it names (README, NEXT_PHASE, VALIDATION and the device plan
+  conflicting with implemented behaviour) has been worked on in every round since, including the
+  round that produced this file list.
+
 Findings below are source-review findings, not device reproductions.
 
 ## Priority 0: durable evidence before Photos mutations

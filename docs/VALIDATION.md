@@ -1,9 +1,9 @@
 # Validation record
 
 Every entry below is one of three things, and says which: **historical** (a past build or a past
-decision), **implemented source** (in the tree; compiled by CI since 2026-09-23, but never run), or
-**observed** (it ran, with the evidence named). See the status legend in
-[README.md](../README.md).
+decision), **implemented source** (in the tree; compiled by CI from 2026-09-23 until the runners
+stopped starting, but never run), or **observed** (it ran, with the evidence named). See the
+status legend in [README.md](../README.md).
 
 ## September 23: the test suite compiles and passes in CI (observed at 5d72357)
 
@@ -28,15 +28,23 @@ XCTest suite did not merely compile: it ran, and it passed.
   Its first run executed all 162 cases with 7 failures; commits `7c11f26` and `5d72357` addressed
   them, and the run above is the result. The earlier builds and their evidence stay listed further
   down this file.
-- Verification is now free and automatic rather than rationed. The EAS account's free-plan iOS
-  build minutes are exhausted until 1 October 2026, so EAS is now only for builds that install on
-  a device; the CI job spends none of those minutes and runs on every push to `main`.
-- **Still NOT RUN, unchanged and not softened.** The app itself has never run. No screen has been
-  rendered, no video has been exported, no original has been deleted and no queue file has been
-  written on a device. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is still entirely unexecuted. Build 10
-  is still the last build known to have reached testers. A green suite exercises the app's pure
-  logic against injected fakes and says nothing about PhotoKit, AVFoundation, thermal state, HDR,
-  interruptions or iCloud.
+- Verification was free and automatic rather than rationed while the workflow could run. The EAS
+  account's free-plan iOS build minutes are exhausted until 1 October 2026, so EAS is only for
+  builds that install on a device; the CI job spends none of those minutes. **That route is
+  blocked again as of the same day**: the account's GitHub Actions runners stopped starting
+  altogether, so nothing on `main` after `31b6245` has been compiled. `AGENT_LOOP.md` carries the
+  evidence and the options; this entry records the state before the block and must not be read as
+  a description of today.
+- **Still NOT RUN, and corrected rather than softened.** No video has been exported, no original
+  has been deleted and no queue file has been written on a device. One thing in this bullet has
+  changed: **a screen has been rendered** - the launch job added in round 18 installed the
+  standalone app on a simulator, tapped the introduction's Skip control and reached the batch
+  screen, first observed green at `780f14f`. That is one navigation on a simulator with no photo
+  library; it is not a rendered layout for any other screen and not a device result.
+  `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is still entirely unexecuted. Build 10 is still the last
+  build known to have reached testers. A green suite exercises the app's pure logic against
+  injected fakes and says nothing about PhotoKit, AVFoundation, thermal state, HDR, interruptions
+  or iCloud.
 - At the time of writing, branch `main` is at `5d72357` and the working tree carries uncommitted
   edits from the next round, which are unverified until they are pushed and CI is green.
 
@@ -103,8 +111,9 @@ loop in `AGENT_LOOP.md` and is not described here.
   dead code because no caller passed the new evidence in. An integration pass rewired the receipt
   from read-back through the persisted queue into the gate, and the old unrevalidated delete call
   now has no caller. A change that strict needs device validation before it is trusted.
-- XCTest cases went from 102 to 145 at this commit, and none had executed. (The suite is 162 cases
-  now and passes in CI; see the entry above.) Portable checks after round 1:
+- XCTest cases went from 102 to 145 at this commit, and none had executed. (The suite was 162
+  cases when it first ran green and has grown every round since; the local gate prints the
+  current count. See the entry above.) Portable checks after round 1:
   `npm run validate:native` passes (37 application Swift files, 145 XCTest cases present) and
   `npm run typecheck` passes. Those are pattern scans, not a compiler.
 - **At that commit, NOT RUN**: compilation, XCTest execution, simulator, any build, any device run,
@@ -273,8 +282,9 @@ loop in `AGENT_LOOP.md` and is not described here.
 
 The sections below record the earlier September 17 setup and its limitations at that time. Their
 "not available" lists describe that Windows-only environment, not the present one: compilation
-and XCTest execution are now covered by CI (see the entry at the top of this file), while every
-device and simulator-app behaviour they list remains unproven.
+and XCTest execution were covered by CI while the runners could start (see the entry at the top of
+this file, and the blocker recorded in `AGENT_LOOP.md`), while every device and simulator-app
+behaviour they list remains unproven.
 
 Environment: Windows 10.0.26200, PowerShell, Node.js v24.21.0, Git 2.55.0.windows.3. Date: 2026-09-17.
 

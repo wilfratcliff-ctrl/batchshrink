@@ -10,7 +10,7 @@ No paid project-generation tool is needed. XcodeGen is free, used only to genera
 
 ## Transfer, generate and build
 
-The Windows workspace now has two local commits (`10ab65f` baseline, `559f693` round 1) but no configured remote and nothing pushed. Before cloning, you must explicitly arrange a push to **your private repository**, or securely copy the source tree to the Mac. There is no repository URL to assume.
+This section records the state when the document was written: the Windows workspace held two local commits (`10ab65f` baseline, `559f693` round 1), had no configured remote and had pushed nothing. **That has moved.** The source is now on `main` with a private GitHub remote, and `origin` is the repository to clone; check `git remote -v` before relying on any URL written here.
 
 Use your own Mac user account on the rented host. Authenticate to private GitHub through its credential manager or a short-lived SSH key; never put a token into the clone URL.
 
@@ -61,7 +61,7 @@ xcodebuild -project VideoShrink.xcodeproj -scheme VideoShrink \
   -derivedDataPath build/DerivedData CODE_SIGNING_ALLOWED=NO test
 ```
 
-Run all `VideoShrinkTests` before distribution. Fix compiler errors and warnings that expose real isolation/API problems, update the source/specification, regenerate and rerun. No previous successful compile is available as a baseline. The tests exercise mocks and pure rules; simulator success does not prove iCloud or hardware HEVC behavior.
+Run all `VideoShrinkTests` before distribution. Fix compiler errors and warnings that expose real isolation/API problems, update the source/specification, regenerate and rerun. A previous successful compile does exist now - CI compiled and ran the suite on a macOS runner until the account's runners stopped starting - but nothing on `main` after `31b6245` has been built, so this session's compile is still the first to see the newest changes. The tests exercise mocks and pure rules; simulator success does not prove iCloud or hardware HEVC behavior.
 
 ## Identity and signing
 
@@ -95,9 +95,9 @@ In Xcode Organizer:
 2. Choose **Distribute App → App Store Connect → Upload**, or **TestFlight Internal Only** for a deliberately internal build. Apple’s wording can vary with Xcode. Internal-only builds cannot later be assigned to external testers.
 3. Select the correct team/app and upload after reviewing the summary. Complete any App Store Connect export-compliance questions accurately. The prototype adds no custom cryptography; do not infer an answer to legal compliance questions solely from this guide.
 4. Wait for build processing. In App Store Connect → app → TestFlight, add the build to an internal testing group and add yourself as an eligible internal tester. External distribution may require Beta App Review and additional information.
-5. On the iPhone, install Apple’s **TestFlight** app, accept the invitation using the invited Apple account, then install VideoShrink. The phone needs a compatible iOS version and network connectivity; it does not need to be attached to the Mac.
+5. On the iPhone, install Apple’s **TestFlight** app, accept the invitation using the invited Apple account, then install BatchShrink. The phone needs a compatible iOS version and network connectivity; it does not need to be attached to the Mac.
 
-For subsequent uploads, increase `CURRENT_PROJECT_VERSION` in `project.yml`, regenerate, test and archive again. Record Xcode/XcodeGen/OS versions and keep the `.xcresult` locally with test evidence. Avoid checking private screenshots, videos or diagnostic paths into Git.
+For subsequent uploads, increase `ios.buildNumber` in `app.json` and build/submit through EAS: that is the shipping app's build number, and EAS refuses one that has already been uploaded. Do not bump `CURRENT_PROJECT_VERSION` in `project.yml` for an upload - that is a different fact, counting only the standalone harness project (`com.example.VideoShrink`), which CI compiles and never ships. `npm run validate:native` prints that difference as a `NOT CHECKED` line rather than comparing the two. Record Xcode/XcodeGen/OS versions and keep the `.xcresult` locally with test evidence. Avoid checking private screenshots, videos or diagnostic paths into Git.
 
 See [Apple distribution guidance](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases), [TestFlight overview](https://developer.apple.com/testflight/) and [internal tester setup](https://developer.apple.com/help/app-store-connect/test-a-beta-version/add-internal-testers).
 

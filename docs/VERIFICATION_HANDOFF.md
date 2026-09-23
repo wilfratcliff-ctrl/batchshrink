@@ -6,8 +6,31 @@ owner uses Expo only and does not own a Mac, so no step in that document could b
 verification route here is an EAS cloud build, which compiles the Swift on Apple's own
 machines.
 
-Git state at the time of writing: branch `main`, HEAD `dcd0695`, clean tree, no configured
-remote.
+**Read this first: what has changed since the sections below were written.** They are anchored to
+`dcd0695`, and several of their present-tense sentences have been overtaken. Each is corrected
+where it appears; this list is the map.
+
+- **There is a Git remote, and CI is now the everyday gate.** The repository is pushed to a
+  private GitHub remote on `main`, now at `f541699` (round 19). `.github/workflows/ios-tests.yml`
+  has three jobs - the tests, the Expo app build, and the app-launch smoke test - and job 1 runs
+  the three local gates as well. EAS is now only for builds that install on a device.
+- **The test count has moved repeatedly.** It was 162 at this document's commits and has grown
+  every round since; the local gate prints the current count. Take the number from a run, never
+  from this file.
+- **The runners stopped starting.** On 2026-09-23 every job of the account's GitHub Actions
+  workflow began failing about nine seconds after creation with no runner and no steps,
+  including a throwaway Linux job, while GitHub reported all systems operational. So nothing on
+  `main` after `31b6245` has been compiled, and the round 18 and 19 source in particular has
+  never been built. `AGENT_LOOP.md` carries the evidence, the arithmetic and the options.
+- **Both routes have now run.** The last observed green state: job 1 (compile and tests) and job
+  2 (the Expo app build) green at `31b6245`; job 3 (launch and screen render) green at `780f14f`,
+  the first observation of a screen in this project.
+- **The device plan now describes `07526c4`**, not `559f693`, and round 18's first-launch fix
+  means the system permission alert is no longer opened at launch.
+
+Git state at the time this document was written: branch `main`, HEAD `dcd0695`, clean tree, no
+configured remote. All four of those have since changed; `git log` and `git remote -v` are the
+current answer.
 
 | Commit | What it is |
 |--------|------------|
@@ -97,7 +120,8 @@ Swift in that mirror compiled for the target it was built for.
 
 ### It does not prove any of the following
 
-- **The test target.** `VideoShrinkTests/` holds 162 XCTest cases, and no ordinary EAS build
+- **The test target.** `VideoShrinkTests/` holds the XCTest cases (the local gate prints the
+  current count; take it from a run, never from this file), and no ordinary EAS build
   compiles or runs them: the pod glob above does not reach `VideoShrinkTests/`, and the
   standalone project is not part of the Expo build. The opt-in `verify-tests` profile in
   section 6 is the one exception: it compiles the test target and then runs it on a simulator
@@ -296,24 +320,26 @@ revert of `dcd0695` also reverts the round-3 documents; a revert of `65d6a09` al
 `docs/VALIDATION.md`, `docs/PHYSICAL_DEVICE_TEST_PLAN.md` and the other documents that round
 touched.
 
-## 6. Running the 162 tests without a Mac
+## 6. Running the XCTest suite without a Mac
 
 No ordinary EAS build compiles or runs `VideoShrinkTests/`. The opt-in `verify-tests` profile
 below compiles the target and then runs it on a simulator discovered on the builder, so the EAS
-route can execute the 162 cases. A GitHub Actions macOS runner is the other route, and it is the
+route can execute the suite. A GitHub Actions macOS runner is the other route, and it is the
 recommended one once a remote exists. Both routes call the same script, which is deliberately the
 single implementation: `scripts/verify-native-tests.mjs` runs `xcodegen generate` to build
 `VideoShrink.xcodeproj` from `project.yml` (the source of truth; no `.xcodeproj` is checked in),
-then runs `xcodebuild` to compile the test bundle and execute the 162 cases on a simulator.
+then runs `xcodebuild` to compile the test bundle and execute the cases on a simulator.
 
 Two things to be plain about:
 
-- **Neither route has run yet.** The EAS route is implemented but temporarily unusable: the
-  free-plan monthly iOS build minutes are exhausted until 1 October 2026, so no `verify-tests`
-  build can start. The GitHub route needs a Git remote, and this repository has none
-  (`git remote -v` prints nothing), so the workflow file has never been dispatched and no CI
-  runner has executed these tests. Creating that remote is a decision for the owner, not
-  something this document has done.
+- **Both routes have now run, and both are currently blocked.** This bullet used to read that
+  neither had: the EAS route was unusable because the free-plan monthly iOS build minutes were
+  exhausted until 1 October 2026, and the GitHub route had no remote to dispatch from. The
+  remote was created and the job has run green - the first green run was 2026-09-23 at `5d72357`,
+  with both banners printed and 0 failures - and the last observed green test run was at
+  `31b6245`. Since then the account's GitHub Actions runners have stopped starting altogether,
+  so no route can execute the suite right now. See the note at the top of this file and
+  `AGENT_LOOP.md`.
 - **The GitHub route is the more reproducible one.** It spends no EAS build minutes, so the
   monthly limit does not ration it, and a macOS runner image is a fixed, observable environment,
   which makes a failing case easier to reproduce than one on the EAS builder.
@@ -332,7 +358,7 @@ Actions tab (`workflow_dispatch`). It uses the `macos-15` runner image, checks o
 sets up Node, runs `npm ci`, and then runs the script. It needs no Apple signing, because both
 `xcodebuild` invocations pass `CODE_SIGNING_ALLOWED=NO` and target the iOS Simulator. It adds no
 secrets, no deployment step and no dependency cache, and it publishes nothing: the job only
-proves that the 162 cases compile and pass.
+proves that the cases compile and pass.
 
 **The remote this paragraph used to ask for now exists.** It read: this repository has no GitHub
 remote, so the workflow file cannot be dispatched and no runner has executed the tests. `origin`
@@ -399,12 +425,15 @@ no certificate and no registered device, and spends no EAS minutes. And it is st
 nothing about deletion, audio sync, HDR, interruptions or iCloud retrieval is exercised by it
 (section 7).
 
-**The build path has not been run anywhere yet.** This repository is edited on Windows, which has
-no Xcode and no CocoaPods, so nothing in step 3 onwards has executed. What has been checked is
-`node --check` on the script, a YAML parse of the workflow, and the script's `--check-only` and
-non-macOS skip paths. The first CI run is the first real test of the rest, and the two likeliest
-first failures are a scheme this discovery reads differently from what was expected, and a
-`pod install` that wants something the runner image does not ship.
+**The build path has now been run, and it works.** This paragraph used to report that nothing
+from step 3 onwards had executed anywhere. It has since executed on a macOS runner: job 2,
+`build-expo-app`, was green at `31b6245` alongside job 1. It needed one fix to get there, and it
+is worth knowing about because it was not our code: `macos-15`'s default Xcode cannot resolve the
+Expo dependency tree, and its newest Xcode 26.3 fails on a third-party C++ header, so the job is
+on `macos-26`, whose default Xcode 26.6 is the toolchain `docs/VALIDATION.md` records EAS using.
+The job prints `xcodebuild -version` and `swift --version` so the next failure of this kind is
+attributable from the log. What has *not* run since 2026-09-23 is any job at all, for the reason
+at the top of this file.
 
 On a Mac, `npm run verify:expo` runs the same script, and `npm run verify:expo -- --check-only`
 runs only the parts that need no Xcode.
@@ -441,7 +470,7 @@ Apple signing credentials. It sets `VIDEOSHRINK_VERIFY_TESTS=1` for the build, a
 5. `xcodebuild -project VideoShrink.xcodeproj -scheme VideoShrink \
    -destination 'platform=iOS Simulator,id=<discovered udid>' \
    -derivedDataPath build/VerifyDerivedData CODE_SIGNING_ALLOWED=NO test-without-building` runs
-   the 162 XCTest cases on that destination, reusing the test bundle the compile phase built.
+   the XCTest cases on that destination, reusing the test bundle the compile phase built.
    Its output streams into the EAS log.
 
 The step prints two banners so the phases stay distinguishable in a long EAS log:
@@ -450,14 +479,14 @@ by `===== VIDEOSHRINK TEST RUN =====` with `START`, then `PASSED`, `FAILED` or `
 compile failure fails the build, prints the compiler output exactly as it appears in the log,
 and the run phase is not attempted at all.
 
-**What it proves:** the 162 XCTest cases compile, and when the builder has an iPhone simulator
+**What it proves:** the XCTest cases compile, and when the builder has an iPhone simulator
 runtime they also execute. The compile phase still uses `build-for-testing` deliberately,
 because it produces the built test bundle that `test-without-building` reuses rather than
 rebuilding. A failing test exits non-zero and fails the build under the `TEST RUN` banner, and
 the log states there that the compile phase had already printed `PASSED`, so a red test cannot
 be read as a red compile.
 
-**When no simulator exists:** the run phase prints a clear line that the 162 cases compiled but
+**When no simulator exists:** the run phase prints a clear line that the cases compiled but
 could not be run, prints the `TEST RUN` banner with `SKIPPED`, and exits 0. A missing simulator
 on a builder image is an environment fact, not a code defect, so the build still passes on its
 compile result and the log records which of the two happened.
@@ -493,9 +522,11 @@ expendable media, and the procedure and pass criteria for each are in
 - **iCloud retrieval.** Whether an offloaded original downloads, what the progress reporting
   looks like, and what happens when connectivity drops mid-download.
 
-Note that `docs/PHYSICAL_DEVICE_TEST_PLAN.md` describes the source at `559f693`, so the round 2
-reconciliation and thumbnail work and the round 3 eligibility and copy-exclusion work are not
-yet covered by it and need cases adding when someone next edits that file.
+Note that `docs/PHYSICAL_DEVICE_TEST_PLAN.md` was written against `07526c4` and has since gained
+the five rows named in its header, so the round 2 reconciliation and thumbnail work, the round 3
+eligibility and copy-exclusion work, the two temporary workspaces and the round 18 and 19 wording
+changes are not all covered as cases; its header now names what a tester meets that the steps do
+not mention.
 
 **Prior evidence is historical.** The build record in `docs/VALIDATION.md` and
 `docs/RELEASE_10.md` is a record of earlier, separate work; its newest entry predates every
@@ -509,8 +540,8 @@ All three, in this order:
 1. `npx eas-cli build --platform ios --profile development-simulator` finishes with no compile
    errors in its log. This proves the Swift core compiles for the simulator.
 2. Every XCTest case executes and passes, on the EAS builder through the `verify-tests` profile
-   or on a macOS runner (section 6). There are 162 cases; take the number from the test result
-   rather than counting test methods in the source. If a case is disabled, skipped or crashes
+   or on a macOS runner (section 6). Take the count from the test result rather than counting test
+   methods in the source. If a case is disabled, skipped or crashes
    the runner, or if the profile prints `TEST RUN` `SKIPPED` because no simulator was found,
    record which of those happened and why.
 3. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is executed on a physical iPhone with expendable media

@@ -156,8 +156,9 @@ as well, and those two come from the file itself, so they are caught when BatchS
 videos already on your iPhone, and again for every video you pick before the first copy is made. A
 refused video is taken out of the run and named with its reason. Only a video BatchShrink could not
 read - one still in iCloud, one the scan did not reach, or one whose read failed - is left to be
-refused later, when the run opens it. Either way the refusal is explained on screen instead of
-failing quietly.
+refused later, when the run opens it, and so is a file with more than one video track or more than
+one audio track, which nothing before the run can count. Either way the refusal is explained on
+screen instead of failing quietly.
 
 PRIVATE BY DEFAULT
 
@@ -177,9 +178,16 @@ short, specific and free of hype. "Must show" is what has to be genuinely on scr
 screenshot to be honest; none of these may be mocked up, and none may show a state the app cannot
 reach.
 
-**Hard constraint on all six.** The app has never rendered a screen on a device. Until it has
-launched on a real iPhone (or, for layout only, a simulator), none of these screenshots can
-honestly exist. See "Unsubstantiated and open" below.
+**Hard constraint on all six, updated.** The app has never rendered a screen on a device. What has
+changed since this plan was written is the simulator: the round 18 launch job installs the
+standalone app on a simulator and reaches the batch screen, so screens 1 and 2 - the introduction
+and the home screen, neither of which needs a library - are now known to render and a layout
+capture from a simulator is possible. That job saves no screenshot of its own: it asks the
+interface directly and attaches the screen to its result bundle only when a step fails, so a
+capture needs a screenshot step added to it or a simulator run on a Mac. A capture taken that way
+is honest for layout and for nothing else. Screens 3, 4, 5 and 6 show real library data, a real
+estimate and a real run, so they still cannot honestly exist until the app has run against an
+actual library on a real iPhone. See "Unsubstantiated and open" below.
 
 1. **Caption: "Smaller copies of the videos you keep."**
    Must show: onboarding step 1 of 3, headline "Keep the moment. Lose the weight.", the
@@ -292,9 +300,12 @@ actually does, so the page and the app agree:
 - Which videos are refused, named plainly: Live Photos, edited, slow-motion, time-lapse, spatial,
   cinematic, and shared or restricted album items, refused straight from the list; and HDR and
   ProRes, refused once the app reads the file - during the scan for videos already on the iPhone,
-  and for every video the user picked before the first copy is made. Say plainly that only a video
-  the app could not read (one still in iCloud, one the scan did not reach, or one whose read failed)
-  can be refused later in the run, so nothing implies every video in the list will be processed.
+  and for every video the user picked before the first copy is made. Say plainly that a video the
+  app could not read (one still in iCloud, one the scan did not reach, or one whose read failed)
+  can be refused later in the run, so nothing implies every video in the list will be processed,
+  and name the one other late refusal: a file with more than one video track or more than one audio
+  track is refused when the run opens the original, because nothing before that can count an
+  original's tracks.
 - How saving works (a new Photos item) and how deleting works (off by default, one confirmation,
   30 days in Recently Deleted).
 - Why a run can pause on its own (the app left the foreground, or the phone got warm).
@@ -355,16 +366,24 @@ Flagged rather than hidden, in the order they matter:
    Apple ProRes coded subtype (the six ordinary ones and the two RAW ones) and a PQ or HLG
    transfer function, and throws `PipelineError.unsupportedOriginal(reason:)` carrying
    `AssetRules`' own sentence. The same read runs in the scan, over videos already on the phone,
-   and in the run over every video the user picked, before the first export; only a video whose
-   original could not be read is left to be refused when the run opens it. The test suite exercises
+   and in the run over every video the user picked, before the first export; a video whose original
+   could not be read is left to be refused when the run opens it, as is one whose original turns
+   out to carry more than one video or audio track - a rule that lives in the same read but is not a
+   format refusal, so the scan and the pre-run pass do not decide it. The test suite exercises
    every branch against constructed format descriptions. What has not happened is a real HDR or
    ProRes video on a real phone, so nothing here says the detection catches every such file. The
    description above therefore says "refused", not "detected reliably".
-2. **Nothing in the listing may be described as observed behaviour.** No screen has rendered, no
-   export has run, no original has been deleted and no queue file has been written on a device
-   (`README.md`, `AGENT_LOOP.md` N19). Every screenshot above and every "what it does" sentence
-   currently rests on implemented source plus a green test suite on the CI runner, not on the app
-   having worked.
+2. **Nothing in the listing may be described as observed behaviour, with one narrow exception
+   since this was written.** No export has run, no original has been deleted and no queue file has
+   been written on a device (`README.md`, `AGENT_LOOP.md` N19). A screen *has* now been rendered:
+   the round 18 launch job installed the standalone app on a simulator, tapped the introduction's
+   Skip control and reached the batch screen, first observed green at `780f14f`. That is one
+   navigation on a simulator with no photo library, so it is enough to say the app launches and
+   draws its own interface, and not enough to describe a screen as it behaves. Every screenshot
+   above and every "what it does" sentence otherwise still rests on implemented source rather than
+   on the app having worked - and the newest of that source has not been compiled at all, because
+   the account's Actions runners stopped starting on 2026-09-23, so nothing on `main` after
+   `31b6245` has been built.
 3. **"Free" is a store setting, not a repo fact.** The tree contains no purchase, subscription or
    StoreKit code, and `docs/DEVELOPMENT_REVIEW.md` lists a purchase model as later work, so there
    is nothing to buy inside the app. The App Store price itself is set in App Store Connect and

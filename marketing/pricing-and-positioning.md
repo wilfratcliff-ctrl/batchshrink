@@ -20,16 +20,26 @@ Two of these labels appear together where a looked-up number supports an arithme
 
 **[repo]** `README.md` (status block) and `docs/NEXT_PHASE.md` (status block) agree on the state
 of the app, and it is a deliberate four-way split: historical builds, implemented source,
-observed behaviour, and still-not-observed behaviour. The observed column contains exactly one
-entry. On 2026-09-23, CI run `35852961091` at commit `5d72357` compiled both targets and ran its
-XCTest suite green, and the suite has run green on every push since round 7
-(`.github/workflows/ios-tests.yml`; `AGENT_LOOP.md` round log). No case count is quoted here,
-because the number changes with every round.
+observed behaviour, and still-not-observed behaviour. **The observed column now contains two
+entries, not one.** On 2026-09-23, CI run `35852961091` at commit `5d72357` compiled both targets
+and ran its XCTest suite green; the last run observed to execute the suite was job 1 at
+`31b6245`, green. The second entry is the launch job: at `780f14f` it installed the standalone app
+on a simulator, waited for the introduction's Skip control, tapped it and reached the batch
+screen, which is the first time anything in this project observed the app doing anything. That is
+one navigation on a simulator with no photo library. No case count is quoted here, because the
+number changes with every round; the local gate prints the current one.
 
-**[repo]** Everything else is unobserved. In the words of `README.md`: "No screen has been
-rendered, no video has been exported, no original has been deleted and no queue file has been
-written on a device." `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is entirely NOT RUN. Build 10 remains
-the last build that reached anyone, and it predates every reliability change made since.
+**One correction to the source this paragraph cites.** It used to quote `README.md` as saying "No
+screen has been rendered, no video has been exported, no original has been deleted and no queue
+file has been written on a device." That sentence is now wrong in its first clause, and `README.md`
+contradicts itself: line 11 records the rendered screen as the repository's second observed entry,
+while line 165 still repeats the older sentence. `README.md` is not this document's file to edit;
+the fix is a one-line correction in the README status block.
+
+**[repo]** Everything else is unobserved. No video has been exported, no original has been deleted
+and no queue file has been written on a device. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` is entirely NOT
+RUN, and it is still the thing this whole document waits on. Build 10 remains the last build that
+reached anyone, and it predates every reliability change made since.
 
 **[repo]** `docs/DEVELOPMENT_REVIEW.md` names the product shape in one line: it is free, there is
 no purchase code, and monetisation is explicitly deferred. From its "Development hygiene and
@@ -121,17 +131,26 @@ pass physical Phase 0 acceptance; retain sanitized evidence."
   block the next Photos mutation; deletion requires a stored original-to-copy receipt and
   revalidates both assets immediately before Photos is asked; verification requires every sample
   window to decode and decodes audio rather than trusting track duration; the library change
-  monitor is constructed and tested; the suite runs green in CI. Four of the seven original test
+  monitor is constructed and tested; the suite ran green in CI. Four of the seven original test
   failures were one real bug and three faulty tests, and that bug - a Delete tap after the copy
   changed doing nothing and saying nothing - is exactly the class of silent failure this app
-  cannot afford.
-- *Product reliability: not met.* **[repo]** N19 in `AGENT_LOOP.md` says it plainly: "Runtime
-  behaviour is still entirely unproven even though it compiles: no screen has been rendered, no
-  export has run, no queue file has been written." The seven-failure round is behind the
-  repository now: the suite first went green in CI at commit `5d72357`, and the round log records
-  green CI on each push since round 7. One of those four fixes is behaviour-changing code in the
-  deletion path, so the deletion cases in the device plan remain the ones nothing has exercised.
-  N16 and the remainder of N5 - exactly-once save reconciliation - are open. N12 is closed:
+  cannot afford. The suite has not run since the account's Actions runners stopped starting on
+  2026-09-23, so the newest changes in the tree are uncompiled.
+- *Product reliability: not met.* **[repo]** N19 in `AGENT_LOOP.md` is the row that says so, and
+  one clause of its own wording has gone out of date. It reads: "Runtime behaviour is still
+  entirely unproven even though it compiles: no screen has been rendered, no export has run, no
+  queue file has been written". The first clause is no longer true - the CI launch job rendered a
+  screen on a simulator at `780f14f`, reaching the batch screen - and the rest stands. That is one
+  navigation on a simulator with no library, so the substance of N19 is unchanged: no video has
+  been exported, no original has been deleted and no queue file has been written on a device. The
+  seven-failure round is behind the
+  repository now: the suite first went green in CI at commit `5d72357`, and the last run observed
+  green was job 1 at `31b6245`. One of those four fixes is behaviour-changing code in the deletion
+  path, so the deletion cases in the device plan remain the ones nothing has exercised.
+  **N16 and the remainder of N5 - exactly-once save reconciliation - were closed in rounds 6 and
+  16**, not open: a restored mid-save record now looks for the copy it recorded rather than only
+  flagging a question, and a save Photos was asked for but did not confirm is never a clean
+  failure. What N16 still owes is the device result, which is N19. N12 is closed:
   `VideoVerificationService` reads an original's coded subtype and transfer function, so HDR and
   ProRes originals are genuinely refused, in `AssetRules`' own words - as the app reads the videos
   (in the scan, and over the whole selection before the first export), and never yet on a real

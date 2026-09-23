@@ -73,8 +73,9 @@ No menu. There is nothing else on this page to navigate to.
 
 **Status line under the action (keep it while this is true)**
 
-> This build compiles and its automated test suite runs green on a build machine. It has not been
-> used on a phone yet, so this page reports no real-world results.
+> This app's Swift has been compiled on a build machine and its automated test suite has run green
+> there. The newest changes have not been built yet, and it has never been used on a phone, so
+> this page reports no real-world results.
 
 **Hero visual - what is needed, and why**
 
@@ -183,13 +184,19 @@ run through and quietly changed:
 - HDR videos
 - ProRes videos
 - shared or restricted items
-- anything that is not a video, or a video with more than one audio track
+- anything that is not a video, or a file with more than one video track or more than one audio
+  track
 
 Most of those are turned down as soon as the library is listed. HDR and ProRes are read from the
 file itself: the scan catches them among the videos already on your iPhone, and before the first
-copy is made the app reads every video you picked, so one of those is refused then. Only a video
-the app could not read - one still in iCloud, one the scan did not reach, or one whose read failed
-- can be refused once the run reaches it. The reason is on screen either way.
+copy is made the app reads every video you picked, so one of those is refused then. The last item
+on the list is a different case, and it is the honest exception to "refused before it starts": a
+file with more than one video track or more than one audio track is refused when the app opens the
+original, which happens inside the run, because no library listing or header read can count an
+original's tracks without fetching it. So a video like that can be picked, start, and be refused
+with its reason a moment later. The other late refusal is a video the app could not read at all -
+one still in iCloud, one the scan did not reach, or one whose read failed. Either way the reason is
+on screen.
 
 That list is the point of the app. A smaller copy of a slow-motion clip loses the slow motion; a
 flattened cinematic export loses the moving focus point; an SDR-shaped export of an HDR video
@@ -413,7 +420,7 @@ both in plain words.
 | iCloud-only videos must download before a run, and the scrub preview can start a fetch | `app.json` `NSPhotoLibraryUsageDescription`; `docs/BATCH_PHASE.md`, "Thumbnails" ("It is the one place in the app where looking at an iCloud video can start a fetch, and the sheet says so"). |
 | iPhone only, iOS 18 or later, no iPad version | `app.json`: `platforms: ["ios"]`, `supportsTablet: false`, `deploymentTarget: "18.0"`. |
 | Version 0.1.0 | `app.json` `version`. Build number 11 is in the same file, but version 0.1.0 is what the page should show; adjust to whatever ships. |
-| The build compiles and its automated test suite runs on a build machine, and it has not run on a phone | `README.md` status block and "Unverified assumptions and release gate"; `AGENT_LOOP.md` build log; `docs/BATCH_PHASE.md` ("The app has never actually run"). |
+| The app's Swift has been compiled and its automated test suite has run on a build machine, the newest changes have not been built, and it has not run on a phone | `README.md` status block and "Unverified assumptions and release gate"; `AGENT_LOOP.md` build log and the "gate is blocked again" section; `docs/BATCH_PHASE.md` status block. |
 
 ### Wanted to claim, could not substantiate
 
@@ -422,9 +429,11 @@ both in plain words.
 - **"Frees up your iCloud storage."** The app makes the copy; the freed space depends on the user
   deleting originals, on Photos clearing Recently Deleted after 30 days, and on the devices
   syncing. `docs/BATCH_PHASE.md` explicitly lists freeing iCloud storage as not claimed.
-- **Any device result of any kind.** No screen has rendered, no export has run, no original has
-  been deleted, no queue file has been written on a device. That rules out screenshots captioned
-  as a real run, timings, "works on iPhone 15 Pro Max", and any before/after pair.
+- **Any device result of any kind.** No export has run, no original has been deleted, no queue
+  file has been written on a device. A screen has now rendered *on a simulator* - the CI launch
+  job reaches the batch screen, first observed green at `780f14f` - which is enough for a layout
+  capture and not enough for anything else. That still rules out screenshots captioned as a real
+  run, timings, "works on iPhone 15 Pro Max", and any before/after pair.
 - **Testimonials, tester counts, star ratings.** None exist; build 10 reached testers but no
   feedback has been recorded anywhere in the repo.
 - **"Verified" or "tested" as a quality claim.** The honest verb is "checked before it is saved",
@@ -448,5 +457,8 @@ both in plain words.
 - **Support contact details.** None exist in the repo, so the footer keeps a placeholder rather
   than inventing an address.
 - **The app icon and screenshots.** The repo carries a generated placeholder icon
-  (`docs/TESTFLIGHT.md`), and no rendered screen exists to capture. Both are marked as work to do,
-  not as assets the page can use.
+  (`docs/TESTFLIGHT.md`), which is work to do rather than an asset the page can use. Screenshots
+  are no longer blocked outright: the launch job has shown the introduction and the batch screens
+  render on a simulator, so a layout capture of the introduction or the home screen is possible by
+  adding a screenshot step to that run. Nothing captures one today, and the hero's library-list
+  capture still needs a real library on a device.

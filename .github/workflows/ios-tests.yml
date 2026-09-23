@@ -192,11 +192,12 @@ jobs:
 
   # JOB 3: app-launch-smoke
   #
-  # Every status statement in this repository says the same thing: the app has never run and
-  # no screen has ever been rendered. That is still true, and it is the largest gap in the
-  # project -- but it is no longer unobservable. The standalone harness project.yml describes
-  # is pure SwiftUI with no React Native and no Metro in front of it, so a macOS runner can
-  # boot a simulator, install it, launch it and look at what the phone is actually showing.
+  # Until this job existed, every status statement in this repository said the same thing: the app
+  # has never run and no screen has ever been rendered. That was the largest gap in the project,
+  # and it is now closed for one launch: on commit 780f14f this job built the standalone app,
+  # installed it on a simulator and drove VideoShrinkUITests through the introduction and one
+  # navigation. The harness project.yml describes is pure SwiftUI with no React Native and no
+  # Metro in front of it, which is what makes this observable at all.
   #
   # This job answers one question and no other: does the app launch, stay up, and put its own
   # interface on the screen? It does not run the unit tests (job 1 does that), it does not
@@ -238,10 +239,10 @@ jobs:
         run: node scripts/sync-native-sources.mjs
 
       - name: Launch the app and look at the screen
-        # One script: generate the project with XcodeGen, build the app for a simulator, boot
-        # that simulator, install, launch, wait, and compare a screenshot of the app's screen
-        # against a screenshot of the home screen taken before it launched. A crash on launch
-        # leaves the home screen where the app's interface should be, so the comparison is what
-        # turns "a process started" into "a screen rendered". The same script runs unchanged on
-        # a human's Mac.
+        # One script: generate the project with XcodeGen, boot a simulator, clear the app's stored
+        # state so the introduction is what a new user meets, then run VideoShrinkUITests, which
+        # launches the app, waits for the introduction's own Skip control, taps it and waits for the
+        # batch screen's primary control. The comparison against the interface is the assertion:
+        # the first attempt at this compared screenshots to the home screen, was abandoned as the
+        # weaker claim, and none of that code survives. The same script runs unchanged on a Mac.
         run: node scripts/verify-app-launch.mjs

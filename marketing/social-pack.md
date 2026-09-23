@@ -11,7 +11,7 @@ built on.
 
 | Fact | Status |
 | --- | --- |
-| BatchShrink finds videos in Photos, estimates what smaller copies would save, makes smaller copies as new Photos items, checks each copy, and can optionally delete originals behind a gate that is off by default | Implemented source. Its automated test suite compiles and passes in CI |
+| BatchShrink finds videos in Photos, estimates what smaller copies would save, makes smaller copies as new Photos items, checks each copy, and can optionally delete originals behind a gate that is off by default | Implemented source. Its automated test suite compiled and passed in CI; the newest changes have not been built and the account's runners have not started since 2026-09-23, so say "compiled and tested" about the build, not about this week's source |
 | A scan never downloads originals | Implemented source. Not watched on a real device yet |
 | The app is an iPhone app, iOS 18+, and free | Decided |
 | The app has never been run on a device | True. Build 10 is the last build known to have reached testers |
@@ -301,8 +301,8 @@ Tags: #iphonehelp #iphonevideos #iphonestorage #apps #techtips
 
 10.
 Hook: Building a storage app in public, with no users yet.
-Body: The test suite passes and the app still has not run on a real phone. I am going to post the
-first run honestly, including whatever breaks in it.
+Body: The test suite passed on a build machine and the app still has not run on a real phone. I am
+going to post the first run honestly, including whatever breaks in it.
 Tags: #buildinpublic #indiedev #iosdev #iphonestorage #iphonehelp
 
 ### Hashtags: what is realistic and what is not
@@ -399,8 +399,10 @@ Hard no:
 - No claim that it handles HDR or ProRes video. Both are refused, but as the app reads the file: a
   file's codec subtype and its colour transfer function appear in no Photos listing, so the scan
   reads them for videos already on the phone and the run reads every video you picked before the
-  first copy is made, and only a video the app could not read is left to be refused at that point
-  (`VideoShrink/Services/PhotoLibraryScanService.swift`). If you list refusals, say edited,
+  first copy is made. A video the app could not read is left to be refused at that point, and so is
+  one whose original turns out to carry more than one video or audio track, which is refused when
+  the run opens it (`VideoShrink/Services/PhotoLibraryScanService.swift`,
+  `VideoShrink/Services/VideoVerificationService.swift`). If you list refusals, say edited,
   slow-motion, time-lapse, spatial, cinematic, Live Photos and shared or restricted items are
   turned down from the list, and HDR and ProRes are caught as the app reads your videos.
 - No "your videos are safe" as a flat statement. Say what is true: the original is not touched
@@ -505,8 +507,9 @@ the developer's head:
   location, or uploads to iCloud. Each of those needs a phone.
 - Any claim about deletion having been exercised at all. Nobody has seen this app delete anything,
   and the deletion path is the part with the strictest gate and the highest cost if it is wrong.
-- Any version of "it works". There is no "it works" yet. There is "it compiles, its tests pass, and
-  it has never run".
+- Any version of "it works". There is no "it works" yet. There is "it compiles, its tests passed on
+  a build machine, and it has never run" - and be exact about which of those two things is being
+  said, because the newest source has not been compiled at all.
 
 The line that is always safe, and that this pack uses throughout, is the sentence the project has
 been consistent about since the beginning: the source compiles, the tests pass, and the app has not

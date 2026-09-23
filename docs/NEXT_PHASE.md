@@ -20,16 +20,21 @@ evidence named) and still-not-observed (the app's runtime behaviour).
   compares the imported copy against the output the run measured; a Photos change monitor is
   constructed by `BatchViewModel` and reconciles the listing after an outside edit (N1, closed in
   round 2, with tests for the wiring added in round 3).
-- **Observed (2026-09-23):** the 162 XCTest cases compile and pass in CI. Run `35852961091` at
-  commit `5d72357` reported `** TEST BUILD SUCCEEDED **` and
+- **Observed (2026-09-23):** the 162 XCTest cases that existed then compile and pass in CI. Run
+  `35852961091` at commit `5d72357` reported `** TEST BUILD SUCCEEDED **` and
   `Executed 162 tests, with 0 failures (0 unexpected)`. That covers the app's pure logic against
-  injected fakes, and nothing beyond it.
-- **Still not observed:** the app has never actually run. No screen has been rendered, no video
-  has been exported, no original has been deleted and no queue file has been written on a device.
-  `docs/PHYSICAL_DEVICE_TEST_PLAN.md` remains unexecuted, and build 10 is still the last build
-  known to have reached testers.
+  injected fakes, and nothing beyond it. A second observation followed the same day: the launch
+  job installed the standalone app on a simulator and reached the batch screen, the first time
+  anything observed a screen. The suite has grown well past the 162 cases of that run, and nothing
+  on `main` after `31b6245` has been compiled, because the account's Actions runners stopped
+  starting (`AGENT_LOOP.md`).
+- **Still not observed:** no video has been exported, no original has been deleted and no queue
+  file has been written on a device. `docs/PHYSICAL_DEVICE_TEST_PLAN.md` remains unexecuted, and
+  build 10 is still the last build known to have reached testers.
 
-Open: exactly-once save reconciliation, a richer job store, purchases and background processing.
+Open: a richer job store, purchases and background processing. Exactly-once save reconciliation is
+closed in source (rounds 6 and 16) and still owes a device result; see the note under "Persistent
+queue and recovery".
 The change monitor is wired now (rounds 2 and 3); what is unproven there is how the reconciliation
 behaves against a real library.
 
@@ -55,13 +60,13 @@ Introduce a durable local store for job IDs, source identifiers/resource identit
 
 Start with one encoder at a time. Bound disk usage and reserve headroom; adapt to power and thermal state. AVFoundation export is not assumed resumable at an arbitrary frame—checkpoint between complete files and restart a partial export after cleanup. On relaunch reconcile partial files and jobs, permission changes, removed assets and Photos operations that may have committed before a crash. Exactly-once saving needs a deliberate idempotency/reconciliation strategy; merely retrying can create duplicates.
 
-Round 1 (commit `559f693`; in the tree and compiled at `5d72357`) implements part of this: the queue records a versioned receipt naming the created copy and what both assets looked like when it was checked, and a queue write that fails now blocks the next Photos mutation instead of being ignored. Exactly-once save reconciliation is still open.
+Round 1 (commit `559f693`; in the tree and compiled at `5d72357`) implements part of this: the queue records a versioned receipt naming the created copy and what both assets looked like when it was checked, and a queue write that fails now blocks the next Photos mutation instead of being ignored. **Exactly-once save reconciliation was closed afterwards, in rounds 6 and 16**: a restored mid-save record now looks for the copy it recorded instead of only flagging a question, and a save Photos was asked for but did not confirm is never persisted as a clean failure. What it still owes is a device result, which is N19 in `AGENT_LOOP.md`.
 
 ## Duplicate and identity handling
 
 Record relationships between original and newly created Photos items. Avoid reprocessing app-created copies. A Photos local identifier is useful locally but is not a universal stable cross-device content hash. Any hashing of source/output data must stream bytes and consider battery/download costs. Handle separately imported duplicates, edited variants, multiple resource representations and shared-library permissions deliberately. Do not merge user memories based only on timestamps and dimensions.
 
-Round 1 (commit `559f693`; in the tree and compiled at `5d72357`) records the original-to-copy relationship in the deletion receipt. Round 3 shipped the rest of N5: app-created copies are recorded in the history store and kept out of bulk selection, while individual rows can still be chosen deliberately. What remains of N5 is exactly-once save reconciliation.
+Round 1 (commit `559f693`; in the tree and compiled at `5d72357`) records the original-to-copy relationship in the deletion receipt. Round 3 shipped the rest of N5: app-created copies are recorded in the history store and kept out of bulk selection, while individual rows can still be chosen deliberately. The last piece of N5, exactly-once save reconciliation, closed in rounds 6 and 16; what it owes now is a device result.
 
 ## Verification records and quality
 
@@ -104,7 +109,7 @@ Before App Review: provide a truthful privacy policy and App Privacy answers, ke
 
 ## Suggested milestones
 
-Written while the batch was still future work. Since then the durable queue has shipped (build 5) and opt-in deletion has shipped (build 7); the reliability rounds that followed are in the tree at `5d72357`, compiled and with the 162-case suite passing in CI. None of it is device-proven: crash-safe save reconciliation and the device acceptance run are still open. See the status block at the top of this document.
+Written while the batch was still future work. Since then the durable queue has shipped (build 5) and opt-in deletion has shipped (build 7); the reliability rounds that followed are in the tree at `5d72357`, compiled and with the suite passing in CI (162 cases at that commit, and well past that in the tree now). None of it is device-proven: the device acceptance run is still open, and the mid-save reconciliation is implemented and unit-tested but has never been exercised against a real library. See the status block at the top of this document.
 
 1. Compile, run tests and pass physical Phase 0 acceptance; retain sanitized evidence.
 2. Establish a supported-format matrix, improve verification and measure compression/energy tradeoffs.

@@ -8,7 +8,7 @@ The `development` profile targets a **physical iPhone**, with `developmentClient
 
 The `preview` profile extends `production` but sets `distribution: internal`. It produces a standalone internal build with the JavaScript bundled: no development client and no Metro server, so it opens straight into the app. Expo shows the same install QR for it as for `development`, which makes it the quickest way to review native interface work on the registered iPhone. Every profile shares the bundle identifier `com.wilfr.videoshrink`, so installing an internal build replaces a TestFlight install and the other way round.
 
-**Historical:** build 1 completed and the user confirmed the app runs on their iPhone on September 18. Apple signing and device registration are configured. Build 1: `8441943f-fcb8-4584-ae19-cf691b7b7205`. The interface redesign also built successfully as build 2: `354ed8f9-5879-4001-9c82-6d7917fdf067`. Later builds followed, up to the production build 10 recorded in `RELEASE_10.md`; every build id that survives in the record is in `VALIDATION.md`. See `VALIDATION.md` for verification limits. The supported prototype platform is iOS. Two local commits now exist (`10ab65f` baseline, `559f693` round 1); no remote is configured and nothing has been pushed.
+**Historical:** build 1 completed and the user confirmed the app runs on their iPhone on September 18. Apple signing and device registration are configured. Build 1: `8441943f-fcb8-4584-ae19-cf691b7b7205`. The interface redesign also built successfully as build 2: `354ed8f9-5879-4001-9c82-6d7917fdf067`. Later builds followed, up to the production build 10 recorded in `RELEASE_10.md`; every build id that survives in the record is in `VALIDATION.md`. See `VALIDATION.md` for verification limits. The supported prototype platform is iOS. This subsection is a record of the setup sessions, when the tree held two local commits (`10ab65f` baseline, `559f693` round 1) and had no remote. **Both of those facts have moved:** the repository is now at `main` with a private GitHub remote, pushed through round 19 (`f541699`), and `.github/workflows/ios-tests.yml` verifies pushes when a runner starts.
 
 ## Setup commands used
 
@@ -42,7 +42,7 @@ npx expo export --platform ios --output-dir build/expo-export
 eas config --platform ios --profile development --non-interactive
 ```
 
-Expo export checks the JavaScript bundle; it is not an iOS native build. Autolinking verifies module discovery; it does not compile Swift or run CocoaPods. The standalone project contains 145 XCTest cases, none of which has ever executed; they require Xcode to execute. Run the complete physical test plan after installation, including native sheet presentation, React reload during an operation, background cancellation and preservation of the original asset.
+Expo export checks the JavaScript bundle; it is not an iOS native build. Autolinking verifies module discovery; it does not compile Swift or run CocoaPods. The standalone project held 145 XCTest cases when this was written and none had executed; **that has moved too**: the suite has grown every round since and executes on a macOS CI runner (the last observed green run was at `31b6245`, before the runners stopped starting; the local gate prints the current case count). Run the complete physical test plan after installation, including native sheet presentation, React reload during an operation, background cancellation and preservation of the original asset.
 
 ## After explicit build approval
 

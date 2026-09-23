@@ -673,8 +673,10 @@ damage is one removed post; the unrecoverable damage is the story.
   not install it, and the ones who do will install it on the strength of the answer above it,
   not the app itself.
 - **Credibility for unproven behaviour.** BatchShrink has never been run on a device. Build 10
-  was the last build to reach testers, no screen has been rendered, no video has been
-  exported and no original has been deleted. Anything posted now would have to be written in
+  was the last build to reach testers, no video has been exported and no original has been
+  deleted. (A screen has since been rendered on a simulator by the CI launch job, which is enough
+  to show the app launches and draws its interface, and not enough to show anything else.)
+  Anything posted now would have to be written in
   the conditional, and conditional promotion converts badly. Worse, if the first device run
   finds a problem, every claim already public becomes a liability on a product whose entire
   promise is care.

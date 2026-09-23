@@ -1,22 +1,33 @@
 # Batch shrinking and the library prescan
 
-This phase makes the batch the main way into VideoShrink: look through the library, choose
+This phase makes the batch the main way into BatchShrink: look through the library, choose
 videos, watch a running count with a time estimate, and read an honest summary. The
 single-video path with a preview before saving is still there, one tap away.
 
 A smaller copy is added to Photos as a separate item, and only after it passes the existing
 checks. Deleting an original is opt-in, applies to batch runs, and is described below.
 
-**Status: implemented source, compiled and tested; never run.** This document describes the batch
-as it exists in the tree after round 11. Earlier builds compiled earlier states of it. The
-round 1 to 5 reliability work - the queue write boundaries, the deletion gate, verification, the
-library reconciliation and the copy exclusion - is all in that tree. CI
-(`.github/workflows/ios-tests.yml`, running `scripts/verify-native-tests.mjs`) compiles the
-standalone project and the test target and executes the 162-case suite on every push to `main`;
-run `35852961091` at `5d72357` is green: `** TEST BUILD SUCCEEDED **`, `TEST RUN ... PASSED`,
-`Executed 162 tests, with 0 failures (0 unexpected)`. **Nothing in this document is a device
-result.** The app has never actually run: no screen has been rendered, no video has been exported,
-no original has been deleted and no queue file has been written on a device.
+**Status: implemented source; the newest of it is uncompiled.** This document describes the batch
+as it exists in the tree after round 19. Earlier builds compiled earlier states of it. The round 1
+to 5 reliability work - the queue write boundaries, the deletion gate, verification, the library
+reconciliation and the copy exclusion - is all in that tree, as are the round 18 and 19 changes to
+the estimate's arithmetic and wording, the two temporary workspaces and the finished screen's
+action bar.
+
+The tree's suite has grown well past the 162 cases that first ran (the local gate prints the
+current count; take the number from a test run, never from this line, because it moves with every
+round). The cases execute on a macOS CI runner - `.github/workflows/ios-tests.yml`
+runs `scripts/verify-native-tests.mjs`, which generates the standalone project with XcodeGen,
+compiles both targets and runs the suite. The last run observed to execute them was job 1 at
+`31b6245`, green. **Since 2026-09-23 the account's GitHub Actions runners have not started**, so
+nothing on `main` after `31b6245` has been compiled, and the round 19 source in particular has
+never been built. `AGENT_LOOP.md` carries the evidence and the options.
+
+**Nothing in this document is a device result.** A screen has been rendered - the round 18 launch
+job installed the standalone app on a simulator, tapped Skip and reached the batch screen, which
+is the first observation of any screen in this project - but that is one navigation on a simulator
+with no photo library. No video has been exported, no original has been deleted and no queue file
+has been written on a device.
 
 ## What the prescan can see
 
@@ -33,7 +44,7 @@ video. It downloads nothing.
 | Codec subtype and colour transfer function | the video track's format descriptions, read from the original during the on-device pass |
 
 `dataSize` is the only supported way to read an original's size without fetching it. Apple
-exposes no equivalent on earlier systems, and VideoShrink does not use undocumented
+exposes no equivalent on earlier systems, and BatchShrink does not use undocumented
 key-value lookups to guess one.
 
 The listing is always followed by one bounded on-device pass over the videos already on this
@@ -55,18 +66,28 @@ With limited Photos access, the allowlist *is* the library. Totals are labelled 
 ## How the savings estimate works
 
 Every sized video gives a measured source bitrate: `bytes × 8 ÷ duration`. The unknown is
-the size of the copy, so the estimate uses a band for it:
+the size of the copy, so the estimate uses a band for it, per resolution:
 
 - **Planning band:** 4-8 Mbps for a 1080p HEVC copy. Apple does not publish the bitrate of
   `AVAssetExportPresetHEVC1920x1080`, so this is a published-range planning assumption
-  rather than a quoted figure.
+  rather than a quoted figure. The same assumption at the other two preset sizes is 2.5-5 Mbps
+  for 720p and 12-24 Mbps for 4K.
 - **Measured band:** once this iPhone has finished three or more compressions, the band is
   replaced by the copy bitrates those runs produced, widened by 10% either side.
 
+The band is a 30 fps band, and choosing a lower frame rate scales it down - 24 fps is 0.8x. That
+choice travels inside the band's own `CopySizeModel.Basis`, so the caption beside the estimate and
+the arithmetic read the same value and the caption names the scaling only when it actually moved
+the numbers. 30 fps is the band's own baseline and is deliberately not named, because it scaled
+nothing.
+
 For each video the app reports the saving if the copy lands at the top of the band
 (conservative) and at the bottom (optimistic). A video whose conservative saving is zero is
-counted separately as "may not shrink" and is still offered, because only a real run can
-settle it. Copies that do not shrink are skipped, never saved.
+counted separately and still offered, because only a real run can settle it; its row reads
+"Little saving expected" and a selection the band expects to save nothing at all reads "No saving
+expected" rather than a bold figure of zero. Copies that do not shrink are skipped, never saved.
+The "copies about" figure counts only the originals the band expects a copy for, so a video the
+run is likely to leave alone is not counted as though a copy of it were going to be made.
 
 This is an estimate, not a measurement. The summary says so, and the completion screen
 reports measured bytes only.
@@ -77,8 +98,13 @@ The estimate is built from videos this run has actually finished: processing sec
 second of video, plus a fixed per-video overhead, with a band taken from the spread of the
 observed samples. Before the first video finishes the app shows no number at all.
 
-Time spent downloading a video from iCloud is deliberately excluded, because it depends on
-the network rather than on the iPhone. The interface says so next to the estimate.
+One sample spans a whole attempt - retrieval, the format read, the export and the check of what
+came out - because that is what waiting for one video is made of. Round 19 changed this: the
+sample used to cover the transcode alone while the remaining-time subtraction included the
+retrieval, so an original being fetched from iCloud was subtracted from a prediction that had
+never counted it, and the wait could read "a moment" while the copy was still downloading. Time
+spent fetching an original is therefore **inside** the estimate now, not excluded from it. On a
+device, watch for the converse: one very slow iCloud retrieval now enters the mean.
 
 ## Quality options
 
@@ -98,8 +124,10 @@ the export runs at the source size instead and the estimate uses that smaller ba
 composition is applied only when the preset alone cannot do the job: to hold a small source
 at its own size, or to lower the frame rate. Composed exports set
 `perFrameHDRDisplayMetadataPolicy` so HDR display metadata is carried through instead of
-being dropped. If a composed export fails, the transcoder retries once without the
-composition, and the result screens report the measured size and frame rate rather than the
+being dropped. Exports fall back rather than failing on the first refusal: a composed export that
+fails is retried without the composition, and if that still fails it is retried once more without
+the original's descriptive metadata, so a container that will not carry the metadata can still
+produce a copy. The result screens report the measured size and frame rate rather than the
 requested ones.
 
 Every copy is checked before saving: playable, one video track, duration within tolerance,
@@ -125,7 +153,7 @@ one place in the app where looking at an iCloud video can start a fetch, and the
 
 ## Checking a copy
 
-Before a copy is saved, and again immediately before the save, VideoShrink checks:
+Before a copy is saved, and again immediately before the save, BatchShrink checks:
 
 - it is a real, non-empty file that plays;
 - exactly one video track, with a duration within 0.25 s or 0.1% of the original;
@@ -275,7 +303,7 @@ privacy manifest). This marks already-shrunk videos in the list, keeps them out 
 shortcuts (individual rows can still be chosen deliberately), and sharpens the estimate. It
 stores no media, filename, location or date, and nothing leaves the device.
 
-The list is capped at the 2,000 most recent identifiers and 60 measured bitrates.
+The list is capped at the 2,000 most recent identifiers and 80 measured bitrates.
 
 ## Not claimed by this phase
 
@@ -294,10 +322,14 @@ The list is capped at the 2,000 most recent identifiers and 60 measured bitrates
 
 ## What still needs a device
 
-The XCTest suite has left this list: the 162 cases compile and run on a macOS CI runner on every
-push to `main` (run `35852961091` at `5d72357`), which exercises the pure logic against injected
-fakes. A simulator has no real photo library, no thermal or storage pressure and no iCloud
-offload, so everything below still needs a physical iPhone.
+The XCTest suite has left this list: the cases compile and run on a macOS CI runner, which
+exercises the pure logic against injected fakes. The last run observed to execute them was green
+at `31b6245`; the runners have been unable to start since, so the cases in the tree today have not
+run. That is a statement about the gate, not about the code. A simulator has no real photo
+library, no thermal or storage pressure and no iCloud offload, so everything below still needs a
+physical iPhone. One thing outside this list did get cheaper: the round 18 launch job has shown
+that a screen renders on a simulator, so the screens that need no library can be inspected there.
+Every item in the list needs a library, a network or the media pipeline, so none of them can.
 
 1. Confirm the scan reports sizes on a device running iOS 27, and that it degrades to counts
    with no sizes on an older system instead of failing.

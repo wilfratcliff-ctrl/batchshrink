@@ -464,24 +464,43 @@ implemented and reachable (`VideoShrink/Models/AssetRules.swift`,
 library listing cannot see them; instead the scan reads the codec and colour details from the
 header of videos already on the phone, newest 400 first, and `BatchViewModel.start()` reads every
 video the user actually chose before the first export, so the refused ones are taken out and named
-(`VideoShrink/Services/PhotoLibraryScanService.swift`). Consequence: only a video the app could
-not read - one still in iCloud, one the scan did not reach, or one whose read failed - can be
-selected, start, and *then* be refused, with the reason shown at that point. That is the remaining
-bad surprise. The listing and the onboarding must say that a refused video is caught as the app
+(`VideoShrink/Services/PhotoLibraryScanService.swift`). **Corrected against the code: the pre-run
+read decides formats, not track counts.** `refusedByFormat` returns only what the format
+descriptions say - HDR and ProRes - so a video the library could list, and the pre-run check could
+read, is still refused inside the run if its original turns out to carry more than one video track
+or more than one audio track: `VideoVerificationService.readMetadata` requires exactly one video
+track and at most one audio track and throws `PipelineError.unsupported`. That is not a video the
+app could not read, and an earlier version of this paragraph said the unread ones were the only
+late refusals. So the bad surprises are two: a video the app could not read (one still in iCloud,
+one the scan did not reach, or one whose read failed) and a file whose track count is outside what
+this app supports. Either can be selected, start, and *then* be refused, with the reason shown at
+that point. The listing and the onboarding must say that a refused video is caught as the app
 reads your videos, rather than implying every video in the list is processable. Some existing
 documents in this folder were written when these rules could not fire at all; the code is the
 current truth (`AGENT_LOOP.md` says so explicitly in "Keeping this file honest").
 
-**5. Close or formally defer the open reliability items.** Repo, `AGENT_LOOP.md` backlog:
-exactly-once save reconciliation is still open (N16); one shared cancellation flag is a known
-latent issue (N13); a deprecated concurrency overload is outstanding (N15). N16 is the one worth
-deciding about before a public release, because it is the difference between "a crash during
-save may leave a copy the app cannot account for" and a re-runnable state.
+**5. Close or formally defer the open reliability items.** **Corrected: the rows this named are
+closed, and the correction was made against the code rather than against the status column,
+because this is exactly the mistake `AGENT_LOOP.md` records.** The version of this paragraph
+written on 23 September said exactly-once save reconciliation was still open (N16), that the
+shared cancellation flag was a latent issue (N13), and that a deprecated concurrency overload was
+outstanding (N15). Read again afterwards:
 
-**6. Resolve the expo-doctor contradiction.** Repo: the backlog row N18 still says one failed
-check, while the round 8 notes say expo-doctor passes 21/21. That needs one command run and one
-row updated, not a marketing decision - but a release should not ship with a known warning
-whose status nobody can state.
+- **N16, exactly-once save reconciliation: done, rounds 6 and 16.** A restored mid-save record
+  looks for the copy it recorded instead of only flagging a question, and a save Photos was asked
+  for but did not confirm is never persisted as a clean failure. What is still owed is the device
+  result (N19), not the mechanism.
+- **N13: done, round 6.** The flag is `scanCancelled` and belongs to the scan alone; the sequel
+  (it leaking into the pre-flight) was found and fixed in round 13.
+- **N15: done, round 7.** Migrated with `isolation: #isolation` named explicitly.
+
+So the open item here is not code work. It is the one thing N19 covers: nobody has watched any of
+it run, and a payment decision should wait for that.
+
+**6. Resolve the expo-doctor contradiction.** **Corrected: it was resolved in round 8.**
+`expo-doctor` reports 21/21, and backlog row N18 was updated in the same round. This item was
+written from a row that had already gone stale, which is the hazard `AGENT_LOOP.md` warns about in
+"Keeping this file honest".
 
 **7. Submission blockers that exist today.** Repo: `docs/DEVELOPMENT_REVIEW.md` lists "finish
 icon, store assets, privacy/support pages" as outstanding, and the App Store Connect submission

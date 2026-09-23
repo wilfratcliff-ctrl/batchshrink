@@ -14,14 +14,14 @@ One related piece is implemented source, not research: from build 9 the foregrou
 | `BGContinuedProcessingTask` (iOS 26+) | A user-initiated task can start in foreground and continue with system-visible progress after backgrounding. Apple identifies media export as a use case. | Investigate availability, resource support, queued-versus-immediate submission, system UI, cancellation and expiration. It is not a general recurring overnight scheduler or proof of unlimited locked-screen encoding. Keep an iOS 18 fallback. |
 | Short `beginBackgroundTask` allowance | May help finish a small critical handoff or cleanup. | Finite allowance with expiration; not a design for encoding hours of video. No fake audio/location session to keep the process alive. |
 
-References: Apple’s [BGProcessingTask](https://developer.apple.com/documentation/backgroundtasks/bgprocessingtask), [long-running user-initiated tasks](https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados), [idle timer](https://developer.apple.com/documentation/uikit/uiapplication/isidletimerdisabled) and [background task allowance](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)). These describe mechanisms, not a performance guarantee for VideoShrink.
+References: Apple’s [BGProcessingTask](https://developer.apple.com/documentation/backgroundtasks/bgprocessingtask), [long-running user-initiated tasks](https://developer.apple.com/documentation/backgroundtasks/performing-long-running-tasks-on-ios-and-ipados), [idle timer](https://developer.apple.com/documentation/uikit/uiapplication/isidletimerdisabled) and [background task allowance](https://developer.apple.com/documentation/uikit/uiapplication/beginbackgroundtask(withname:expirationhandler:)). These describe mechanisms, not a performance guarantee for BatchShrink.
 
 ## An honest product experience
 
 After batch reliability exists, offer “Process while charging” with two plainly described options:
 
-- **Keep VideoShrink open:** ask the user to connect power and choose whether to keep the display awake. Show remaining items and observed progress. Estimate completion only from measured throughput, with uncertainty. Let the user stop immediately.
-- **Let iOS continue when available:** make scheduling explicit: “iPhone decides when background work can run. Some videos may wait until you reopen VideoShrink.” On iOS 26+, separately evaluate continuing an active user-started job using the newer API.
+- **Keep BatchShrink open:** ask the user to connect power and choose whether to keep the display awake. Show remaining items and observed progress. Estimate completion only from measured throughput, with uncertainty. Let the user stop immediately.
+- **Let iOS continue when available:** make scheduling explicit: “iPhone decides when background work can run. Some videos may wait until you reopen BatchShrink.” On iOS 26+, separately evaluate continuing an active user-started job using the newer API.
 
 Never display “will finish by morning” merely because a task request was accepted. Show completed, waiting, interrupted and failed items truthfully on return. Keep originals through all interruption paths. A notification of completion should follow persisted verification and save receipts, not an export progress value.
 

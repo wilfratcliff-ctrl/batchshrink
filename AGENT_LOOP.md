@@ -124,10 +124,10 @@ What a cloud build still does not do:
 - prove any device behaviour. Actual deletion, audio sync, HDR appearance, interruption windows
   and iCloud retrieval need a real iPhone and `docs/PHYSICAL_DEVICE_TEST_PLAN.md`.
 
-### The gate is blocked again, and this time it is the account's Actions minutes
+### The gate is blocked again: the account's Actions minutes are spent, and reset on 1 October
 
-On 2026-09-23, a few hours after the three-job workflow above went green on two of its three
-jobs, every job stopped starting. The evidence, in the order it was gathered:
+On 2026-09-23, a few hours after the three-job workflow above went green on two of its three jobs,
+every job stopped starting. The evidence, in the order it was gathered:
 
 - run `35885102232` (commit `9d0e745`, a one-line test-name fix) reported **failure for all
   three jobs about nine seconds after it was created**, with `runner_name` empty and `steps`
@@ -136,14 +136,19 @@ jobs, every job stopped starting. The evidence, in the order it was gathered:
 - GitHub's status API said **"All Systems Operational"** at the same moment, so it is not a
   platform outage;
 - a throwaway `ubuntu-latest` job was pushed, dispatched and observed: it also failed with no
-  runner, so it is **not** a macOS-only quota. The probe then deleted itself.
+  runner, so it is **not** a macOS-only quota. The probe then deleted itself;
+- **and then the account's own billing notice said it outright:** *"You have used 100% of the
+  Actions minutes included for the wilfratcliff-ctrl account. Your plan includes 2,000 Actions
+  minutes per month at no extra cost. You have used 100% so far this billing cycle. 2,000 min
+  used / 2,000 min included... usage will reset in 8 days on October 01, 2026."* A $0 budget for
+  Actions blocks further usage until then, so nothing is being charged and nothing will run.
 
-The account is on a free plan and the repository is private, which is the expensive combination:
-private-repository runner minutes are drawn from a monthly allowance, and **macOS runners are
-billed at ten times the Linux rate**. The three-job workflow costs roughly `7 + 12 + 6` macOS
-minutes per push, which is about **250 billed minutes**, and several pushes a day exhaust a free
-allowance quickly. The workflow that made this project verifiable is, at this price, also what
-used it up.
+That last line is the one that matters for planning, and the arithmetic behind it is worth
+keeping because it is what bit first: the 2,000 minutes are a **single pool shared by every
+runner**, and macOS runners draw from it at **ten minutes per minute**. The three-job workflow
+costs roughly `7 + 12 + 6` macOS minutes per push, so about **250 pool minutes**, and the pool
+holds about **eight pushes a month**. This project pushes far more often than that. The workflow
+that made the project verifiable, at this price, is also what used it up.
 
 **What this means for a round, until it is resolved.**
 
@@ -162,6 +167,12 @@ workflow down so one push costs about one macOS job instead of three. That last 
 trade — the three jobs answer three different questions, and job 2 is the only thing that
 compiles the Expo app — so it should be a decision, not a silent edit. Whichever it is, the
 arithmetic above is the thing to decide against.
+
+**What a round should do until 1 October.** The local gates still run and are still worth
+running. Beyond that, two things are worth more than more Swift: documentation and the record,
+because they are verifiable on Windows; and read-only review of the Swift already on `main`,
+because that is the one part of this tree nobody can compile. A round that adds Swift before
+then should say plainly, in its own report and in this file, that it did so unverified.
 
 ## Build log
 
@@ -297,7 +308,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | N16 | 1 | Exactly-once save reconciliation: a save receipt is evidence, not proof the copy completed | **done, rounds 6 and 16.** A restored mid-save record now looks for the copy it recorded rather than only flagging a question, and a save Photos was asked for but did not confirm is never a clean failure. What is still owed is a device result, which is N19 |
 | N17 | 1 | The 162 cases compiled but had never executed | done, round 5: the `verify-tests` profile runs them on a simulator |
 | N18 | 2 | `expo doctor` failed one check during every EAS setup | **done, round 8.** Two patch-level packages were behind; `expo-doctor` now reports 21/21. This row sat stale for seven rounds, which is the warning above in miniature |
-| N19 | 1 | Runtime behaviour is still entirely unproven even though it compiles: no screen has been rendered, no export has run, no queue file has been written | open |
+| N19 | 1 | Runtime behaviour is still unproven even though it compiles: no export has run, no original has been deleted, no queue file has been written, and nothing has run on a device | **partly closed, round 18.** A screen *has* now been rendered - the launch job on `780f14f` built the standalone app, installed it on a simulator and drove `VideoShrinkUITests` through the introduction and one navigation. That is the first observation of the app doing anything, and it is one launch on a simulator with no Photos library. Everything else in this row stands: nothing has been exported, deleted, queued or run on a phone, and the device acceptance test is still the gate for all of it. See N40 |
 | N20 | 0 | **7 of 162 tests failed.** One real bug — tapping Delete after the copy changed did nothing and said nothing — plus three faulty tests | **done.** Fixed in `7c11f26`, proven green by CI from `5d72357` onward |
 | N21 | 0 | Prove the fixes turn the suite green | **done for the suite.** Green in CI since `5d72357`. The deletion path still needs a device run, which is N19 |
 | N22 | 2 | `localFileURL` and `playerItem` were unbounded waits | **done, round 16.** Both now go through the scan's `boundedAnswer`, so one mechanism owns the single resumption |

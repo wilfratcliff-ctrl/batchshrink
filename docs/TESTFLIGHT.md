@@ -1,4 +1,4 @@
-# Getting VideoShrink onto TestFlight
+# Getting BatchShrink onto TestFlight
 
 TestFlight needs a different kind of build from the one used for development. The development
 build talks to Metro over the local network; a TestFlight build carries the JavaScript bundle
@@ -8,6 +8,10 @@ inside the app and runs on its own. That is what the `production` profile in `ea
 [RELEASE_10.md](RELEASE_10.md) has been uploaded. App Store Connect processing, internal and
 external tester availability, and the beta review were not independently checked. This page is the
 setup record; the steps below describe what was done, not a pending plan.
+
+Nothing since build 10 has reached a device, so build 10 is still the last build a tester has
+run, and it predates every reliability change made since. The next upload should carry build
+number 11 or later, and its build number comes from `app.json`, not from `project.yml` (see step 2).
 
 ## What has to be true first
 
@@ -25,7 +29,11 @@ setup record; the steps below describe what was done, not a pending plan.
 
 1. **Create the app record.** App Store Connect > Apps > + > New App.
    - Platform: iOS
-   - Name: `VideoShrink`
+   - Name: `BatchShrink` - the App Store Connect record's name must match the app's display name,
+     which is `BatchShrink` in `app.json` and `CFBundleDisplayName`. This step was originally
+     written with `VideoShrink` (the historical project and bundle name), and nothing in this
+     repository proves what the existing record is called; check the record before relying on
+     either spelling.
    - Primary language: English (U.K.)
    - Bundle ID: `com.wilfr.videoshrink`
    - SKU: anything unique to you, for example `videoshrink-1`
@@ -76,7 +84,7 @@ setup record; the steps below describe what was done, not a pending plan.
 6. **Fill in the beta information.** TestFlight asks for a beta app description, "What to test",
    and a feedback email. The "What to test" box is worth using honestly:
 
-   > VideoShrink makes a smaller copy of a video and leaves the original alone by default.
+   > BatchShrink makes a smaller copy of a video and leaves the original alone by default.
    > Try the batch: scan the library, pick two or three short videos, and watch the count and
    > time estimate. Deleting originals is off unless you turn it on in Originals. Please tell me
    > if any copy looks wrong, sounds wrong, or if the estimate is badly off.
