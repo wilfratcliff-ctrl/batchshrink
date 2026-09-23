@@ -8,8 +8,23 @@ enum ShrinkStyle {
     static let lilac = Color(red: 0.73, green: 0.69, blue: 1.0)
     static let button = accent
     static let thumbnailBackground = elevated
-    static let hairline = Color.white.opacity(0.08)
+    static let hairline = ShrinkHairline()
     static let headline = Font.system(.largeTitle, design: .default, weight: .bold)
+}
+
+/// The one-pixel line around a card and along the action bar.
+///
+/// A flat `Color.white.opacity(0.08)` is a whisper on this dark canvas, and for anyone who has
+/// asked for Increase Contrast it is a whisper they asked not to have: the border is often the
+/// only thing separating a card from the canvas behind it, and at eight percent it reads as
+/// nothing. The stroke resolves itself against the environment instead, so the line stays quiet
+/// at the standard contrast setting and becomes a real line when the setting is increased.
+struct ShrinkHairline: ShapeStyle {
+    func resolve(in environment: EnvironmentValues) -> Color {
+        environment.colorSchemeContrast == .increased
+            ? Color.white.opacity(0.45)
+            : Color.white.opacity(0.08)
+    }
 }
 
 extension View {

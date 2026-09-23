@@ -11,8 +11,9 @@
     <key>CFBundleShortVersionString</key><string>$(MARKETING_VERSION)</string>
     <key>CFBundleVersion</key><string>$(CURRENT_PROJECT_VERSION)</string>
     <key>LSRequiresIPhoneOS</key><true/>
-    <key>NSPhotoLibraryUsageDescription</key><string>BatchShrink reads your video library to estimate savings and make smaller copies on your iPhone. Originals are kept unless you enable deletion.</string>
+    <key>NSPhotoLibraryUsageDescription</key><string>BatchShrink reads your video library to estimate how much space smaller copies would save and to read the videos you choose so it can create those copies. Estimating savings does not download videos from iCloud; videos stored only in iCloud are downloaded when the app works on them. Originals are kept unless you turn on deletion, and deleted originals go to Recently Deleted.</string>
     <key>NSPhotoLibraryAddUsageDescription</key><string>BatchShrink saves smaller videos as separate copies in Photos when you save a video or start a batch.</string>
+    <key>ITSAppUsesNonExemptEncryption</key><false/>
     <key>UILaunchScreen</key><dict/>
     <key>UIApplicationSceneManifest</key><dict><key>UIApplicationSupportsMultipleScenes</key><false/></dict>
     <key>UISupportedInterfaceOrientations</key><array>

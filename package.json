@@ -14,8 +14,8 @@
     "eas-build-post-install": "node scripts/sync-native-sources.mjs --check && node scripts/verify-native-tests.mjs"
   },
   "dependencies": {
-    "expo": "~57.0.23",
-    "expo-build-properties": "~57.0.20",
+    "expo": "~57.0.24",
+    "expo-build-properties": "~57.0.21",
     "expo-dev-client": "~57.0.19",
     "react": "19.2.3",
     "react-native": "0.86.3"

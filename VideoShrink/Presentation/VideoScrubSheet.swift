@@ -45,6 +45,13 @@ struct VideoScrubSheet: View {
             Color.black
             if let player {
                 VideoPlayer(player: player)
+                    // The loading and failure branches each carry a line of text, and this one
+                    // carried nothing: VoiceOver arrived at a bare area on the one branch that
+                    // actually has something to play. `children: .contain` labels it without
+                    // making it a single element, so the system transport controls stay in the
+                    // accessibility tree exactly as they were.
+                    .accessibilityElement(children: .contain)
+                    .accessibilityLabel("Video player")
             } else if loading {
                 VStack(spacing: 10) {
                     ProgressView().tint(.white)

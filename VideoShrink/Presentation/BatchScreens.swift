@@ -469,7 +469,7 @@ struct BatchSelectionScreen: View {
         .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 22, style: .continuous)
-                .strokeBorder(isSelected ? ShrinkStyle.accent : ShrinkStyle.hairline,
+                .strokeBorder(isSelected ? AnyShapeStyle(ShrinkStyle.accent) : AnyShapeStyle(ShrinkStyle.hairline),
                               lineWidth: isSelected ? 2 : 1)
                 .allowsHitTesting(false)
         }
@@ -653,7 +653,8 @@ struct BatchProcessingScreen: View {
                 ForEach(finished) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],
-                                     revision: batch.thumbnailRevision)
+                                     revision: batch.thumbnailRevision,
+                                     finding: batch.midSaveFindings[item.id])
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -667,6 +668,10 @@ struct BatchFinishedRow: View {
     var readBack: CopyReadBack? = nil
     var deletion: DeletionOutcome? = nil
     var revision: Int = 0
+    /// What a restored run worked out about this video, when it stopped while Photos was taking
+    /// the copy. `BatchViewModel.midSaveFindings` holds one of these per flagged video, and it is
+    /// the only thing that can say whether the app answered the question or the user still has it.
+    var finding: MidSaveFinding? = nil
 
     var body: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -735,9 +740,75 @@ struct BatchFinishedRow: View {
             return text
         case .skipped(let reason): return reason
         case .failed(let error): return error.localizedDescription
-        case .needsCheck: return "Closed while saving. Check Photos before running it again."
+        case .needsCheck:
+            // The app looks at Photos before this row is drawn, so a flagged video usually has an
+            // answer by now: either the copy it made is in the library, or - with the whole
+            // library in view - there is no copy at all. Only what neither the stored record nor
+            // Photos could settle stays the user's question, and then the row shows that question.
+            guard let finding else {
+                return "Closed while saving. Check Photos before running it again."
+            }
+            switch finding {
+            case .copyInPhotos:
+                return "Photos has the copy BatchShrink made, so it is not run again and cannot be copied twice."
+            case .noCopyInPhotos:
+                return "Photos has no copy BatchShrink made, so running this one again cannot make a second copy."
+            case .unresolved(let question):
+                return question
+            }
         default: return item.state.title
         }
+    }
+}
+
+/// What a restored run worked out about the videos it stopped mid-save on, split the one way the
+/// paused and finished screens care about: answered by the app, and still the user's to answer.
+///
+/// This is `BatchViewModel.requeueUncertain()`'s own filter read the other way around. That
+/// function requeues exactly the flagged videos that do not `forbidsAnotherSave`, so a screen that
+/// counts them the same way can offer the requeue control only where the app would act on it, and
+/// can say what it found everywhere else.
+@MainActor private struct MidSaveReport {
+    /// Videos whose copy the app can see. Running one again would make a second copy.
+    var foundCopy = 0
+    /// Videos the app could not answer for, so looking in Photos is still the user's job.
+    var awaitingUser = 0
+
+    init(_ batch: BatchViewModel) {
+        for item in batch.items where item.state == .needsCheck {
+            if batch.midSaveFindings[item.id]?.forbidsAnotherSave == true {
+                foundCopy += 1
+            } else {
+                awaitingUser += 1
+            }
+        }
+    }
+
+    /// The heading for the flagged videos. It names what is left to do rather than what stopped:
+    /// a question the app answered is not something for the user to check.
+    var title: String {
+        guard awaitingUser > 0 else {
+            return foundCopy == 1 ? "1 copy found in Photos" : "\(foundCopy) copies found in Photos"
+        }
+        return "\(awaitingUser) to check in Photos"
+    }
+
+    /// The same, in a sentence, including the part the app settled for itself.
+    var detail: String {
+        if awaitingUser == 0 {
+            return foundCopy == 1
+                ? "The copy BatchShrink made is in Photos, so it is not run again. Nothing is left to check."
+                : "The copies BatchShrink made are in Photos, so none of them are run again. Nothing is left to check."
+        }
+        guard foundCopy > 0 else {
+            return "BatchShrink stopped while Photos was taking a copy. Look in Photos before running those again."
+        }
+        let found = foundCopy == 1 ? "one of them" : "\(foundCopy) of them"
+        let verdict = foundCopy == 1 ? "so that one is not run again." : "so those are not run again."
+        let rest = awaitingUser == 1
+            ? "The other one still needs a look in Photos."
+            : "The other \(awaitingUser) still need a look in Photos."
+        return "BatchShrink stopped while Photos was taking a copy, and found the copy it made for \(found), \(verdict) \(rest)"
     }
 }
 
@@ -745,6 +816,8 @@ struct BatchFinishedRow: View {
 
 struct BatchPausedScreen: View {
     @ObservedObject var batch: BatchViewModel
+
+    private var midSave: MidSaveReport { MidSaveReport(batch) }
 
     /// Only the reasons worth putting on screen. A pause the user asked for needs no explanation.
     private var pauseReasonText: String? {
@@ -789,9 +862,8 @@ struct BatchPausedScreen: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
                 if batch.summary.needsCheckCount > 0 {
-                    ShrinkNotice(symbol: "questionmark.circle",
-                                 title: "\(batch.summary.needsCheckCount) to check in Photos",
-                                 detail: "BatchShrink stopped while Photos was taking a copy. Look in Photos before running those again.")
+                    ShrinkNotice(symbol: midSave.awaitingUser > 0 ? "questionmark.circle" : "checkmark.circle",
+                                 title: midSave.title, detail: midSave.detail)
                 }
                 if let warning = batch.queueWarning {
                     ShrinkNotice(symbol: "exclamationmark.triangle",
@@ -812,7 +884,7 @@ struct BatchPausedScreen: View {
         .safeAreaInset(edge: .bottom, spacing: 0) {
             ShrinkActionBar {
                 ShrinkPrimaryButton(title: "Continue", symbol: "play.fill") { batch.resume() }
-                if batch.summary.needsCheckCount > 0 {
+                if midSave.awaitingUser > 0 {
                     Button("I checked Photos — run them again") { batch.requeueUncertain() }
                         .font(.subheadline.weight(.medium)).frame(minHeight: 44)
                 }
@@ -826,6 +898,8 @@ struct BatchPausedScreen: View {
 struct BatchFinishedScreen: View {
     @ObservedObject var batch: BatchViewModel
     @State private var confirmDeletion = false
+
+    private var midSave: MidSaveReport { MidSaveReport(batch) }
 
     var body: some View {
         ScrollView {
@@ -894,7 +968,7 @@ struct BatchFinishedScreen: View {
                     Button("Try the failed ones again") { batch.retryFailed() }
                         .font(.subheadline.weight(.medium)).frame(minHeight: 44)
                 }
-                if batch.summary.needsCheckCount > 0 {
+                if midSave.awaitingUser > 0 {
                     Button("I checked Photos — run them again") { batch.requeueUncertain() }
                         .font(.subheadline.weight(.medium)).frame(minHeight: 44)
                 }
@@ -926,8 +1000,12 @@ struct BatchFinishedScreen: View {
         if summary.pendingCount > 0 {
             parts.append("\(summary.pendingCount) not attempted.")
         }
-        if summary.needsCheckCount > 0 {
-            parts.append("\(summary.needsCheckCount) to check in Photos.")
+        if midSave.awaitingUser > 0 {
+            parts.append("\(midSave.awaitingUser) to check in Photos.")
+        }
+        if midSave.foundCopy > 0 {
+            let copies = midSave.foundCopy == 1 ? "copy" : "copies"
+            parts.append("\(midSave.foundCopy) \(copies) found in Photos and not run again.")
         }
         return parts.isEmpty ? "Nothing was processed." : parts.joined(separator: " ")
     }
@@ -996,7 +1074,8 @@ struct BatchFinishedScreen: View {
                 ForEach(needing) { item in
                     BatchFinishedRow(item: item, readBack: batch.readBackOutcomes[item.id],
                                      deletion: batch.deletionOutcomes[item.id],
-                                     revision: batch.thumbnailRevision)
+                                     revision: batch.thumbnailRevision,
+                                     finding: batch.midSaveFindings[item.id])
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1078,6 +1157,10 @@ private let previewAsset = LibraryAsset(id: "preview", creationDate: nil, durati
         BatchFinishedRow(item: BatchItem(asset: previewAsset, state: .skipped(
             "This copy wasn’t smaller than the original, so it wasn’t saved.")))
         BatchFinishedRow(item: BatchItem(asset: previewAsset, state: .failed(.insufficientStorage)))
+        BatchFinishedRow(item: BatchItem(asset: previewAsset, state: .needsCheck),
+                         finding: .copyInPhotos)
+        BatchFinishedRow(item: BatchItem(asset: previewAsset, state: .needsCheck),
+                         finding: .unresolved(question: MidSaveFinding.limitedAccessQuestion))
     }
     .padding(24)
     .background(ShrinkStyle.canvas).preferredColorScheme(.dark)

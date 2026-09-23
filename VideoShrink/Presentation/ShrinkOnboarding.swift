@@ -12,7 +12,7 @@ struct ShrinkOnboarding: View {
                           "Your memories.\nYour call."]
     private let details = ["Give your favourite videos a lighter footprint. Right here on your iPhone.",
                            "Choose a few videos or a whole batch. Set the quality, then let BatchShrink work.",
-                           "Smaller copies are saved separately. Originals stay unless you choose to delete them."]
+                           "Smaller copies are saved as separate videos in your Photos library. Originals stay unless you choose to delete them."]
 
     var body: some View {
         VStack(spacing: 0) {

@@ -1,8 +1,8 @@
 # Physical-device acceptance plan
 
-All cases are **NOT RUN** at creation. Use expendable or separately backed-up test clips, starting on the iPhone 15 Pro Max. No test instructs you to remove your original media. TestFlight distribution and a passing simulator test suite are prerequisites, not proof of the media pipeline.
+All cases are **NOT RUN** at creation. Use expendable or separately backed-up test clips, starting on the iPhone 15 Pro Max. No test instructs you to remove your original media. An installed internal build and a passing simulator test suite are prerequisites, not proof of the media pipeline.
 
-These cases describe the source at commit `559f693`. The build-10 app predates the round 1 queue, deletion and verification changes, so a pass against build 10 does not cover them. The round 1 work has never been compiled; its first run is part of this plan, not a prerequisite.
+These cases describe the source at commit `07526c4`. Build 10 (`0.1.0`) is the last build known to have run anywhere, and it predates the round 1 queue, deletion and verification changes and every round after them, so a pass against build 10 covers none of this. The first build to carry that work is `0.1.0` (build 11), and nothing since build 10 has been installed on a device, so the first run of this plan is the first evidence about any of it.
 
 Record: app version/build, Git revision once available, iOS/Xcode versions, device, permission mode, codec/resolution/HDR/frame rate, duration, audio, network/power/thermal conditions, source/output byte counts, observed outcome and pass/fail. Do not put private filenames, library identifiers, locations or personal footage in the repository.
 
