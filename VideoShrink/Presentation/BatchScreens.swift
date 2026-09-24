@@ -122,10 +122,17 @@ struct BatchScanningScreen: View {
                         .font(.body).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
+                // The orb, which is the app's progress language everywhere else: the one-video
+                // flow draws it for the export, and this screen drew a thin linear bar for the
+                // scan. Two meters for one idea, on the screen a user stares at longest - and the
+                // bar was the least of this screen's problems, because a single hairlike line in a
+                // card left most of the display empty while the library was read.
+                //
+                // The count underneath is not the same fact told twice: the ring says how far
+                // through, and the line says how many videos, which is what a person actually
+                // wants to know while waiting.
                 VStack(alignment: .leading, spacing: 16) {
-                    ProgressView()
-                        .progressViewStyle(.linear)
-                        .accessibilityLabel(progressLabel)
+                    ShrinkProgressOrb(progress: reportedProgress, label: progressLabel)
                     Text(countText)
                         .font(.subheadline.weight(.medium))
                         .monospacedDigit()
@@ -187,6 +194,16 @@ struct BatchScanningScreen: View {
 
     /// The count line the scan has always published. The same "n of m" is true in every phase, so
     /// only the two labels around it change.
+    ///
+    /// What the ring draws: the share of the library this pass has read, or nothing at all while
+    /// the total is unknown - which is how the phase opens, and which the orb draws as an activity
+    /// indicator rather than as zero per cent. A zero would be a claim about progress that has not
+    /// been made.
+    private var reportedProgress: Double? {
+        guard let progress = progress, progress.total > 0 else { return nil }
+        return Double(progress.scanned) / Double(progress.total)
+    }
+
     private var countText: String {
         guard let progress = progress, progress.total > 0 else {
             switch wording {
