@@ -207,6 +207,47 @@ EAS build minutes; it is unproven, needs an `EXPO_TOKEN` repository secret (a da
 not something the CLI can create), and would need the resulting .ipa published with an OTA
 manifest to install without a cable.
 
+### The installable build works — 24 September 2026, first run
+
+That candidate route was tried, and it worked on the first attempt. `.github/workflows/ios-ipa.yml`
+dispatched by hand builds a signed ad-hoc `.ipa` on a public-repository macOS runner with
+`eas build --local --profile preview --non-interactive`, which runs the native build on the runner
+and **does not touch EAS's exhausted build queue**. The run took about seven minutes.
+
+What the log proves, rather than what the command claims:
+
+```
+[PREPARE_CREDENTIALS] Writing distribution certificate to .../77422cfe....p12
+[CONFIGURE_XCODE_PROJECT] Assigning provisioning profile '*[expo] com.wilfr.videoshrink AdHoc ...'
+Provisioned devices       - iPhone (UDID ...)
+[RUN_FASTLANE] | export_options.method | ad-hoc |
+[RUN_FASTLANE] Successfully exported and signed the ipa file
+```
+
+and what the artifact itself proves: 91 entries, 27.2 MB uncompressed, `Payload/BatchShrink.app/`
+with the `BatchShrink` binary, an embedded `main.jsbundle` and signed
+`Frameworks/{React,ReactNativeDependencies,hermesvm,ExpoModulesCore,ExpoModulesJSI,ExpoFont,ExpoFileSystem,ExpoModulesWorklets}.framework`,
+plus `_CodeSignature/CodeResources` and `embedded.mobileprovision`. `Info.plist` reads
+`CFBundleIdentifier com.wilfr.videoshrink`, `CFBundleVersion 11`, `MinimumOSVersion 18.0`, and the
+manifest's `bundle-version` is read from `app.json` so it cannot drift from the build number.
+
+**Delivered by release, not by artifact.** Installing an ad-hoc `.ipa` over the air needs stable
+public HTTPS URLs, and an Actions artifact requires a signed-in session to download. The job writes
+`manifest.plist` beside the `.ipa` and publishes both as assets on a per-run release, then prints
+the `itms-services://` link to open in **Safari** on the phone. The recovery for a bad build is to
+dispatch the workflow again; it produces a new tag rather than overwriting one.
+
+**The credential, so it can be found and revoked.** The `EXPO_TOKEN` secret was minted from the
+owner's existing signed-in session through `api.expo.dev/graphql`
+(`accessToken.createAccessToken`), not from the dashboard: it is an ordinary access token with the
+note `batchshrink CI - eas build --local`, token id `a2f3d8ff-0d57-401b-8c86-25fac3b26900`. It can
+be revoked from expo.dev's access-token list or with `accessToken.setAccessTokenRevoked`. The value
+was never printed and the temporary copy on disk was overwritten.
+
+**What this does not change.** It is still one device, ad-hoc, unsigned for the App Store: no other
+iPhone can install it, and it is not a substitute for the EAS `preview` profile after 1 October or
+for the device acceptance plan. Nothing has yet been run against a real Photos library.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
