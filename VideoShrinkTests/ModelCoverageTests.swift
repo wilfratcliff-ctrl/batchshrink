@@ -725,6 +725,26 @@ import Photos
                        "equal.circle")
     }
 
+    /// A range's two ends are written at one precision.
+    ///
+    /// The summary card drew **"409–552.5 MB"** in its largest type: `ByteCountFormatter` decides
+    /// each end on its own, so one came out a whole number and the other carried a decimal, and
+    /// two ends of one estimate read as two different kinds of figure. The fix widens a band to
+    /// whole units rather than narrowing it - the lower end down and the upper up - so the claim
+    /// is never sharper than the figures behind it. Found by rendering the screen: see
+    /// `BatchTests.testRenderEveryScreenToAPng`.
+    func testAByteRangeIsWrittenAtOnePrecision() {
+        // The pair the summary card actually produced, and the reason this rule exists.
+        XCTAssertEqual(ShrinkFormat.byteRange(low: 409_000_000, high: 552_500_000), "409–553 MB")
+        // Both ends already whole: unchanged apart from the separator.
+        XCTAssertEqual(ShrinkFormat.byteRange(low: 409_000_000, high: 552_000_000), "409–552 MB")
+        // Both ends fractional: exactly as the formatter wrote them, because there is nothing to
+        // reconcile.
+        XCTAssertEqual(ShrinkFormat.byteRange(low: 409_500_000, high: 552_500_000), "409.5–552.5 MB")
+        // A band with no measured floor is still a ceiling rather than a range.
+        XCTAssertEqual(ShrinkFormat.byteRange(low: 0, high: 552_500_000), "up to 552.5 MB")
+    }
+
     /// The two bars are scaled against the larger of the two files, not against the original.
     ///
     /// The one-video screen is where this matters, because it is the only screen that can report a

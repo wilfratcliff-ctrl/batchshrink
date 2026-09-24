@@ -151,7 +151,11 @@ struct ShrinkResult: View {
             VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
                 if savings.isSmaller, let percentage = savings.percentage {
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(percentage / 100, format: .percent.precision(.fractionLength(1)))
+                        // "70.0%" was the figure this card showed for a saving of exactly seventy
+                        // per cent: the trailing zero is noise on a headline number, and dropping
+                        // the decimal entirely would round 68.4% up to a claim it did not measure.
+                        // A range of fraction lengths says "70%" and "68.4%" from the same code.
+                        Text(percentage / 100, format: .percent.precision(.fractionLength(0...1)))
                             .font(ShrinkStyle.headline).tracking(-1)
                             .foregroundStyle(ShrinkStyle.accent).monospacedDigit()
                         Text("smaller video file").font(.headline)

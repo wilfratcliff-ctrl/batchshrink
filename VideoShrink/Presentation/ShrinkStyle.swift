@@ -178,9 +178,46 @@ enum ShrinkFormat {
         let lowParts = lowText.split(separator: " ")
         let highParts = highText.split(separator: " ")
         if lowParts.count == 2, highParts.count == 2, lowParts[1] == highParts[1] {
-            return "\(lowParts[0])–\(highText)"
+            let (from, to) = samePrecision(lowParts[0], highParts[0])
+            return "\(from)–\(to) \(lowParts[1])"
         }
         return "\(lowText) to \(highText)"
+    }
+
+    /// Two figures from one range, written with the same precision.
+    ///
+    /// `ByteCountFormatter` decides each end on its own, and the summary card drew the pair as
+    /// **"409–552.5 MB"**: the lower end a whole number, the upper carrying a decimal, in the
+    /// app's largest type. Two ends of one estimate are one number's worth of idea, and writing
+    /// them at two precisions reads as two different kinds of figure rather than as a range.
+    ///
+    /// When either end is whole, both are written whole: the lower rounded down and the upper up,
+    /// so the band is never narrower than the figures it was built from. A band whose ends both
+    /// carry decimals is left exactly as the formatter wrote it.
+    ///
+    /// The two figures are parsed back out of the formatted strings, so the decimal and grouping
+    /// separators are read from the current locale rather than assumed to be "." and "," - the
+    /// alternative was to rebuild the range from bytes and quietly stop agreeing with every other
+    /// byte figure the app prints.
+    static func samePrecision(_ low: Substring, _ high: Substring) -> (String, String) {
+        guard !low.contains(".") || !high.contains("."),
+              let lowValue = decimal(low), let highValue = decimal(high) else {
+            return (String(low), String(high))
+        }
+        return (Int(lowValue.rounded(.down)).formatted(),
+                Int(highValue.rounded(.up)).formatted())
+    }
+
+    /// One figure from a formatted byte string, as a number, whatever separators the locale uses.
+    private static func decimal(_ text: Substring) -> Double? {
+        var cleaned = String(text)
+        if let grouping = Locale.current.groupingSeparator, !grouping.isEmpty {
+            cleaned = cleaned.replacingOccurrences(of: grouping, with: "")
+        }
+        if let point = Locale.current.decimalSeparator, point != "." {
+            cleaned = cleaned.replacingOccurrences(of: point, with: ".")
+        }
+        return Double(cleaned)
     }
 
     /// "about 40 minutes" is too strong a claim; this stays deliberately rough.
