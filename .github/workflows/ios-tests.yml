@@ -111,7 +111,14 @@ jobs:
         #
         # `if: always()` on purpose - a run that fails partway still drew the screens up to the
         # point it failed, and those are exactly the pictures worth having.
+        #
+        # `continue-on-error` on purpose too, and it is not laxity: this artefact is for a human
+        # to look at, and on 24 September the service that stores it timed out five times in a row
+        # and turned a run of 414 passing tests into a red build. The suite's verdict is the test
+        # step's business. A failed upload is still shown as a failed step, so it stays visible
+        # without pretending the code is broken.
         if: always()
+        continue-on-error: true
         uses: actions/upload-artifact@v4
         with:
           name: screen-snapshots
