@@ -286,7 +286,11 @@ private enum RunAccess: Equatable, Sendable {
     /// be ticked by hand, which is the user deciding rather than the app assuming.
     var selectableAssets: [LibraryAsset] {
         let unaccounted = unaccountedIdentifiers
-        eligibleAssets.filter { asset in
+        // The `return` is load-bearing and was the one thing ten rounds of uncompiled Swift got
+        // wrong: implicit returns are a single-expression feature, and this getter binds a name
+        // first. The call-site checker is a scanner and cannot see it; the macOS runner can, and
+        // did, within a minute of the gate being unblocked.
+        return eligibleAssets.filter { asset in
             !completedIdentifiers.contains(asset.id)
                 && !createdCopyIdentifiers.contains(asset.id)
                 && deletionOutcomes[asset.id] != DeletionOutcome.deleted
