@@ -2273,20 +2273,22 @@ import UIKit
                        [.deleteOriginals, .retryFailed, .requeueUncertain])
     }
 
-    /// The sort pill moves under the headline at accessibility text sizes, and not a size earlier.
+    /// The two header controls share a row at ordinary text sizes, and stack at accessibility ones.
     ///
-    /// "Make room." at `.largeTitle` and the pill shared one row with an 8pt spacer against about
-    /// 327pt of usable width. The headline can wrap and the pill's single word cannot, so the order
-    /// the grid is in was the thing that truncated - and the grid itself cannot say it.
-    func testTheSortPillMovesUnderTheHeadlineAtAccessibilitySizes() {
+    /// The quality pill and the sort pill share one row under the headline. Against about 345pt of
+    /// usable width they fit; at accessibility text sizes they cannot, and a row that truncated
+    /// would hide whichever control lost - the quality in use, or the order the grid is in, and the
+    /// grid itself cannot say the second one. Same boundary as before, asked of two pills instead of
+    /// a pill and a headline.
+    func testTheHeaderControlsStackAtAccessibilitySizes() {
         for size in [DynamicTypeSize.large, .xLarge, .xxLarge, .xxxLarge] {
-            XCTAssertTrue(BatchSelectionScreen.sortSitsBesideHeadline(at: size),
-                          "\(size) still has room for the headline and the pill on one line")
+            XCTAssertTrue(BatchSelectionScreen.controlsShareOneRow(at: size),
+                          "\(size) still has room for both pills on one line")
         }
         for size in [DynamicTypeSize.accessibility1, .accessibility2, .accessibility3,
                      .accessibility4, .accessibility5] {
-            XCTAssertFalse(BatchSelectionScreen.sortSitsBesideHeadline(at: size),
-                           "\(size) stacks the pill under the headline")
+            XCTAssertFalse(BatchSelectionScreen.controlsShareOneRow(at: size),
+                           "\(size) stacks the two pills")
         }
     }
 

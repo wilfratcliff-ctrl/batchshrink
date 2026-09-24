@@ -43,6 +43,19 @@ import Combine
         "\(resolution.title) · \(resolution.codec.displayName) · \(frameRate.shortTitle)"
     }
 
+    /// The shortest true name for the current choice, for the one place it has to fit a pill.
+    ///
+    /// `summary` names all three choices, which is right for the card and for the sheet's own row
+    /// and too long for the selection screen's header, where this sits beside the sort control on
+    /// a phone. The frame rate is the part that goes: its default *is* the original rate, so
+    /// leaving it out says nothing untrue, and naming it only when it has been lowered is exactly
+    /// when it became a fact worth the room.
+    var pillSummary: String {
+        frameRate.framesPerSecond == nil
+            ? "\(resolution.title) · \(resolution.codec.displayName)"
+            : "\(resolution.title) · \(resolution.codec.displayName) · \(frameRate.shortTitle)"
+    }
+
     private func persist() {
         defaults.set(resolution.rawValue, forKey: resolutionKey)
         defaults.set(frameRate.rawValue, forKey: frameRateKey)

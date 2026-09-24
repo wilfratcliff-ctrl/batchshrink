@@ -226,28 +226,47 @@ struct QualitySheet: View {
     }
 }
 
-/// The compact card that shows the current choice and opens the chooser.
+/// The current choice, and a way into the chooser. A full-width card, or a pill.
+///
+/// The card is what the summary screen draws, where it has a row of its own under the estimate and
+/// the room to name all three choices. The pill is what the selection screen draws, beside the
+/// sort control - see `compact`, and `BatchSelectionScreen` for why the same setting is worth two
+/// shapes rather than one.
 struct QualityRow: View {
     @ObservedObject var settings: ShrinkSettings
     let open: () -> Void
+    /// Draw as a pill that shares its row with another control, rather than as a card that owns one.
+    var compact = false
 
     var body: some View {
         Button(action: open) {
-            HStack(spacing: 14) {
-                Image(systemName: "camera.filters")
-                    .font(.title3).foregroundStyle(ShrinkStyle.accent)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Quality").font(.subheadline.weight(.semibold))
-                    Text(settings.summary).font(.footnote).foregroundStyle(.secondary)
+            Group {
+                if compact {
+                    Label(settings.pillSummary, systemImage: "camera.filters")
+                        .font(.caption.weight(.semibold))
+                        .lineLimit(1)
+                        .padding(.horizontal, 12).frame(minHeight: 44)
+                        .background(ShrinkStyle.surface, in: Capsule())
+                } else {
+                    HStack(spacing: 14) {
+                        Image(systemName: "camera.filters")
+                            .font(.title3).foregroundStyle(ShrinkStyle.accent)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Quality").font(.subheadline.weight(.semibold))
+                            Text(settings.summary).font(.footnote).foregroundStyle(.secondary)
+                        }
+                        Spacer(minLength: 0)
+                        Image(systemName: "chevron.right")
+                            .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
+                    }
+                    .padding(ShrinkStyle.cardPadding)
+                    .shrinkCard()
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.bold)).foregroundStyle(.tertiary)
             }
-            .padding(ShrinkStyle.cardPadding)
-            .shrinkCard()
-            .contentShape(RoundedRectangle(cornerRadius: ShrinkStyle.radiusCard, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: compact ? ShrinkStyle.radiusChip
+                                                                : ShrinkStyle.radiusCard,
+                                           style: .continuous))
         }
         .buttonStyle(.plain)
         .accessibilityLabel("Quality. \(settings.resolution.title) \(settings.resolution.codec.displayName), \(settings.frameRate.title).")

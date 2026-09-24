@@ -487,7 +487,6 @@ struct BatchSelectionScreen: View {
                         }
                     }
                 }
-                QualityRow(settings: batch.settings, open: openQuality)
                 LazyVGrid(columns: columns, spacing: 14) {
                     ForEach(assets) { asset in row(asset) }
                 }
@@ -565,25 +564,37 @@ struct BatchSelectionScreen: View {
         }
     }
 
-    /// The headline and the way the grid is ordered.
+    /// The headline, and the two controls that decide what the grid below shows.
     ///
-    /// They shared one row against about 327pt of usable width. The headline can wrap and the
-    /// pill's single word cannot, so at accessibility text sizes the one thing that truncated was
-    /// the order the user has no other way to read. The decision is `sortSitsBesideHeadline` on its
-    /// own so a case can state it; whether the stacked pill then fits is what a render would say.
+    /// The quality setting used to be a full-width card between the headline and the videos, where
+    /// it cost about 140 of the screen's 852 points - most of a row of thumbnails - to say three
+    /// words and show a chevron. Rendered, that is what the screen looked like: two rows of videos
+    /// and the rest below the fold. It is a pill beside the sort control now, on one row directly
+    /// under the headline, which puts both settings in the same place, in reach, and gives the
+    /// videos back the space.
+    ///
+    /// The two controls share a row at ordinary text sizes and stack at accessibility ones, which
+    /// is the boundary the sort pill already had against the headline: the same measurement, asked
+    /// of two pills instead of a pill and a title.
     @ViewBuilder private var header: some View {
-        if Self.sortSitsBesideHeadline(at: dynamicTypeSize) {
-            HStack(alignment: .top) {
-                titleBlock
-                Spacer(minLength: 8)
-                sortMenu
-            }
-        } else {
-            VStack(alignment: .leading, spacing: 12) {
-                titleBlock
-                sortMenu
+        VStack(alignment: .leading, spacing: 12) {
+            titleBlock
+            if Self.controlsShareOneRow(at: dynamicTypeSize) {
+                HStack(spacing: 8) {
+                    controlPills
+                }
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    controlPills
+                }
             }
         }
+    }
+
+    /// The quality pill and the sort menu, in the order they are read.
+    @ViewBuilder private var controlPills: some View {
+        QualityRow(settings: batch.settings, open: openQuality, compact: true)
+        sortMenu
     }
 
     private var titleBlock: some View {
@@ -612,12 +623,12 @@ struct BatchSelectionScreen: View {
         .accessibilityHint("Chooses the order the videos appear in.")
     }
 
-    /// Whether the sort pill shares the headline's line, or sits under it.
+    /// Whether the two controls share one row, or stack under each other.
     ///
     /// These are the sizes the rest of the app already reshapes itself for: a grid that becomes one
     /// column, and figures that stop sharing a row with their labels. Static and internal so a case
     /// can state the boundary rather than re-derive it.
-    static func sortSitsBesideHeadline(at size: DynamicTypeSize) -> Bool {
+    static func controlsShareOneRow(at size: DynamicTypeSize) -> Bool {
         !size.isAccessibilitySize
     }
 
@@ -747,7 +758,13 @@ struct BatchSelectionScreen: View {
                                    showsPlayBadge: true,
                                    revision: batch.thumbnailRevision)
                 }
-                .aspectRatio(0.92, contentMode: .fit)
+                // The thumbnail was 0.92 - taller than it is wide - which did two things wrong at
+                // once. It cropped a landscape video to a portrait slice of its middle, so the
+                // picture was not the picture; and at 180 points tall on a 166-point-wide tile it
+                // was most of the tile's height, which is most of the reason only two rows fitted
+                // on the screen. 16:9 is the shape of the media, so the whole frame is shown, and
+                // the row it gives back is a row of videos.
+                .aspectRatio(16.0 / 9.0, contentMode: .fit)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Preview \(rowLabel(asset))")
