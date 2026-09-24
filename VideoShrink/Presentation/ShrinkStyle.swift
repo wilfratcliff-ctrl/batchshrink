@@ -396,7 +396,12 @@ struct ShrinkProgressOrb: View {
                     .tracking(-1.5).monospacedDigit()
                     .lineLimit(1).minimumScaleFactor(0.4).padding(16)
             } else {
+                // Sized to the ring it sits in. At `.large` the indicator is about 20 points across
+                // the middle of a 144-point circle, which the render showed reading as a small
+                // spinner that had been dropped into a large empty ring - on the two screens a user
+                // waits on, which is where it is drawn.
                 ProgressView().controlSize(.large).tint(ShrinkStyle.accent)
+                    .scaleEffect(Self.indeterminateScale)
             }
         }
         .frame(width: 144, height: 144)
@@ -406,6 +411,14 @@ struct ShrinkProgressOrb: View {
         .accessibilityLabel(label)
         .accessibilityValue(progress.map { "\(Int(min(1, max(0, $0)) * 100)) percent" } ?? "In progress")
     }
+}
+
+extension ShrinkProgressOrb {
+    /// How much larger the activity indicator is drawn than the system's `.large` size.
+    ///
+    /// Static and internal so a case can state the relationship rather than re-derive it: the ring
+    /// is 144 points across and the indicator is meant to occupy roughly a third of it.
+    static var indeterminateScale: CGFloat { 1.8 }
 }
 
 /// The two bars that put an original and its copy side by side.
