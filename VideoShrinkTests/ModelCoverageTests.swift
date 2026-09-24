@@ -752,6 +752,8 @@ import Photos
     /// drew the same length as the video it came from, so the bar chart said "equal" on the one
     /// screen whose whole job is showing the difference. The summary and the finished screen only
     /// ever draw a copy that is smaller, so for them the two denominators agree.
+    ///
+    /// Its colour is the same argument one step on, and it is in the case below.
     func testTheComparisonBarsAreScaledAgainstTheLargerFile() {
         // A copy that came out bigger: the original is the shorter bar, and the copy fills the track.
         XCTAssertEqual(ShrinkSizeComparison.fraction(120, of: 180), 120.0 / 180.0, accuracy: 0.0001)
@@ -765,6 +767,22 @@ import Photos
         XCTAssertEqual(ShrinkSizeComparison.fraction(0, of: 0), 0, accuracy: 0.0001)
         // A negative size cannot happen and cannot draw backwards into the track if it did.
         XCTAssertEqual(ShrinkSizeComparison.fraction(-5, of: 100), 0, accuracy: 0.0001)
+    }
+
+    /// A copy that came out bigger is not drawn in the colour that means "lighter".
+    ///
+    /// The accent mint means "lighter" everywhere in this app, and the bar chart drew the copy in
+    /// it whatever the copy's size - so on the one screen that can report a copy larger than its
+    /// original, the chart drew the worse outcome in the colour of the better one, and longer than
+    /// the original's bar. Rendering the screen is what showed it; the source reads as an ordinary
+    /// two-colour chart.
+    func testACopyThatCameOutBiggerIsNotDrawnInTheAccentColour() {
+        XCTAssertEqual(ShrinkSizeComparison.copyTint(original: 420, copy: 126), ShrinkStyle.accent,
+                       "a smaller copy is the app's own good news")
+        XCTAssertEqual(ShrinkSizeComparison.copyTint(original: 420, copy: 420), ShrinkStyle.accent,
+                       "the same size is not worse, and not a warning either")
+        XCTAssertEqual(ShrinkSizeComparison.copyTint(original: 126, copy: 420), ShrinkStyle.danger,
+                       "a copy that grew is the one thing this of all screens must not recommend")
     }
 
     /// The batch flow learned in round 15 that a restriction is not a refusal. The one-video flow

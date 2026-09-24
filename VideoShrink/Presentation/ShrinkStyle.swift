@@ -442,8 +442,22 @@ struct ShrinkSizeComparison: View {
     var body: some View {
         VStack(spacing: 18) {
             sizeRow(originalTitle, bytes: original, color: ShrinkStyle.lilac)
-            sizeRow(copyTitle, bytes: copy, color: ShrinkStyle.accent)
+            sizeRow(copyTitle, bytes: copy, color: Self.copyTint(original: original, copy: copy))
         }
+    }
+
+    /// The colour the copy's bar is drawn in.
+    ///
+    /// The accent mint means "lighter" everywhere in this app, and on the one screen that can
+    /// report a copy which came out *bigger* it was still the accent - so the bar chart drew the
+    /// worse outcome in the colour of the better one, and drew it longer. The render made that
+    /// obvious; the source reads as an ordinary two-colour chart. A copy that grew is drawn in the
+    /// warning colour instead, which is the same colour this app already uses for the one other
+    /// thing it wants looked at.
+    ///
+    /// Static and internal so a case can state the boundary rather than re-derive it.
+    static func copyTint(original: Int64, copy: Int64) -> Color {
+        copy > original ? ShrinkStyle.danger : ShrinkStyle.accent
     }
 
     private func sizeRow(_ title: String, bytes: Int64, color: Color) -> some View {
