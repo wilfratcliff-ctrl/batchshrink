@@ -27,6 +27,7 @@
 
 import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -435,30 +436,40 @@ function runTests() {
  * Moves the screen snapshots the test target drew out of the simulator.
  *
  * `testRenderEveryScreenToAPng` writes PNGs to `NSTemporaryDirectory()`, which inside a hosted
- * unit test is the host app's own temporary directory - a real directory inside the simulator's
- * data container, one `simctl` lookup away from this machine's filesystem. They are copied to
- * `build/Screens` so the CI job can publish them as artifacts.
+ * unit test is a temporary directory inside the simulator's data container on this machine's
+ * disk. They are copied to `build/Screens` so the CI job can publish them as artifacts.
+ *
+ * The directory is found by walking the device's data containers rather than by asking `simctl`
+ * for the app's container by bundle identifier, which was the first attempt and answered
+ * `SimError code=405` on the runner: the identifier that owns the directory the tests write to is
+ * not necessarily the one an installed app is looked up by, and a walk does not care which
+ * container it is. Every container that has the directory is copied, so this cannot silently pick
+ * the wrong one.
  *
  * A missing directory is reported and never fatal: this is a convenience for a human looking at
  * the design, and a run that drew nothing is not a reason to fail a green test suite.
  */
 function copyScreenSnapshots(udid) {
-  const harnessBundleID = 'com.example.VideoShrink';
-  const container = spawnSync('xcrun', ['simctl', 'get_app_container', udid, harnessBundleID, 'data'],
-    { encoding: 'utf8' });
-  if (container.status !== 0) {
-    console.log(`[verify-native-tests] no screen snapshots to publish: ${container.stderr.trim()}`);
-    return;
-  }
-  const source = join(container.stdout.trim(), 'tmp', 'BatchShrinkScreens');
-  if (!existsSync(source)) {
-    console.log('[verify-native-tests] the test target drew no screen snapshots.');
+  const containers = join(homedir(), 'Library', 'Developer', 'CoreSimulator', 'Devices', udid,
+    'data', 'Containers', 'Data', 'Application');
+  if (!existsSync(containers)) {
+    console.log(`[verify-native-tests] no simulator data containers at ${containers}.`);
     return;
   }
   const target = join(root, 'build', 'Screens');
-  mkdirSync(target, { recursive: true });
-  cpSync(source, target, { recursive: true });
-  const drawn = readdirSync(target).filter(name => name.endsWith('.png')).sort();
+  let drawn = [];
+  for (const container of readdirSync(containers)) {
+    const source = join(containers, container, 'tmp', 'BatchShrinkScreens');
+    if (!existsSync(source)) continue;
+    mkdirSync(target, { recursive: true });
+    cpSync(source, target, { recursive: true });
+    drawn = drawn.concat(readdirSync(source).filter(name => name.endsWith('.png')));
+  }
+  drawn.sort();
+  if (drawn.length === 0) {
+    console.log('[verify-native-tests] the test target drew no screen snapshots.');
+    return;
+  }
   console.log(`[verify-native-tests] ${drawn.length} screen snapshot(s) in build/Screens: ${drawn.join(', ')}`);
 }
 
