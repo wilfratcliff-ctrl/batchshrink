@@ -2317,12 +2317,7 @@ import UIKit
             .appendingPathComponent("BatchShrinkScreens", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 
-        let fixture = BatchFixture(assets: [
-            asset("a", bytes: 420_000_000, duration: 182),
-            asset("b", bytes: 180_000_000, duration: 64),
-            asset("c", bytes: 96_000_000, duration: 41),
-            asset("d", bytes: nil, duration: 12),
-        ])
+        let fixture = BatchFixture(assets: screenshotAssets())
 
         let source = VideoMetadata(duration: 182, width: 3840, height: 2160, bytes: 420_000_000,
                                    fileType: "MOV", audioTrackCount: 1, isPlayable: true,
@@ -2375,22 +2370,36 @@ import UIKit
         // becomes one column, figures that stop sharing a row with their labels, pills that stack.
         // A branch that was written from the source and never rendered is a guess, and this file
         // exists because guesses about layout are how a "visual pass" ends up changing nothing.
-        try drawLargeTextScreens(fixture, source: source, output: output, into: directory)
+        try await drawLargeTextScreens(postRun: fixture, source: source, output: output,
+                                       into: directory)
     }
 
     /// The screens where text has the most room to break something, drawn at `.accessibility3`.
     ///
     /// Not all thirteen: these are the ones carrying the most text in the tightest space, and one
     /// accessibility pass over them is what shows whether the branches do what they claim.
+    ///
+    /// A fixture of its own, and that is the point rather than tidiness. The run driven above
+    /// records every video it finishes, so on that first fixture every tile is already "Previously
+    /// shrunk" and the summary offers "Select all 0". The first version of this drew the
+    /// accessibility screens from the post-run model, and the artefact showed a state no user
+    /// meets - which is the trap in drawing pictures from a model that has a history.
+    ///
+    /// The finished screen is the one exception, and it is drawn from the fixture that has just
+    /// finished, because that is the only state that screen exists in.
     @MainActor
-    private func drawLargeTextScreens(_ fixture: BatchFixture, source: VideoMetadata,
-                                      output: VideoMetadata, into directory: URL) throws {
+    private func drawLargeTextScreens(postRun: BatchFixture, source: VideoMetadata,
+                                      output: VideoMetadata, into directory: URL) async throws {
+        let fixture = BatchFixture(assets: screenshotAssets())
+        await scan(fixture)
         let large = DynamicTypeSize.accessibility3
         try draw("L01-start", BatchStartScreen(batch: fixture.batch, useSingleVideo: {},
                                                openDeletion: {}), into: directory,
                  dynamicTypeSize: large)
         try draw("L02-library-summary", BatchSummaryScreen(batch: fixture.batch, openQuality: {}),
                  into: directory, dynamicTypeSize: large)
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
         try draw("L03-choose-videos",
                  BatchSelectionScreen(batch: fixture.batch, confirmStart: .constant(false),
                                       openQuality: {}),
@@ -2400,10 +2409,18 @@ import UIKit
                  into: directory, dynamicTypeSize: large)
         try draw("L05-originals-sheet", DeletionSheet(settings: fixture.settings),
                  into: directory, dynamicTypeSize: large)
-        try draw("L06-finished", BatchFinishedScreen(batch: fixture.batch),
+        try draw("L06-finished", BatchFinishedScreen(batch: postRun.batch),
                  into: directory, dynamicTypeSize: large)
         try draw("L07-one-video-result", ShrinkResult(source: source, output: output, saved: false),
                  into: directory, dynamicTypeSize: large)
+    }
+
+    /// One library's worth of videos, named once so both fixtures draw the same thing.
+    private func screenshotAssets() -> [LibraryAsset] {
+        [asset("a", bytes: 420_000_000, duration: 182),
+         asset("b", bytes: 180_000_000, duration: 64),
+         asset("c", bytes: 96_000_000, duration: 41),
+         asset("d", bytes: nil, duration: 12)]
     }
 
     /// Draws one screen at the size of an ordinary iPhone and writes it as a PNG.
