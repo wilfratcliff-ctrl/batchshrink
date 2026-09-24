@@ -377,6 +377,29 @@ needs to say why, because the reason it gives is exactly the part that goes stal
 it now, with a second fault-injection mutation for the shape that got through: 72 mutations, all
 caught, up from 70 when this round started.
 
+### A gate that fails for reasons of its own is not a gate
+
+The launch job went red on a commit whose only change was to this file:
+
+```
+LaunchSmokeUITests.swift:42: error: Failed to get background assertion for target app with
+pid 10223: Timed out while acquiring background assertion.
+```
+
+`app.launch()` never returned, so the test learned nothing about the app, and the same commit
+passed on the next attempt. `scripts/verify-app-launch.mjs` already waits for `simctl bootstatus
+-b` before it runs, so the boot race was handled and this is the layer underneath it.
+
+The job now retries once, and only for this: the output is piped so the script can read the failure
+it is deciding about, the retry announces itself in the log, and **anything else fails immediately
+with the output printed as before**. A green line never hides that the first attempt failed, and a
+real regression cannot be retried into a pass.
+
+Worth keeping beside the accessibility pass, because they are the same lesson from two directions:
+the screenshot harness was drawing from a model with a history, and this was a job that could go
+red without anyone having broken anything. **Both were instruments that lied about what they had
+measured, and in both cases the fix was to make the instrument say what it actually did.**
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
