@@ -2372,6 +2372,50 @@ import UIKit
         // exists because guesses about layout are how a "visual pass" ends up changing nothing.
         try await drawLargeTextScreens(postRun: fixture, source: source, output: output,
                                        into: directory)
+        try await drawTheScreensNothingHadDrawn(directory)
+    }
+
+    /// The screens the first pass over this file left out.
+    ///
+    /// The first version of the screenshot test drew the thirteen screens on the happy path and
+    /// nothing else, which left the paused run, the working run, a failed scan, an empty library
+    /// and the list of refused videos unseen - five surfaces, two of them carrying more text than
+    /// any screen on the happy path. They are the states a user meets when something is slow, or
+    /// happens slowly, or goes wrong, which is when a layout is least likely to have been checked.
+    @MainActor
+    private func drawTheScreensNothingHadDrawn(_ directory: URL) async throws {
+        // A run held mid-export: the working screen while it is working, then the same run paused.
+        let held = BatchFixture(assets: screenshotAssets())
+        held.transcoder.hold = true
+        await scan(held)
+        held.batch.beginSelecting()
+        held.batch.selectAll()
+        held.batch.start()
+        await eventually { held.transcoder.gate != nil }
+        try draw("14-working", BatchProcessingScreen(batch: held.batch), into: directory)
+
+        held.batch.pause()
+        held.transcoder.hold = false
+        held.transcoder.release()
+        await eventually { held.batch.phase == .paused }
+        try draw("15-paused", BatchPausedScreen(batch: held.batch), into: directory)
+
+        // A library scan that failed, which is the batch flow's own recovery screen - a different
+        // screen from the one-video flow's, and one nothing had ever drawn.
+        let failing = BatchFixture(assets: [])
+        failing.scanner.error = .retrieval
+        // Driven by hand rather than through `scan`, which waits for `.scanned` - this scan is
+        // meant to end in `.failed`, and the helper would wait for a phase that never arrives.
+        failing.batch.scan()
+        await eventually { failing.batch.phase == .failed }
+        try draw("16-batch-recovery", BatchRecoveryScreen(batch: failing.batch,
+                                                          useSingleVideo: {}), into: directory)
+
+        // A library with nothing in it at all: the one state that says so rather than naming videos.
+        let empty = BatchFixture(assets: [])
+        await scan(empty)
+        try draw("17-empty-library", BatchSummaryScreen(batch: empty.batch, openQuality: {}),
+                 into: directory)
     }
 
     /// The screens where text has the most room to break something, drawn at `.accessibility3`.
