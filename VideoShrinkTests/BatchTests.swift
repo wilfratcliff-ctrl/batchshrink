@@ -2369,6 +2369,41 @@ import UIKit
                  ShrinkRecovery(failed: true,
                                 message: "There isn’t enough free space. Free some space on your iPhone, then try again."),
                  into: directory)
+
+        // The same screens again at a large accessibility text size, because the app is full of
+        // `dynamicTypeSize.isAccessibilitySize` branches that no one has ever seen - a grid that
+        // becomes one column, figures that stop sharing a row with their labels, pills that stack.
+        // A branch that was written from the source and never rendered is a guess, and this file
+        // exists because guesses about layout are how a "visual pass" ends up changing nothing.
+        try drawLargeTextScreens(fixture, source: source, output: output, into: directory)
+    }
+
+    /// The screens where text has the most room to break something, drawn at `.accessibility3`.
+    ///
+    /// Not all thirteen: these are the ones carrying the most text in the tightest space, and one
+    /// accessibility pass over them is what shows whether the branches do what they claim.
+    @MainActor
+    private func drawLargeTextScreens(_ fixture: BatchFixture, source: VideoMetadata,
+                                      output: VideoMetadata, into directory: URL) throws {
+        let large = DynamicTypeSize.accessibility3
+        try draw("L01-start", BatchStartScreen(batch: fixture.batch, useSingleVideo: {},
+                                               openDeletion: {}), into: directory,
+                 dynamicTypeSize: large)
+        try draw("L02-library-summary", BatchSummaryScreen(batch: fixture.batch, openQuality: {}),
+                 into: directory, dynamicTypeSize: large)
+        try draw("L03-choose-videos",
+                 BatchSelectionScreen(batch: fixture.batch, confirmStart: .constant(false),
+                                      openQuality: {}),
+                 into: directory, dynamicTypeSize: large)
+        try draw("L04-quality-sheet", QualitySheet(settings: fixture.settings,
+                                                   estimate: { _ in nil }),
+                 into: directory, dynamicTypeSize: large)
+        try draw("L05-originals-sheet", DeletionSheet(settings: fixture.settings),
+                 into: directory, dynamicTypeSize: large)
+        try draw("L06-finished", BatchFinishedScreen(batch: fixture.batch),
+                 into: directory, dynamicTypeSize: large)
+        try draw("L07-one-video-result", ShrinkResult(source: source, output: output, saved: false),
+                 into: directory, dynamicTypeSize: large)
     }
 
     /// Draws one screen at the size of an ordinary iPhone and writes it as a PNG.
@@ -2387,12 +2422,14 @@ import UIKit
     /// same empty rectangle. The window is hidden again afterwards, and the fixed frame is what
     /// makes two screenshots comparable.
     @MainActor
-    private func draw(_ name: String, _ view: some View, into directory: URL) throws {
+    private func draw(_ name: String, _ view: some View, into directory: URL,
+                      dynamicTypeSize: DynamicTypeSize = .large) throws {
         let phone = CGRect(x: 0, y: 0, width: 393, height: 852)
         let host = UIHostingController(rootView: view
             .frame(width: phone.width, height: phone.height)
             .background(ShrinkStyle.canvas)
-            .environment(\.colorScheme, .dark))
+            .environment(\.colorScheme, .dark)
+            .environment(\.dynamicTypeSize, dynamicTypeSize))
 
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
         let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: phone)
