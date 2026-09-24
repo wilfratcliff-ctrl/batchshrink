@@ -311,6 +311,34 @@ than as a bar.
 
 The pattern worth keeping: each of these was invisible in the source and obvious in one picture.
 
+### The accessibility text sizes, looked at for the first time
+
+The app is full of `dynamicTypeSize.isAccessibilitySize` branches - the grid becomes one column,
+figures stop sharing a row with their labels, the two header pills stack - and not one of them had
+ever been rendered. Seven of the thirteen screens are drawn a second time at `.accessibility3` now:
+the ones carrying the most text in the tightest space.
+
+**They do what they claim.** The pills stack, the grid goes to one column, the figures wrap, and
+nothing overlaps or truncates inside the content. That is the first evidence for those branches
+that is not a reading of the source.
+
+**The artefact caught the harness lying, not the app.** The first run of it drew the summary with
+"Select all 0" and every tile "Previously shrunk", because the screens were drawn from the fixture
+the run above had just finished - and a run records what it finished. A second fixture, scanned and
+not run, is what the accessibility pass is for; the finished screen keeps the post-run one because
+that is the only state it exists in. **A picture drawn from a model with a history is a picture of
+a state, and it has to be the state you meant.**
+
+**And a failed upload must not fail a green suite.** The run that first drew these had 414 tests
+pass and was marked red, because `actions/upload-artifact` timed out five times talking to GitHub's
+artefact service. The screenshots are for a human to look at; the step still reports failure, but it
+is no longer the build's verdict.
+
+**One limitation of the harness, recorded so nobody fixes a non-bug:** these are drawn in an
+off-screen window with no safe area, so `safeAreaInset` does not inset the scrolling content and
+the bottom action bar is drawn over it rather than reserving its space. The *content* layout in
+these pictures is faithful; the bar's placement at the bottom of the frame is not.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
