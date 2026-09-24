@@ -2487,33 +2487,54 @@ import UIKit
     /// A hosting controller in an off-screen window is the arrangement that does lay a scroll view
     /// out. SwiftUI commits a scroll view's content on the run loop *after* the layout pass, so the
     /// snapshot waits a tenth of a second before taking it; without that wait the picture is the
-    /// same empty rectangle. The window is hidden again afterwards, and the fixed frame is what
-    /// makes two screenshots comparable.
+    /// same empty rectangle.
+    ///
+    /// **The picture is as tall as the content, not as tall as a phone.** That is the second thing
+    /// this method learned the hard way, and it is the more embarrassing one: a view handed a fixed
+    /// 852-point frame and given more content than fits does not overflow it, it *compresses* -
+    /// truncating Text with an ellipsis. The accessibility renders came back with
+    /// "Your copy is ready. Gi…" and "294 MB less than the…", neither of which can happen on a
+    /// device, because neither of those two Texts has a line limit; the only three `lineLimit(1)`
+    /// sites in the app are a pill, a brand lockup and the figure inside the progress orb. So the
+    /// harness was drawing its own compression and calling it a screen, in the one pass designed to
+    /// find text that does not fit.
+    ///
+    /// The frame is measured from the content now, so nothing is compressed and nothing is clipped.
+    /// The images are taller than a phone; `phone` is what a phone shows, and the bar sits at the
+    /// bottom of the content rather than of the screen.
     @MainActor
     private func draw(_ name: String, _ view: some View, into directory: URL,
                       dynamicTypeSize: DynamicTypeSize = .large) throws {
-        let phone = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let width: CGFloat = 393
+        let phone = CGSize(width: width, height: 852)
         let host = UIHostingController(rootView: view
-            .frame(width: phone.width, height: phone.height)
+            .frame(width: width)
             .background(ShrinkStyle.canvas)
             .environment(\.colorScheme, .dark)
             .environment(\.dynamicTypeSize, dynamicTypeSize))
 
         let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
-        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: phone)
-        window.frame = phone
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: CGRect(origin: .zero, size: phone))
         window.rootViewController = host
         window.isHidden = false
-        host.view.frame = phone
-        host.view.setNeedsLayout()
-        host.view.layoutIfNeeded()
-        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        layOut(host.view, in: CGRect(origin: .zero, size: phone))
+
+        // What the content actually wants. Bounded above so a runaway layout cannot ask for a
+        // gigapixel image, and below so a short screen is still a phone-shaped picture.
+        let wanted = host.view.systemLayoutSizeFitting(
+            CGSize(width: width, height: UIView.layoutFittingCompressedSize.height),
+            withHorizontalFittingPriority: .required,
+            verticalFittingPriority: .fittingSizeLevel)
+        let height = min(max(phone.height, wanted.height.rounded(.up)), 2_400)
+        let frame = CGRect(x: 0, y: 0, width: width, height: height)
+        window.frame = frame
+        layOut(host.view, in: frame)
         defer { window.isHidden = true }
 
         let format = UIGraphicsImageRendererFormat.default()
         format.scale = 2
         format.opaque = true
-        let image = UIGraphicsImageRenderer(bounds: phone, format: format).image { context in
+        let image = UIGraphicsImageRenderer(bounds: frame, format: format).image { context in
             window.layer.render(in: context.cgContext)
         }
         guard let data = image.pngData() else {
@@ -2523,6 +2544,15 @@ import UIKit
         let file = directory.appendingPathComponent("\(name).png")
         try data.write(to: file)
         print("[screens] wrote \(file.path)")
+    }
+
+    /// Lays a hosted view out at `frame` and gives SwiftUI the run loop turn it needs to commit it.
+    @MainActor
+    private func layOut(_ view: UIView, in frame: CGRect) {
+        view.frame = frame
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
     }
 
     private func scan(_ fixture: BatchFixture) async {
