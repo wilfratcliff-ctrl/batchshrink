@@ -289,6 +289,28 @@ app was fine; the wait was for the wrong thing. Its sibling one test down had th
 The lesson worth keeping: **a project with no renderer will make visual claims it cannot check,
 and a suite run once will look green.** Both are now cheap to avoid.
 
+### What the first real look changed — selection screen, one row of controls, opaque bar
+
+With the screens visible, three changes went in, all of them things the source could not have told
+anyone.
+
+**The selection screen gave the videos their space back.** It showed two rows of thumbnails and put
+the rest below the fold, for two reasons that were plain in the render. The quality setting had a
+full-width card of its own between the headline and the grid - about 140 of the screen's 852
+points, most of a row, to say three words and show a chevron. And each tile's thumbnail was 0.92,
+taller than it is wide, which at 180 points on a 166-point-wide tile was most of the tile's height
+*and* cropped a landscape video to a portrait slice of its middle: the picture on the tile was not
+the picture in the video. 16:9 is the shape of the media. The quality setting is a pill beside the
+sort control now, on the row under the headline, and the screen shows four videos and its footer
+where it used to show two and a clipped card.
+
+**The action bar is opaque.** It was `ShrinkStyle.canvas.opacity(0.97)`, which on a screen made of
+one flat colour bought nothing except a ghost of whatever was scrolling underneath - the summary
+screen drew its Quality card half-visible through the bar, which reads as a clipped card rather
+than as a bar.
+
+The pattern worth keeping: each of these was invisible in the source and obvious in one picture.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:

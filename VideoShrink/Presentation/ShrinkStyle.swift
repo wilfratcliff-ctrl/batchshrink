@@ -311,7 +311,12 @@ struct ShrinkActionBar<Content: View>: View {
             .frame(maxWidth: 540)
             .padding(.horizontal, ShrinkStyle.gutter).padding(.top, 18).padding(.bottom, 12)
             .frame(maxWidth: .infinity)
-            .background(ShrinkStyle.canvas.opacity(0.97))
+            // Opaque, and it was 0.97. The background is one flat colour, so three percent of
+            // transparency bought nothing except a ghost of whatever was scrolling underneath: the
+            // summary screen drew its Quality card half-visible through the bar, which reads as a
+            // clipped card rather than as a bar. A bar that hides what passes under it is the
+            // ordinary arrangement; a bar that nearly hides it is the one that looks wrong.
+            .background(ShrinkStyle.canvas)
             .overlay(alignment: .top) { Rectangle().fill(ShrinkStyle.hairline).frame(height: 1) }
     }
 }
