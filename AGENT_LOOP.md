@@ -248,6 +248,47 @@ was never printed and the temporary copy on disk was overwritten.
 iPhone can install it, and it is not a substitute for the EAS `preview` profile after 1 October or
 for the device acceptance plan. Nothing has yet been run against a real Photos library.
 
+### The app can be looked at now — and the first look found something
+
+**The owner installed the build and said it seemed entirely unchanged.** Both halves of that were
+worth taking seriously. The build *is* the current tree - the binary contains strings that only
+exist in rounds 21 to 28 and does not contain one deleted in round 29 - but he was right that there
+was almost nothing to see, and the reason is that this project has never had a way to look at its
+own interface. Round 29's note says so in its own words: "none of the visual result can be seen
+from this machine". A visual pass written blind is a spacing constant moved four points.
+
+That is over. `BatchTests.testRenderEveryScreenToAPng` draws all thirteen screens with the
+fixtures the suite already builds, walking the batch model through its phases so the summary,
+selection and finished screens are real states rather than hand-made ones.
+`scripts/verify-native-tests.mjs` copies the PNGs out of the simulator and the CI job publishes
+them as an artifact.
+
+**Two wrong turns, both instructive, both in the record rather than hidden.** `ImageRenderer` was
+the first renderer and drew the start screen as an empty dark rectangle with its action bar at the
+bottom - because every screen in the flow is a `ScrollView` and `ImageRenderer` lays the container
+out without its content. The one-video welcome, a plain stack, came out perfectly, which is what
+identified the cause rather than leaving it to guesswork; drawing through a hosting controller in
+an off-screen window fixed it. Then `simctl get_app_container` answered `SimError code=405` on the
+runner and the artifact was empty, so the copy step walks the device's data containers instead of
+asking for a container by bundle identifier.
+
+**The first thing the images showed was a defect in the app's largest type.** The summary card's
+headline read **"409–552.5 MB"**: `ByteCountFormatter` formats each end of a range on its own, so
+one came out a whole number and the other carried a decimal. Two ends of one estimate, written at
+two precisions, in the biggest text on the screen a user reads to decide whether the whole thing is
+worth doing. It is "409–553 MB" now - both ends whole when either is, the lower rounded down and
+the upper up so the band is never narrower than its figures - and a case pins all four shapes. The
+same look found "70.0%" for a saving of exactly seventy per cent, which is a range of fraction
+lengths now.
+
+**And running the suite twice found a flaky wait**, which one run could never have shown:
+`testPausingAndResumingReportsTheReasonOnlyWhileItIsPaused` waited on a saved count and then
+asserted the run had finished, and the count moves while the run is still writing its queue. The
+app was fine; the wait was for the wrong thing. Its sibling one test down had the same shape.
+
+The lesson worth keeping: **a project with no renderer will make visual claims it cannot check,
+and a suite run once will look green.** Both are now cheap to avoid.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
