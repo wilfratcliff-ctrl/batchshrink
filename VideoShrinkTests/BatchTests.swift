@@ -2384,6 +2384,58 @@ import UIKit
         try await drawLargeTextScreens(postRun: fixture, source: source, output: output,
                                        into: directory)
         try await drawTheScreensNothingHadDrawn(directory)
+        try await drawTheSurfacesStillUnseen(directory)
+    }
+
+    /// Four surfaces that are not "screens" in the flow and so fell outside both earlier passes:
+    /// the settings and help list, the list of videos a run refused, the per-video result rows, and
+    /// the quick look at a video before it is chosen or deleted.
+    ///
+    /// The settings list is the largest single body of text in the app and has never been looked at;
+    /// the result rows are the only place a run explains itself one video at a time, and the only
+    /// place five different outcomes appear side by side.
+    @MainActor
+    private func drawTheSurfacesStillUnseen(_ directory: URL) async throws {
+        let fixture = BatchFixture(assets: screenshotAssets())
+        try draw("18-settings-and-help", ShrinkHelp(settings: fixture.settings), into: directory)
+
+        // A library the scan partly refused, which is the only thing that draws the reason list.
+        let mixed = BatchFixture(assets: [])
+        mixed.scanner.result = LibraryScanResult(
+            assets: [asset("a", bytes: 420_000_000), asset("b", bytes: 180_000_000)],
+            videoCount: 4,
+            unsupportedCount: 2,
+            unknownSizeCount: 0,
+            sizeSource: .reportedByPhotos,
+            measuredOnDeviceCount: 0,
+            refusedAssets: [asset("c", bytes: 96_000_000, unsupported: "HDR video"),
+                            asset("d", bytes: nil, unsupported: "Slow-motion video")])
+        mixed.batch.scan()
+        await eventually { mixed.batch.phase == .scanned }
+        try draw("19-refused-videos", BatchSummaryScreen(batch: mixed.batch, openQuality: {}),
+                 into: directory)
+
+        // Every outcome the per-video row can carry, together, because they are only ever compared
+        // with each other.
+        let rowAsset = asset("row", bytes: 420_000_000, duration: 128)
+        try draw("20-result-rows", VStack(alignment: .leading, spacing: 18) {
+            BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .saved(
+                Savings(originalBytes: 420_000_000, compressedBytes: 126_000_000))))
+            BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .skipped(
+                "This copy wasn’t smaller than the original, so it wasn’t saved.")))
+            BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .failed(.insufficientStorage)))
+            BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .needsCheck),
+                             finding: .copyInPhotos)
+            BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .needsCheck),
+                             finding: .unresolved(question: MidSaveFinding.limitedAccessQuestion))
+        }, into: directory)
+
+        // The quick look, which is what a video looks like before it is chosen or deleted.
+        try draw("21-quick-look",
+                 VideoScrubSheet(asset: screenshotAssets()[0]) {
+                     AVPlayerItem(url: URL(fileURLWithPath: "/mock-preview.mov"))
+                 },
+                 into: directory)
     }
 
     /// The screens the first pass over this file left out.
