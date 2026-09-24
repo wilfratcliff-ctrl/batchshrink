@@ -66,7 +66,11 @@ struct DeletionSheet: View {
         let layout = dynamicTypeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
-        layout {
+        // The `return` is required, and Rule F in the call-site checker missed this shape until the
+        // compiler found it. `body` is the `View` protocol's own requirement and inherits its
+        // `@ViewBuilder`, so a bare `body` needs no return; this property is not `body`, so it is an
+        // ordinary getter with a name bound before its expression, and it needs one.
+        return layout {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(ShrinkStyle.danger)
                 .accessibilityHidden(true)

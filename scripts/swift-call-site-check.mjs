@@ -105,13 +105,27 @@
  *   not exist - and this is a shape, which is why it needed its own rule rather than a tweak to
  *   an existing one.
  *
- *   A property is reported when its declared type is neither `Void` nor `some View`, its body
- *   contains no `return` at all, and the first statement in that body begins with `let`, `var`,
- *   `guard`, `for`, `while`, `repeat`, `defer` or `do`. Those cannot be expressions, so a body
- *   that opens with one and never returns is wrong whatever else is true of it. A body that opens
- *   with an expression - however many lines it wraps across - is left alone, which is what keeps
- *   the rule quiet on the hundreds of single-expression getters this codebase writes. `get`/`set`
- *   accessor blocks open with `get`, so they are left alone too.
+ *   A property is reported when its declared type is not `Void`, its body contains no `return` at
+ *   all, and the first statement in that body begins with `let`, `var`, `guard`, `for`, `while`,
+ *   `repeat`, `defer` or `do`. Those cannot be expressions, so a body that opens with one and never
+ *   returns is wrong whatever else is true of it. A body that opens with an expression - however
+ *   many lines it wraps across - is left alone, which is what keeps the rule quiet on the hundreds
+ *   of single-expression getters this codebase writes. `get`/`set` accessor blocks open with `get`,
+ *   so they are left alone too, and so is any property marked `@ViewBuilder`: a builder allows a
+ *   body of statements without a return, which is the whole point of it.
+ *
+ *   `some View` used to be excluded along with `@ViewBuilder`, on the reasoning that a view body
+ *   needs no return. That is true of a view *builder* and false of an ordinary `some View`
+ *   property, and both shapes are everywhere in this app - so the exclusion hid half the targets.
+ *   Within the hour of writing the rule, a two-statement `some View` property without a `return`
+ *   broke the build: the compiler found `DeletionSheet.warning`, which this rule had been skipping.
+ *
+ *   The distinction it now draws is the one Swift actually draws. `View` declares
+ *   `@ViewBuilder var body: Self.Body { get }`, and a conforming type inherits that attribute, so a
+ *   property named `body` whose type is `some View` is a builder body and needs no `return` - which
+ *   is why widening the rule to every `some View` property immediately reported
+ *   `QualityPillGroup.body`, code that compiles and always has. Any other `some View` property is
+ *   an ordinary getter and needs one.
  *
  * WHAT THIS DOES NOT COVER - do not mistake it for a compiler:
  *   - types, generics, availability, access control, actor isolation, effects, and overload
@@ -1634,9 +1648,14 @@ function checkGetterReturns(files) {
       const decl = /^(\s*)(?:@\w+(?:\([^)]*\))?\s+)?(?:public |private |internal |fileprivate |final )*var\s+(\w+)\s*:\s*(.+?)\s*\{\s*$/.exec(lines[i]);
       if (!decl) continue;
       const [, indent, name, type] = decl;
-      // `some View` is a builder closure and `Void` has nothing to return; neither can be wrong
-      // in the way this rule describes.
-      if (/\bsome View\b/.test(type) || /\bVoid\b/.test(type)) continue;
+      // `Void` has nothing to return and cannot be wrong in the way this rule describes. `some
+      // View` deliberately does NOT appear here: only a `@ViewBuilder` body may be written as bare
+      // statements, and that is what the check below excludes instead.
+      if (/\bVoid\b/.test(type)) continue;
+      // A `body` of type `some View` is the `View` protocol's own requirement, and the protocol
+      // annotates it `@ViewBuilder`, so a conforming type inherits the attribute and a body of
+      // bare statements is exactly right. Everything else is an ordinary getter.
+      if (name === 'body' && /\bsome View\b/.test(type)) continue;
       const decorated = lines[i].includes('@ViewBuilder') ||
         (i > 0 && lines[i - 1].trim().startsWith('@ViewBuilder'));
       if (decorated) continue;

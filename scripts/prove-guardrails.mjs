@@ -649,6 +649,22 @@ const mutations = [
     // declaration has to end in `{`, because a property whose body opens on the same line is not
     // this rule's shape and the scanner deliberately does not guess at it.
     expect: 'is a getter with more than one statement and no return'
+  },
+  {
+    id: 'a some-View property that is not a body binds a name and forgets to return it',
+    file: 'VideoShrink/Presentation/ShrinkStyle.swift',
+    find: 'struct ShrinkEyebrow: View {',
+    replace: 'private struct RuleFSomeViewProbe: View {\n    var probe: some View {\n        let side = 1\n        Text("\\(side)")\n    }\n    var body: some View { probe }\n}\n\nstruct ShrinkEyebrow: View {',
+    gate: 'callsites',
+    // The second mutation for Rule F, and it exists because the first one was not enough. That
+    // first fault was a `Bool` property; the rule skipped every `some View` on the reasoning that a
+    // view body needs no return, which is true of a `@ViewBuilder` and false of anything else. An
+    // hour later a two-statement `some View` property broke the build for real, in a file the rule
+    // had been skipping. This probe is that shape, and it is deliberately NOT named `body`: a
+    // property named `body` with type `some View` inherits the `View` protocol's own `@ViewBuilder`
+    // and is the one case the rule must stay quiet about, which is why widening it naively reported
+    // `QualityPillGroup.body` - code that compiles and always has.
+    expect: 'is a getter with more than one statement and no return'
   }
 ];
 
