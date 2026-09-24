@@ -2,6 +2,7 @@ import XCTest
 import AVFoundation
 import Photos
 import SwiftUI
+import UIKit
 @testable import VideoShrink
 
 @MainActor final class BatchTests: XCTestCase {
@@ -2290,6 +2291,105 @@ import SwiftUI
     }
 
     // MARK: - Helpers
+
+    // MARK: - Drawing the screens
+
+    /// Renders the app's screens to PNG files, so that the design can be *looked at*.
+    ///
+    /// Every visual judgement this project has made so far was made blind. There is no Mac here,
+    /// no Xcode and no renderer, and round 29's own note says it outright - "none of the visual
+    /// result can be seen from this machine". That is how a round called a visual pass ends up
+    /// changing a spacing constant by four points and calling it a restyle: nobody could see the
+    /// before or the after.
+    ///
+    /// `ImageRenderer` is the cheapest way to fix that. It draws a SwiftUI view to a `UIImage`
+    /// with no window, no simulator screen and no Photos library, so every screen can be rendered
+    /// from the fixtures this file already builds. The PNGs land in the host app's temporary
+    /// directory, which is a real directory on the builder's disk - `scripts/verify-native-tests.mjs`
+    /// copies them out of the simulator and the CI job publishes them as artifacts.
+    ///
+    /// It lives in this file because the fixtures, `scan` and `eventually` that drive the model
+    /// into the states the later screens need are private to it.
+    func testRenderEveryScreenToAPng() async throws {
+        let directory = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("BatchShrinkScreens", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+
+        let fixture = BatchFixture(assets: [
+            asset("a", bytes: 420_000_000, duration: 182),
+            asset("b", bytes: 180_000_000, duration: 64),
+            asset("c", bytes: 96_000_000, duration: 41),
+            asset("d", bytes: nil, duration: 12),
+        ])
+
+        let source = VideoMetadata(duration: 182, width: 3840, height: 2160, bytes: 420_000_000,
+                                   fileType: "MOV", audioTrackCount: 1, isPlayable: true,
+                                   codec: .h264, nominalFrameRate: 30)
+        let output = VideoMetadata(duration: 182, width: 1920, height: 1080, bytes: 126_000_000,
+                                   fileType: "MOV", audioTrackCount: 1, isPlayable: true,
+                                   codec: .hevc, nominalFrameRate: 30)
+
+        try draw("01-introduction", ShrinkOnboarding {}, into: directory)
+        try draw("02-start", BatchStartScreen(batch: fixture.batch, useSingleVideo: {},
+                                              openDeletion: {}), into: directory)
+        try draw("03-looking-through-the-library", BatchScanningScreen(batch: fixture.batch),
+                 into: directory)
+
+        await scan(fixture)
+        try draw("04-library-summary", BatchSummaryScreen(batch: fixture.batch, openQuality: {}),
+                 into: directory)
+        try draw("05-quality-sheet", QualitySheet(settings: fixture.settings,
+                                                  estimate: { _ in nil }), into: directory)
+        try draw("06-originals-sheet", DeletionSheet(settings: fixture.settings), into: directory)
+
+        fixture.batch.beginSelecting()
+        fixture.batch.selectAll()
+        try draw("07-choose-videos",
+                 BatchSelectionScreen(batch: fixture.batch, confirmStart: .constant(false),
+                                      openQuality: {}),
+                 into: directory)
+
+        fixture.batch.start()
+        await eventually { fixture.batch.phase == .finished }
+        try draw("08-finished", BatchFinishedScreen(batch: fixture.batch), into: directory)
+
+        // The one-video flow's screens take values rather than a model, so they render directly.
+        try draw("09-one-video-welcome", ShrinkWelcome(), into: directory)
+        try draw("10-one-video-working",
+                 ShrinkProgress(stage: .transcoding, progress: 0.42, fromCloud: false,
+                                cancelling: false),
+                 into: directory)
+        try draw("11-one-video-result", ShrinkResult(source: source, output: output, saved: false),
+                 into: directory)
+        try draw("12-one-video-no-reduction",
+                 ShrinkResult(source: output, output: source, saved: false), into: directory)
+        try draw("13-recovery",
+                 ShrinkRecovery(failed: true,
+                                message: "There isn’t enough free space. Free some space on your iPhone, then try again."),
+                 into: directory)
+    }
+
+    /// Draws one screen at the size of an ordinary iPhone and writes it as a PNG.
+    ///
+    /// The frame is not decoration: `ImageRenderer` needs a definite size, and a fixed one is what
+    /// makes two screenshots comparable. A failure to draw is reported rather than swallowed, so a
+    /// blank artifact cannot be mistaken for a screen that happens to be empty.
+    @MainActor
+    private func draw(_ name: String, _ view: some View, into directory: URL) throws {
+        let phone = CGSize(width: 393, height: 852)
+        let renderer = ImageRenderer(content: view
+            .frame(width: phone.width, height: phone.height)
+            .background(ShrinkStyle.canvas)
+            .environment(\.colorScheme, .dark))
+        renderer.scale = 2
+        guard let image = renderer.uiImage, let data = image.pngData() else {
+            XCTFail("ImageRenderer drew nothing for \(name)")
+            return
+        }
+        let file = directory.appendingPathComponent("\(name).png")
+        try data.write(to: file)
+        print("[screens] wrote \(file.path)")
+    }
 
     private func scan(_ fixture: BatchFixture) async {
         fixture.scanner.result = LibraryScanResult(assets: fixture.assets,

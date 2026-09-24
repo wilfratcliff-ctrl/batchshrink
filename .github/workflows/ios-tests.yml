@@ -103,6 +103,21 @@ jobs:
       - name: Compile and run the XCTest cases
         run: node scripts/verify-native-tests.mjs
 
+      - name: Publish the screen snapshots
+        # The test target draws every screen to a PNG (see testRenderEveryScreenToAPng) and
+        # scripts/verify-native-tests.mjs copies them to build/Screens. This step is what turns
+        # them into something a person can look at: until it existed, every design decision in
+        # this project was made from the source alone, on a machine with no renderer.
+        #
+        # `if: always()` on purpose - a run that fails partway still drew the screens up to the
+        # point it failed, and those are exactly the pictures worth having.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen-snapshots
+          path: build/Screens
+          if-no-files-found: warn
+
   # JOB 2: build-expo-app
   #
   # Nothing else in this repository compiles the app that actually ships. `ios-tests` job

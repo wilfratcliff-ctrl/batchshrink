@@ -26,8 +26,8 @@
 // added to PATH for every child process.
 
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { delimiter, dirname, resolve } from 'node:path';
+import { cpSync, existsSync, mkdirSync, readdirSync } from 'node:fs';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -418,12 +418,48 @@ function runTests() {
     return;
   }
 
+  // The run drew the app's screens (see testRenderEveryScreenToAPng). They are inside the
+  // simulator now, which is a directory on this machine's disk, so they can simply be copied
+  // out and published - which is far easier to look at than a 200 MB xcresult bundle.
+  copyScreenSnapshots(destination.udid);
+
   banner(`${RUN_BANNER} PASSED`);
   console.log(
     '[verify-native-tests] The 162 XCTest cases ran and passed on the simulator. This executes the ' +
       'unit-test bodies. It does not exercise device behaviour: real deletion, audio sync, HDR, ' +
       'interruptions and iCloud retrieval still need a physical iPhone (docs/PHYSICAL_DEVICE_TEST_PLAN.md).'
   );
+}
+
+/**
+ * Moves the screen snapshots the test target drew out of the simulator.
+ *
+ * `testRenderEveryScreenToAPng` writes PNGs to `NSTemporaryDirectory()`, which inside a hosted
+ * unit test is the host app's own temporary directory - a real directory inside the simulator's
+ * data container, one `simctl` lookup away from this machine's filesystem. They are copied to
+ * `build/Screens` so the CI job can publish them as artifacts.
+ *
+ * A missing directory is reported and never fatal: this is a convenience for a human looking at
+ * the design, and a run that drew nothing is not a reason to fail a green test suite.
+ */
+function copyScreenSnapshots(udid) {
+  const harnessBundleID = 'com.example.VideoShrink';
+  const container = spawnSync('xcrun', ['simctl', 'get_app_container', udid, harnessBundleID, 'data'],
+    { encoding: 'utf8' });
+  if (container.status !== 0) {
+    console.log(`[verify-native-tests] no screen snapshots to publish: ${container.stderr.trim()}`);
+    return;
+  }
+  const source = join(container.stdout.trim(), 'tmp', 'BatchShrinkScreens');
+  if (!existsSync(source)) {
+    console.log('[verify-native-tests] the test target drew no screen snapshots.');
+    return;
+  }
+  const target = join(root, 'build', 'Screens');
+  mkdirSync(target, { recursive: true });
+  cpSync(source, target, { recursive: true });
+  const drawn = readdirSync(target).filter(name => name.endsWith('.png')).sort();
+  console.log(`[verify-native-tests] ${drawn.length} screen snapshot(s) in build/Screens: ${drawn.join(', ')}`);
 }
 
 function reportFailure(bannerLine, error) {
