@@ -339,6 +339,44 @@ off-screen window with no safe area, so `safeAreaInset` does not inset the scrol
 the bottom action bar is drawn over it rather than reserving its space. The *content* layout in
 these pictures is faithful; the bar's placement at the bottom of the frame is not.
 
+### The screens nothing had drawn: four more surfaces, one false statement
+
+The screenshot test covered the happy path and nothing else. Five surfaces had never been rendered
+at all - the working run, the paused run, the batch flow's own recovery screen, an empty library -
+and drawing them found the first defect in this whole exercise that is a **sentence** rather than a
+layout.
+
+**"0 of 4 saved. Copies already saved are in Photos."** That is the paused screen's subhead when a
+run is paused before its first video finishes: a claim that copies exist, under a headline reading
+"Nothing was lost". It was false, and it was false in the one place this product has spent thirty
+rounds learning not to be. Every case for `pauseSubhead` had been given one copy or two; none had
+ever been given none. It says "Nothing saved yet." now, and the count is not lost with the
+sentence - the card below it says how many videos are left. The missing case is the one that pins
+it.
+
+**The warning cards were spending a third of their width on a symbol.** At `.accessibility3` the
+deletion warning rendered as one paragraph of twenty short lines, because its triangle sat beside
+the words in an `HStack` and held its column at every text size. The symbol moves above the words
+at accessibility sizes, in `ShrinkNotice` and in the deletion warning - the two places an icon sits
+beside a paragraph, and the deletion one is the longest body of text in the app and the last screen
+before an original can be deleted.
+
+**And Rule F had a hole, which the compiler found within the hour.** Writing that layout fix meant
+two `some View` properties with a name bound before the expression and no `return`. The build broke
+on `DeletionSheet.warning`; Rule F, written an hour earlier for exactly that mistake, had skipped
+it, because the rule excluded every `some View` property on the reasoning that a view body needs no
+return.
+
+That reasoning is half right, and the wrong half is the one that matters. `View` declares
+`@ViewBuilder var body: Self.Body { get }`, so a conforming type inherits the attribute and a
+property *named* `body` with type `some View` is a builder body. Any other `some View` property is
+an ordinary getter and needs the return. Widening the rule without that distinction immediately
+reported `QualityPillGroup.body` - code that compiles and always has - which is what says the
+distinction is the real one rather than a convenient one. **A guard that excludes a whole category
+needs to say why, because the reason it gives is exactly the part that goes stale.** The rule draws
+it now, with a second fault-injection mutation for the shape that got through: 72 mutations, all
+caught, up from 70 when this round started.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
