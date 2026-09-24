@@ -1963,3 +1963,39 @@ pins both forms. The read also corrected three claims in this record and one in 
 own words cover two errors while a disk-full error and a cancelled fetch land on the plain sentence,
 and hiding the iCloud note on failure goes one step past what the audit recommended, which is now
 recorded as a choice rather than as the finding's own fix.
+
+
+### The screenshots were lying too, and the screens were repeating themselves
+
+Two more instrument faults and two more product faults, in the order they were found.
+
+**The harness was compressing content and drawing the compression.** The accessibility renders came
+back with "Your copy is ready. Gi..." and "294 MB less than the...". Neither can happen on a device:
+neither of those Texts has a line limit, and the only three `lineLimit(1)` sites in the app are a
+pill, a brand lockup and the figure inside the progress orb. A view handed a fixed 852-point frame
+and given more content than fits is not clipped, it is *compressed* - so the pass built to find text
+that does not fit was manufacturing text that does not fit.
+
+The cause was narrower than it looked. Every batch screen owns a ScrollView and a bar, so drawing one
+bare is faithful. The one-video screens own neither - `SingleVideoFlow` is the scroll view and the bar
+around them - so those four are drawn inside the scroll view they actually live in now. **A first
+attempt measured the content height and rendered a taller frame; it did not work, it put a black band
+across the top of the picture, and it was reverted rather than kept and described as a partial
+improvement.**
+
+**Three screens were naming themselves.** The eyebrow pill sat a few points under a navigation bar
+saying the same thing: "Finished" over a bar reading Finished, "Paused" over a headline that opened
+with the word, "Library summary" over "Your library". The eyebrow is the one place a screen can carry
+a fact it cannot state anywhere else - what the scan promises, what a run is doing to originals, what
+a copy's state is - and that rule is written on `ShrinkEyebrow` now, with the three examples, so the
+next screen does not put one back.
+
+**And the empty library said it three times**: "Nothing to shrink yet" as the headline, "0 videos in
+your Photos library." under it, and a card reading "No videos to shrink / There are no videos in your
+Photos library yet." The count line is gone and the card stays, because the card is the one that can
+also explain *why* there are none - a library BatchShrink cannot use, or an access it was not given.
+
+The lesson is the same one a third time, and it is now the dominant pattern of this stretch: **every
+instrument in this project has, at some point, drawn or reported something that was not the thing -
+the fixture with a history, the artifact upload that reddened a green suite, the frame that compressed
+its own content.** Check the instrument before believing the reading.
