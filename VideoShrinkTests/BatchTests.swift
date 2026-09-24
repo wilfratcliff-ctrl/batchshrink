@@ -2371,19 +2371,46 @@ import UIKit
 
     /// Draws one screen at the size of an ordinary iPhone and writes it as a PNG.
     ///
-    /// The frame is not decoration: `ImageRenderer` needs a definite size, and a fixed one is what
-    /// makes two screenshots comparable. A failure to draw is reported rather than swallowed, so a
-    /// blank artifact cannot be mistaken for a screen that happens to be empty.
+    /// Through a real window rather than `ImageRenderer`, and that is the whole of this method's
+    /// design. `ImageRenderer` was the first attempt because it needs no window at all - and it
+    /// drew the start screen as an empty dark rectangle with its action bar at the bottom and
+    /// nothing above it, because every one of these screens is a `ScrollView` and `ImageRenderer`
+    /// lays the scroll container out without laying its content out inside it. The one-video
+    /// welcome, which is a plain stack, came out perfectly, which is how the cause was found
+    /// rather than guessed.
+    ///
+    /// A hosting controller in an off-screen window is the arrangement that does lay a scroll view
+    /// out. SwiftUI commits a scroll view's content on the run loop *after* the layout pass, so the
+    /// snapshot waits a tenth of a second before taking it; without that wait the picture is the
+    /// same empty rectangle. The window is hidden again afterwards, and the fixed frame is what
+    /// makes two screenshots comparable.
     @MainActor
     private func draw(_ name: String, _ view: some View, into directory: URL) throws {
-        let phone = CGSize(width: 393, height: 852)
-        let renderer = ImageRenderer(content: view
+        let phone = CGRect(x: 0, y: 0, width: 393, height: 852)
+        let host = UIHostingController(rootView: view
             .frame(width: phone.width, height: phone.height)
             .background(ShrinkStyle.canvas)
             .environment(\.colorScheme, .dark))
-        renderer.scale = 2
-        guard let image = renderer.uiImage, let data = image.pngData() else {
-            XCTFail("ImageRenderer drew nothing for \(name)")
+
+        let scene = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first
+        let window = scene.map { UIWindow(windowScene: $0) } ?? UIWindow(frame: phone)
+        window.frame = phone
+        window.rootViewController = host
+        window.isHidden = false
+        host.view.frame = phone
+        host.view.setNeedsLayout()
+        host.view.layoutIfNeeded()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        defer { window.isHidden = true }
+
+        let format = UIGraphicsImageRendererFormat.default()
+        format.scale = 2
+        format.opaque = true
+        let image = UIGraphicsImageRenderer(bounds: phone, format: format).image { context in
+            window.layer.render(in: context.cgContext)
+        }
+        guard let data = image.pngData() else {
+            XCTFail("the window drew nothing for \(name)")
             return
         }
         let file = directory.appendingPathComponent("\(name).png")
