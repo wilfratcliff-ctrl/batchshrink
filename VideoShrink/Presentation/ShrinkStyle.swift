@@ -56,6 +56,14 @@ enum ShrinkStyle {
     static let radiusChip: CGFloat = 14
     static let radiusThumb: CGFloat = 12
 
+    /// How much larger than the system's `.large` a waiting indicator is drawn.
+    ///
+    /// The system's large indicator is about twenty points across, which reads as a small spinner
+    /// dropped into a large empty space wherever this app waits in one: inside the 144-point
+    /// progress ring, and inside the black 16:9 box the two players put on screen while they open.
+    /// One number for all three, because they are the same complaint.
+    static let waitingIndicatorScale: CGFloat = 1.8
+
     /// The brand mark's own rounding, as a fraction of its side.
     ///
     /// The mark is drawn at three sizes - 28 points in a toolbar, 60 in the hero artwork, and 216
@@ -401,7 +409,7 @@ struct ShrinkProgressOrb: View {
                 // spinner that had been dropped into a large empty ring - on the two screens a user
                 // waits on, which is where it is drawn.
                 ProgressView().controlSize(.large).tint(ShrinkStyle.accent)
-                    .scaleEffect(Self.indeterminateScale)
+                    .scaleEffect(ShrinkStyle.waitingIndicatorScale)
             }
         }
         .frame(width: 144, height: 144)
@@ -413,13 +421,6 @@ struct ShrinkProgressOrb: View {
     }
 }
 
-extension ShrinkProgressOrb {
-    /// How much larger the activity indicator is drawn than the system's `.large` size.
-    ///
-    /// Static and internal so a case can state the relationship rather than re-derive it: the ring
-    /// is 144 points across and the indicator is meant to occupy roughly a third of it.
-    static var indeterminateScale: CGFloat { 1.8 }
-}
 
 /// The two bars that put an original and its copy side by side.
 ///

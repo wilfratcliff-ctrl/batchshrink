@@ -2413,12 +2413,16 @@ import UIKit
         mixed.batch.scan()
         await eventually { mixed.batch.phase == .scanned }
         try draw("19-refused-videos", BatchSummaryScreen(batch: mixed.batch, openQuality: {}),
-                 into: directory)
+                 into: directory, height: 1_500)
 
         // Every outcome the per-video row can carry, together, because they are only ever compared
         // with each other.
         let rowAsset = asset("row", bytes: 420_000_000, duration: 128)
-        try draw("20-result-rows", VStack(alignment: .leading, spacing: 18) {
+        // In the card the run puts them in, with the page insets the screen gives it: a row drawn
+        // bare is a row at a width no screen ever gives it.
+        try draw("20-result-rows", VStack(alignment: .leading, spacing: 14) {
+            Text("Just finished").font(.subheadline.weight(.semibold))
+                .accessibilityAddTraits(.isHeader)
             BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .saved(
                 Savings(originalBytes: 420_000_000, compressedBytes: 126_000_000))))
             BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .skipped(
@@ -2428,7 +2432,10 @@ import UIKit
                              finding: .copyInPhotos)
             BatchFinishedRow(item: BatchItem(asset: rowAsset, state: .needsCheck),
                              finding: .unresolved(question: MidSaveFinding.limitedAccessQuestion))
-        }, into: directory)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(ShrinkStyle.cardPadding).shrinkCard()
+        .shrinkPageInsets(), into: directory, height: 1_500)
 
         // The quick look, which is what a video looks like before it is chosen or deleted.
         try draw("21-quick-look",
@@ -2562,8 +2569,13 @@ import UIKit
     @MainActor
     private func draw(_ name: String, _ view: some View, into directory: URL,
                       dynamicTypeSize: DynamicTypeSize = .large,
-                      wrappedInScrollView: Bool = false) throws {
-        let phone = CGRect(x: 0, y: 0, width: 393, height: 852)
+                      wrappedInScrollView: Bool = false,
+                      height: CGFloat = 852) throws {
+        // `height` is for the surfaces that live below a phone's fold. A screen is drawn at 852
+        // because that is what a phone shows; a surface that only appears after scrolling - the
+        // reason list under the estimate, the rows inside a finished run - is drawn in a taller
+        // frame, and the extra space is the scroll, not a claim about the layout.
+        let phone = CGRect(x: 0, y: 0, width: 393, height: height)
         let content = wrappedInScrollView ? AnyView(ScrollView { view }) : AnyView(view)
         let host = UIHostingController(rootView: content
             .frame(width: phone.width, height: phone.height)

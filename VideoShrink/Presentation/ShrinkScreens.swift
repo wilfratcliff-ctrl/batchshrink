@@ -316,6 +316,8 @@ struct VideoPreview: View {
                 } else if problem == nil {
                     VStack(spacing: 10) {
                         ProgressView()
+                            .controlSize(.large)
+                            .scaleEffect(ShrinkStyle.waitingIndicatorScale)
                         Text("Opening…").font(.footnote).foregroundStyle(.secondary)
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)

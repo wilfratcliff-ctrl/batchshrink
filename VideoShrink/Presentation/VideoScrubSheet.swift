@@ -94,6 +94,7 @@ struct VideoScrubSheet: View {
                 // the note below the box used to imply there was.
                 VStack(spacing: 10) {
                     ProgressView().tint(.white)
+                        .scaleEffect(ShrinkStyle.waitingIndicatorScale)
                     Text("Opening…").font(.footnote).foregroundStyle(.white.opacity(0.8))
                 }
             } else {
