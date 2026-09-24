@@ -548,8 +548,13 @@ import UIKit
         // Work is going again, so nothing is left explaining a pause that ended.
         XCTAssertNil(fixture.batch.pauseReason)
 
-        await eventually { fixture.batch.summary.savedCount == 1 }
-        XCTAssertEqual(fixture.batch.phase, .finished)
+        // Wait for the run to settle, not for its first counter to move. `savedCount` reaches 1
+        // while the run is still writing its queue and cleaning up, so waiting on the count and
+        // then asserting the phase was a race - it passed on the first CI run of this suite and
+        // failed on the second, reading "processing" where it expected "finished". Nothing was
+        // wrong with the app; the wait was for the wrong thing.
+        await eventually { fixture.batch.phase == .finished }
+        XCTAssertEqual(fixture.batch.summary.savedCount, 1)
     }
 
     func testFinishingAPausedRunLandsOnTheSummaryWithTheRestUntouched() async {
@@ -700,8 +705,13 @@ import UIKit
         // Whatever stopped the first attempt is over, and the row offers a second try.
         fixture.photos.retrievalFailures = [:]
         fixture.batch.retryFailed()
-        await eventually { fixture.batch.summary.savedCount == 2 }
+        // The phase, for the same reason as the case above: this second run is over when it says
+        // it is over, not when one of its counters has moved. `retryFailed` moves the phase to
+        // `.processing` before it returns, so waiting on `.finished` here cannot catch the
+        // previous run's own finished state.
+        await eventually { fixture.batch.phase == .finished }
 
+        XCTAssertEqual(fixture.batch.summary.savedCount, 2)
         XCTAssertEqual(fixture.batch.summary.failedCount, 0)
         // Only the video that failed was run again: a copy Photos already holds is never asked for
         // twice, because the second copy cannot be taken back.
