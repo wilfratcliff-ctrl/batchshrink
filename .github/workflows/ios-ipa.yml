@@ -1,0 +1,144 @@
+# An installable .ipa, built on a runner rather than on EAS's build queue.
+#
+# WHY THIS EXISTS, AND WHY IT IS NOT AN EAS BUILD.
+#
+# The EAS iOS build allowance for the free plan is exhausted until 1 October 2026: `eas build`
+# refuses before it creates anything. That allowance and the Actions minutes in `ios-tests.yml`
+# are two different quotas, and only the second one is free now that this repository is public.
+#
+# `eas build --local` runs the native build on whatever machine invokes it and does not touch
+# EAS's build queue, so on a public-repository macOS runner it costs nothing. It still needs the
+# EAS account, because that is where this project's distribution certificate and ad-hoc
+# provisioning profile live - the profile already has the owner's iPhone in it - and it reads
+# them through EXPO_TOKEN.
+#
+# It is dispatched by hand and never on a push: it takes about twenty minutes and produces a
+# ~100 MB artifact, so running it on every commit would be a waste of a runner.
+#
+# THE RELEASE IS THE DELIVERY MECHANISM, not a formality. Installing an ad-hoc .ipa without a
+# cable needs three HTTPS URLs: the manifest, the .ipa inside it, and the signature iOS checks
+# at install time. A release asset is a stable public HTTPS URL, an Actions artifact is not
+# (downloading one requires a signed-in session), so both files are published as release assets
+# and the printed install link is the manifest's own URL.
+
+name: Installable iPhone build
+
+on:
+  workflow_dispatch:
+
+permissions:
+  # A release has to be created and have assets uploaded to it.
+  contents: write
+
+jobs:
+  build-ipa:
+    name: Build a signed .ipa and publish it
+    # The same image the Expo build job uses, and for the same reason: the React Native
+    # dependency tree needs the toolchain macos-26 ships. See ios-tests.yml.
+    runs-on: macos-26
+    # A cold Expo prebuild, pod install, an unoptimised archive and an export. Twenty minutes is
+    # the observed order of magnitude; the bound is headroom, not an expectation.
+    timeout-minutes: 90
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        # `npm ci` also runs the postinstall that writes the pod mirror, which the local build
+        # compiles exactly as the cloud one does.
+        run: npm ci
+
+      - name: Record the toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Build the .ipa locally
+        # `--local` is the whole point: the build runs here rather than on EAS's queue, so it
+        # spends none of the monthly allowance that is still exhausted. The profile is the
+        # `preview` one - internal distribution, not a simulator build - because that is what
+        # produces an .ipa an iPhone will install.
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          npx --yes eas-cli@latest build \
+            --platform ios \
+            --profile preview \
+            --local \
+            --non-interactive \
+            --output ./BatchShrink.ipa
+
+      - name: Check the .ipa is really there
+        # A build that reports success and writes nothing would otherwise be published as an
+        # empty release, and the failure would surface on the phone rather than here.
+        run: |
+          test -f ./BatchShrink.ipa
+          ls -lh ./BatchShrink.ipa
+          unzip -l ./BatchShrink.ipa | head -20
+
+      - name: Write the over-the-air manifest
+        # iOS installs an ad-hoc build from a manifest: the .ipa's URL, the bundle identity and
+        # the app's own name. `bundle-version` is the build number, not the marketing version,
+        # and is read from app.json so the two cannot drift.
+        run: |
+          TAG="ios-preview-r${{ github.run_number }}"
+          BASE="https://github.com/wilfratcliff-ctrl/batchshrink/releases/download/$TAG"
+          BUILD_NUMBER=$(node -p "require('./app.json').expo.ios.buildNumber")
+          cat > manifest.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>items</key>
+            <array>
+              <dict>
+                <key>assets</key>
+                <array>
+                  <dict>
+                    <key>kind</key>
+                    <string>software-package</string>
+                    <key>url</key>
+                    <string>$BASE/BatchShrink.ipa</string>
+                  </dict>
+                </array>
+                <key>metadata</key>
+                <dict>
+                  <key>bundle-identifier</key>
+                  <string>com.wilfr.videoshrink</string>
+                  <key>bundle-version</key>
+                  <string>$BUILD_NUMBER</string>
+                  <key>kind</key>
+                  <string>software</string>
+                  <key>title</key>
+                  <string>BatchShrink</string>
+                </dict>
+              </dict>
+            </array>
+          </dict>
+          </plist>
+          PLIST
+          cat manifest.plist
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$TAG" \
+            --repo wilfratcliff-ctrl/batchshrink \
+            --title "BatchShrink for iPhone - run ${{ github.run_number }}" \
+            --notes "Ad-hoc build of ${{ github.sha }}, produced by the workflow in .github/workflows/ios-ipa.yml. Install on a registered iPhone by opening the manifest URL below in Safari." \
+            ./BatchShrink.ipa ./manifest.plist
+
+      - name: Print the install link
+        run: |
+          MANIFEST="https://github.com/wilfratcliff-ctrl/batchshrink/releases/download/$TAG/manifest.plist"
+          echo "::notice title=Install on your iPhone::Open this in Safari on the phone: itms-services://?action=download-manifest&url=$MANIFEST"
+          echo ""
+          echo "Manifest: $MANIFEST"
+          echo "Tap this on the iPhone (Safari): itms-services://?action=download-manifest&url=$MANIFEST"
