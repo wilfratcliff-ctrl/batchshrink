@@ -150,6 +150,30 @@ What a cloud build still does not do:
 
 ### The gate is blocked again: the account's Actions minutes are spent, and reset on 1 October
 
+**Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
+again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
+and was refused before it was created, with nothing queued and nothing charged:
+
+```
+This account has used its iOS builds from the Free plan this month, which will reset in 6 days
+(on Thu Oct 01 2026). Upgrade your plan for more builds with shorter wait times and longer
+timeouts, and to run more builds concurrently with a subscription plan.
+```
+
+The credentials are ready, the provisioning profile is active and one device is provisioned, so
+the refusal is the quota alone. `eas whoami` reports `wilfrat1`, and `wilfrat1s-team` is a second
+account the same owner owns, which is worth knowing because the monthly allowance is per account.
+The GitHub repository is private (an unauthenticated API call returns 404), so the macOS runners the
+workflow uses are still charged against the same exhausted allowance. A local build is not a route
+on this machine: `expo prebuild` refuses to generate the iOS project on Windows, and there is no
+Xcode here.
+
+The options, in the order they cost least: wait until 1 October, when both allowances reset and the
+`preview` command above works unchanged; make the repository public, which makes the macOS runners
+free and lets CI compile, test and launch the app on a simulator today (still no installable .ipa,
+because the launch job builds for the simulator with signing off); move or recreate the EAS project
+under `wilfrat1s-team`; or pay for an EAS plan.
+
 On 2026-09-23, a few hours after the three-job workflow above went green on two of its three jobs,
 every job stopped starting. The evidence, in the order it was gathered:
 
