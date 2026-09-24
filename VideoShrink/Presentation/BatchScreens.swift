@@ -1415,12 +1415,23 @@ struct BatchPausedScreen: View {
     /// does not know the outcome of. It now counts the copies it can account for and names the ones
     /// the user still has to look at. Static and internal so a case can state the sentence.
     static func pauseSubhead(saved: Int, total: Int, toCheck: Int) -> String {
-        // One copy is "the copy", not "copies": this is the screen a run with a single video rests on,
-        // and it read "1 of 1 saved. Copies already saved are in Photos." next to a line that says
-        // "1 video left" since round 25.
-        let counted = saved == 1
-            ? "1 of \(total) saved. The copy already saved is in Photos."
-            : "\(saved) of \(total) saved. Copies already saved are in Photos."
+        // A run that has saved nothing yet says exactly that, and nothing else.
+        //
+        // It read "0 of 4 saved. Copies already saved are in Photos." - the second sentence
+        // asserting that copies exist, directly under a headline reading "Nothing was lost", on the
+        // screen a user reaches by pausing a run that has not finished its first video. Found by
+        // rendering the screen: every case for this function had been given one copy or two, and
+        // none had ever been given none. The count is not lost with the sentence - the card below
+        // it says how many videos are left.
+        //
+        // One copy is "the copy", not "copies", for the same reason: this is the screen a run with
+        // a single video rests on.
+        let counted: String
+        switch saved {
+        case 0: counted = "Nothing saved yet."
+        case 1: counted = "1 of \(total) saved. The copy already saved is in Photos."
+        default: counted = "\(saved) of \(total) saved. Copies already saved are in Photos."
+        }
         guard toCheck > 0 else { return counted }
         return toCheck == 1
             ? "\(counted) One more needs a look in Photos."

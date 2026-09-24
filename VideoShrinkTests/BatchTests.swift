@@ -1121,6 +1121,13 @@ import UIKit
     /// "2 of 3 finished. Copies already saved are in Photos", which is a claim about a copy the app
     /// does not know the outcome of.
     func testThePausedCountsDescribeOnlyWhatIsAccountedFor() {
+        // Nothing saved: the screen may not say that copies are in Photos when there are none. It
+        // did, and this case is what was missing - the other two were the only ones written.
+        XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 0, total: 4, toCheck: 0),
+                       "Nothing saved yet.")
+        XCTAssertFalse(BatchPausedScreen.pauseSubhead(saved: 0, total: 4, toCheck: 0)
+            .contains("Copies already saved"),
+            "a run that has saved nothing may not claim that copies are in Photos")
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 2, total: 3, toCheck: 0),
                        "2 of 3 saved. Copies already saved are in Photos.")
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 3, toCheck: 1),
