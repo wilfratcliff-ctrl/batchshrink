@@ -530,6 +530,17 @@ struct ShrinkNotice: View {
     }
 }
 
+/// The small labelled pill above a screen's headline.
+///
+/// It carries a fact the screen cannot state anywhere else: what the scan promises ("No originals
+/// download"), what the run is doing to originals ("Original protected", "Copy checked first"),
+/// what a copy's state is ("Saved to Photos"). It is not a place to name the screen.
+///
+/// Three screens used it for exactly that and were repeating the navigation bar a few points above
+/// themselves - "Finished" over a bar reading Finished, "Paused" over a headline that opened with
+/// the word, "Library summary" over a bar reading "Your library". Rendering them side by side is
+/// what made it obvious. Those three are gone, and the rule is written here so the next screen does
+/// not put one back.
 struct ShrinkEyebrow: View {
     let title: String
     let symbol: String

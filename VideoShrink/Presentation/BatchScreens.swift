@@ -264,7 +264,6 @@ struct BatchSummaryScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
-                ShrinkEyebrow(title: "Library summary", symbol: "list.bullet.rectangle")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(headline)
                         .font(ShrinkStyle.headline).tracking(-1)
@@ -360,6 +359,12 @@ struct BatchSummaryScreen: View {
 
     private var subhead: String {
         guard let result = batch.scanResult else { return "" }
+        // Nothing to say when there is nothing there. This line read "0 videos in your Photos
+        // library." directly above a card whose own sentence was "There are no videos in your
+        // Photos library yet." - the same fact twice, in a place that has room for one. The card
+        // is the one that stays, because it is the one that can also explain *why* there are none:
+        // a library BatchShrink cannot use, or access it was not given.
+        guard result.videoCount > 0 else { return "" }
         return result.videoCount == 1 ? "1 video in your Photos library."
                                       : "\(result.videoCount) videos in your Photos library."
     }
@@ -1465,7 +1470,6 @@ struct BatchPausedScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
-                ShrinkEyebrow(title: "Paused", symbol: "pause.circle")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(Self.pauseHeadline(deletion: batch.deletionReport))
                         .font(ShrinkStyle.headline).tracking(-1)
@@ -1584,7 +1588,6 @@ struct BatchFinishedScreen: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: ShrinkStyle.sectionSpacing) {
-                ShrinkEyebrow(title: "Finished", symbol: "checkmark.seal")
                 VStack(alignment: .leading, spacing: 10) {
                     Text(headline)
                         .font(ShrinkStyle.headline).tracking(-1)
