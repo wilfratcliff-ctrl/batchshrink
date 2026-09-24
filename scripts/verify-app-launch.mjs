@@ -340,31 +340,77 @@ function clearStoredAppState(udid, identifier) {
 // The UI test compiles the app and its own bundle and then runs them on the simulator. Signing is
 // off for the same reason it is off in the other two jobs: the destination is a simulator, so no
 // certificate, provisioning profile or registered device is involved and nothing is spent.
+//
+// ONE RETRY, FOR ONE FAILURE, AND ONLY THAT ONE. On 24 September this job went red on a commit that
+// changed nothing but a document, with:
+//
+//   LaunchSmokeUITests.swift:42: error: Failed to get background assertion for target app with
+//   pid 10223: Timed out while acquiring background assertion.
+//
+// That is the simulator's own infrastructure. `app.launch()` never returned, so the test learned
+// nothing about the app, and the same commit passed on the next attempt. Retrying exactly this -
+// and failing immediately on anything else, with the output still printed - is the difference
+// between a gate people trust and a gate people re-run until it is green. The retry announces
+// itself in the log, so a green line never hides that the first attempt failed.
+const retryableLaunchFlake = 'Timed out while acquiring background assertion';
+
 function runLaunchSmokeTest(udid) {
-  const status = run(
-    'xcodebuild',
-    [
-      '-project',
-      'VideoShrink.xcodeproj',
-      '-scheme',
-      'VideoShrinkUITests',
-      '-destination',
-      `platform=iOS Simulator,id=${udid}`,
-      '-derivedDataPath',
-      derivedDataPath,
-      'CODE_SIGNING_ALLOWED=NO',
-      'test'
-    ],
-    'xcodebuild test'
-  );
-  if (status !== 0) {
+  const args = [
+    '-project',
+    'VideoShrink.xcodeproj',
+    '-scheme',
+    'VideoShrinkUITests',
+    '-destination',
+    `platform=iOS Simulator,id=${udid}`,
+    '-derivedDataPath',
+    derivedDataPath,
+    'CODE_SIGNING_ALLOWED=NO',
+    'test'
+  ];
+  const attempt = () => {
+    // Piped rather than inherited, because the retry has to be able to read the failure it is
+    // deciding about. The output is echoed in full either way, so the log is unchanged.
+    const result = spawnSync('xcodebuild', args, {
+      cwd: root,
+      env: process.env,
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024
+    });
+    process.stdout.write(result.stdout ?? '');
+    process.stderr.write(result.stderr ?? '');
+    return { status: result.status, output: `${result.stdout ?? ''}\n${result.stderr ?? ''}` };
+  };
+
+  console.log('[verify-app-launch] $ xcodebuild test (VideoShrinkUITests)');
+  const first = attempt();
+  if (first.status === 0) {
+    return;
+  }
+  if (!first.output.includes(retryableLaunchFlake)) {
     fail(
       'the launch test failed. The app either did not compile, did not launch, or did not draw the ' +
         'screen the test waits for -- XCTest output above names which, and the result bundle in ' +
         `${derivedDataPath}/Logs/Test carries the screen as it was at the moment of failure.`,
-      status
+      first.status
     );
   }
+
+  console.log(
+    '[verify-app-launch] the simulator could not give the app a background assertion, which is the ' +
+      "simulator's own infrastructure rather than the app: `app.launch()` never returned, so the " +
+      'test learned nothing about the app. Retrying once. Should the retry fail too, this build ' +
+      'fails with both attempts above.'
+  );
+  const second = attempt();
+  if (second.status !== 0) {
+    fail(
+      'the launch test failed twice: once because the simulator would not give the app a ' +
+        'background assertion, and once on the retry. The second failure is above, and it is the ' +
+        'one to read - the first said nothing about the app.',
+      second.status
+    );
+  }
+  console.log('[verify-app-launch] the retry passed. The first attempt was the simulator, not the app.');
 }
 
 function preflight() {
