@@ -173,8 +173,13 @@ import Photos
         XCTAssertEqual(estimate.conservativeBytes, 80_000_000)
         XCTAssertEqual(estimate.optimisticBytes, 140_000_000)
         XCTAssertEqual(estimate.likelyNoReductionCount, 1)
-        XCTAssertEqual(estimate.mayShrinkCount, 2,
-                       "both videos have room at the top of the band, so both may get a copy")
+        // One, not two. `mayShrinkCount` reads the generous end of the band, and the 50 MB original
+        // has no room at either end - it sits below the bottom of the 1080p band, which is exactly
+        // why the copy figure two lines down describes only the 200 MB video. This line asked for 2
+        // and contradicted both the case's own doc comment and its own neighbouring assertions; the
+        // first run of the suite is what surfaced it.
+        XCTAssertEqual(estimate.mayShrinkCount, 1,
+                       "only the 200 MB original has room at the top of its band")
         // Only the 200 MB original is expected to get a copy, so the copy figure is its 90 MB
         // midpoint and not the 140 MB that counting the skipped video's original produced.
         XCTAssertEqual(estimate.copiedBytes, 200_000_000)

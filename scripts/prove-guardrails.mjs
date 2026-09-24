@@ -631,6 +631,24 @@ const mutations = [
     replace: 'import SwiftUI\nprivate let ruleEProbe: String = BatchSelectionScreen.unaccountedHeading2',
     gate: 'callsites',
     expect: 'names a member that is declared nowhere in the scanned tree'
+  },
+  {
+    id: 'a computed property binds a name and then forgets to return it',
+    file: 'VideoShrink/Models/LibraryModels.swift',
+    find: '    var hasNumbers: Bool { sizedCount > 0 }',
+    replace: '    var hasNumbers: Bool {\n        let n = sizedCount\n        n > 0\n    }',
+    gate: 'callsites',
+    // Rule F exists because of exactly this fault, found by the compiler the first time the gate
+    // was unblocked: `BatchViewModel.selectableAssets` bound a name before its `filter`, and
+    // implicit returns are a single-expression feature, so the whole app and its test target
+    // stopped building. Nothing on Windows could see it - Rules A to E all read names, and this is
+    // a shape - so the mutation below is the same mistake written into a smaller property, and the
+    // harness is what says the new rule actually fires rather than merely being present.
+    //
+    // The replacement is spaced as the tree is written rather than as a human would write it: the
+    // declaration has to end in `{`, because a property whose body opens on the same line is not
+    // this rule's shape and the scanner deliberately does not guess at it.
+    expect: 'is a getter with more than one statement and no return'
   }
 ];
 

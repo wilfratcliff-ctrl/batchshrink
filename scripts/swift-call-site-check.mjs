@@ -93,6 +93,26 @@
  *   call to it was never order-checked - and Rule E is what surfaced the gap. Fixing it makes 24
  *   more call sites judgeable.
  *
+ * RULE F - a computed property whose body is more than one statement, written without `return`.
+ *   Implicit returns are a single-expression feature: `var x: T { expression }` returns it, and
+ *   the moment a name is bound first - `var x: T { let y = ...; expression }` - the getter is a
+ *   function with no return on a path that must return a value, which is a hard compile error.
+ *
+ *   This is not a hypothetical. It is the one thing the first compile of the last ten rounds
+ *   found: `BatchViewModel.selectableAssets` bound `unaccounted` before its `filter`, and the
+ *   whole app and test target did not build. Nothing on Windows could see it. Rules A to E all
+ *   look at *names* - label order, shadowing, missing requirements, duplicates, members that do
+ *   not exist - and this is a shape, which is why it needed its own rule rather than a tweak to
+ *   an existing one.
+ *
+ *   A property is reported when its declared type is neither `Void` nor `some View`, its body
+ *   contains no `return` at all, and the first statement in that body begins with `let`, `var`,
+ *   `guard`, `for`, `while`, `repeat`, `defer` or `do`. Those cannot be expressions, so a body
+ *   that opens with one and never returns is wrong whatever else is true of it. A body that opens
+ *   with an expression - however many lines it wraps across - is left alone, which is what keeps
+ *   the rule quiet on the hundreds of single-expression getters this codebase writes. `get`/`set`
+ *   accessor blocks open with `get`, so they are left alone too.
+ *
  * WHAT THIS DOES NOT COVER - do not mistake it for a compiler:
  *   - types, generics, availability, access control, actor isolation, effects, and overload
  *     resolution beyond the narrow uniqueness rules above;
@@ -1593,6 +1613,63 @@ for (const target of targets) {
 }
 files.sort();
 
+/**
+ * Rule F: a computed property whose body is more than one statement needs an explicit `return`.
+ *
+ * This one reads shapes rather than names, which is why it is its own function: it wants the
+ * source text and the indentation, and nothing Rules A to E collect.
+ *
+ * The brace walk ignores line comments and string literals before counting, so a `{` inside
+ * either cannot send it hunting for a closing brace that is not there. That is an approximation -
+ * a multi-line string or a block comment containing a brace would still confuse it - and the
+ * cost of being wrong in that direction is a missed finding, not a false one, because a body it
+ * fails to delimit is simply never judged.
+ */
+function checkGetterReturns(files) {
+  const findings = [];
+  let inspected = 0;
+  for (const file of files) {
+    const lines = file.source.split(/\r?\n/);
+    for (let i = 0; i < lines.length; i++) {
+      const decl = /^(\s*)(?:@\w+(?:\([^)]*\))?\s+)?(?:public |private |internal |fileprivate |final )*var\s+(\w+)\s*:\s*(.+?)\s*\{\s*$/.exec(lines[i]);
+      if (!decl) continue;
+      const [, indent, name, type] = decl;
+      // `some View` is a builder closure and `Void` has nothing to return; neither can be wrong
+      // in the way this rule describes.
+      if (/\bsome View\b/.test(type) || /\bVoid\b/.test(type)) continue;
+      const decorated = lines[i].includes('@ViewBuilder') ||
+        (i > 0 && lines[i - 1].trim().startsWith('@ViewBuilder'));
+      if (decorated) continue;
+
+      let depth = 1;
+      const body = [];
+      for (let j = i + 1; j < lines.length && depth > 0; j++) {
+        const stripped = lines[j].replace(/\/\/.*$/, '').replace(/"(?:[^"\\]|\\.)*"/g, '""');
+        for (const ch of stripped) {
+          if (ch === '{') depth += 1;
+          else if (ch === '}') depth -= 1;
+        }
+        if (depth > 0) body.push(lines[j]);
+      }
+      if (depth > 0) continue; // Unbalanced: this scan cannot place the body, so it says nothing.
+      inspected += 1;
+      if (/\breturn\b/.test(body.join('\n'))) continue;
+
+      // The first statement in the body, which for a correctly-written getter is either `return`
+      // or an expression. A statement keyword there means the body is more than one expression.
+      const base = `${indent}    `;
+      const first = body.find(line => line.trim() && line.startsWith(base) && !line.trim().startsWith('//'));
+      if (first && /^\s*(let|var|guard|for|while|repeat|defer|do)\b/.test(first)) {
+        findings.push({
+          rule: 'F', path: file.relPath, line: i + 1, name, type,
+          quote: lines[i].trim(),
+        });
+      }
+    }
+  }
+  return { findings, stats: { inspected } };
+}
+
 let declCount = 0;
 let callCount = 0;
 let initCount = 0;
@@ -1610,7 +1687,7 @@ for (const file of files) {
     initCount += initsInspected;
     // Rule E needs the whole analysis, not just the declarations and calls: the members a file
     // declares, the types it declares, the text it was read from and the module it belongs to.
-    analysed.push({ decls, calls, facts, types, clean, source, module: facts.module });
+    analysed.push({ decls, calls, facts, types, clean, source, relPath, module: facts.module });
     const inBridgeDirectory = relPath.startsWith(`${BRIDGE_DIRECTORY}/`);
     const mirroredIntoPod = MIRRORED_SOURCE_FOLDERS.some(folder => relPath.startsWith(`${folder}/`));
     for (const protocol of facts.protocolFacts) tree.protocols.push({ ...protocol, relPath });
@@ -1631,8 +1708,9 @@ const callOrder = checkCallOrder(analysed);
 const memberRefs = checkMemberReferences(analysed);
 const conformance = checkConformance(tree);
 const duplicates = checkDuplicates(tree);
+const getterReturns = checkGetterReturns(analysed);
 findings.push(...callOrder.findings, ...conformance.findings, ...duplicates.findings,
-              ...memberRefs.findings);
+              ...memberRefs.findings, ...getterReturns.findings);
 findings.sort((a, b) => (a.path === b.path ? a.line - b.line : a.path < b.path ? -1 : 1));
 
 for (const f of findings) {
@@ -1650,6 +1728,9 @@ for (const f of findings) {
   } else if (f.rule === 'E') {
     console.log(`FAIL ${f.path}:${f.line}: '${f.base}.${f.member}' names a member that is declared nowhere in the scanned tree`);
     console.log(`     a name that exists nowhere cannot resolve, whatever else is true of the code around it`);
+  } else if (f.rule === 'F') {
+    console.log(`FAIL ${f.path}:${f.line}: '${f.name}: ${f.type}' is a getter with more than one statement and no return`);
+    console.log(`     implicit returns are a single-expression feature; this body binds a name first, so it must write 'return'`);
   } else {
     console.log(`FAIL ${f.path}:${f.line}: '${f.name}' is declared a second time in ${f.scope}`);
     console.log(`     the first declaration is at ${f.firstPath}:${f.firstLine}`);
@@ -1667,7 +1748,8 @@ const coverage = `coverage: ${callOrder.stats.judged} calls resolved to one decl
   `${conformance.stats.protocols} protocols with ${conformance.stats.requirements} requirements checked against ${conformance.stats.conformers} conformers; ` +
   `${duplicates.stats.typeScopes} type scopes and ${duplicates.stats.fileScopes} file scopes checked for duplicates` +
   (duplicates.stats.podSeam > 0 ? `, plus ${duplicates.stats.podSeam} name(s) of the bridge files checked against the app Swift the pod compiles them with` : '') +
-  `; ${memberRefs.stats.onTheType} member references resolved to a member of the type they name, out of ${memberRefs.stats.references} made through a type name this scan knows`;
+  `; ${memberRefs.stats.onTheType} member references resolved to a member of the type they name, out of ${memberRefs.stats.references} made through a type name this scan knows` +
+  `; ${getterReturns.stats.inspected} computed properties inspected for a multi-statement body without a return`;
 const notMemberChecked = `not member-checked: ${memberRefs.stats.notATypeName} references whose base is not a type declared in the scanned tree ` +
   `(SwiftUI, UIKit, Foundation, PhotoKit, AVFoundation, XCTest and the standard library are all outside it); ` +
   `${memberRefs.stats.ambiguousTypeName} where the base name is declared more than once; ` +

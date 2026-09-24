@@ -1011,7 +1011,16 @@ import SwiftUI
         // leftover conclusion would be most obviously wrong.
         fixture.settings.deletionMode = .off
         fixture.batch.beginSelecting()
-        fixture.batch.selectAll()
+        // Ticked by hand rather than with Select all. The two videos the first run finished are in
+        // the session's own history of what it has shrunk, and `selectableAssets` leaves those out
+        // of a bulk selection on purpose - the rule that stops Select all from copying an app-made
+        // copy again. So Select all correctly picked nothing here and `start()` did nothing at all,
+        // which is what this case did until the suite first ran: it timed out waiting for a second
+        // run that never began, and then read the *previous* run's deletion count as a failure of
+        // the clearing it was written to check. A hand tick is the route the app offers for running
+        // a video it has already shrunk, so it is the route this case takes.
+        fixture.batch.toggle("a")
+        fixture.batch.toggle("b")
         fixture.batch.start()
         await eventually { fixture.batch.phase == .finished }
 
@@ -1115,8 +1124,12 @@ import SwiftUI
                        "2 of 3 saved. Copies already saved are in Photos.")
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 3, toCheck: 1),
                        "1 of 3 saved. The copy already saved is in Photos. One more needs a look in Photos.")
+        // One copy is "the copy" whatever else is on the screen. This line asked for the plural for
+        // the same `saved: 1` as the case above it asked for the singular, so the two assertions
+        // could not both hold and the second one failed the first time the suite ran. The sentence
+        // agrees with the number of copies, and that is what both cases pin.
         XCTAssertEqual(BatchPausedScreen.pauseSubhead(saved: 1, total: 4, toCheck: 2),
-                       "1 of 4 saved. Copies already saved are in Photos. 2 more need a look in Photos.")
+                       "1 of 4 saved. The copy already saved is in Photos. 2 more need a look in Photos.")
     }
 
     /// The same rule on the screen a run spends its whole life on, which had the same sentence.
