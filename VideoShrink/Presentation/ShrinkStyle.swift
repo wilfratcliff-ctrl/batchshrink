@@ -501,9 +501,21 @@ struct ShrinkNotice: View {
     let symbol: String
     let title: String
     let detail: String
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        // The symbol sits above the words at accessibility text sizes rather than beside them.
+        //
+        // Beside them it holds its column at every size, so at `.accessibility3` it was taking
+        // about a third of the width of a card whose whole job is sentences - and the render of
+        // the originals sheet showed what that costs: one paragraph of twenty short lines where
+        // ten full-width ones would do. The symbol is decoration and the sentences are the
+        // content; at these sizes the decoration moves out of their way. Same two-layout shape
+        // `QualityPillGroup` and `ShrinkSizeComparison` already use.
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        layout {
             Image(systemName: symbol).font(.title3).foregroundStyle(ShrinkStyle.accent)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {

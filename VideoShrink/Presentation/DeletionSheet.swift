@@ -5,6 +5,7 @@ struct DeletionSheet: View {
     @ObservedObject var settings: ShrinkSettings
 
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     @State private var pendingMode: DeletionMode?
 
     var body: some View {
@@ -59,7 +60,13 @@ struct DeletionSheet: View {
     }
 
     private var warning: some View {
-        HStack(alignment: .top, spacing: 12) {
+        // The symbol above the words at accessibility sizes, for the reason `ShrinkNotice` states:
+        // this card is the longest body of text in the app and the last screen before an original
+        // can be deleted, so it is the worst place to spend a third of the width on a triangle.
+        let layout = dynamicTypeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        layout {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(ShrinkStyle.danger)
                 .accessibilityHidden(true)
