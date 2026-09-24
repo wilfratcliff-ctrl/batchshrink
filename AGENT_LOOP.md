@@ -150,6 +150,63 @@ What a cloud build still does not do:
 
 ### The gate is blocked again: the account's Actions minutes are spent, and reset on 1 October
 
+### The gate is UNBLOCKED — 24 September 2026, and what the first run found
+
+**The owner made the repository public.** That is the fix the earlier note called "by far the
+cheapest", and it worked immediately: the two runs created while it was still private failed in
+seven seconds with an empty `runner_name`, and the dispatch sent a moment after the visibility
+change started all three jobs. `main` is verified again, and a push costs nothing.
+
+**The first run refused the tree.** After fifteen rounds with no compiler, the first thing the
+macOS runner did was fail the compile:
+
+```
+VideoShrink/Presentation/BatchViewModel.swift:289:9: error: missing return in getter
+expected to return '[LibraryAsset]'
+```
+
+`selectableAssets` binds `unaccounted` before its `filter`, and implicit returns are a
+single-expression feature, so the getter was a function with no return. `return` restored, and
+`scripts/swift-call-site-check.mjs` gained **Rule F** for the shape - a computed property with
+more than one statement and no `return` - with a fault-injection mutation in
+`scripts/prove-guardrails.mjs` proving it fires (71 of 71 caught, up from 70). Every other getter
+in the app was checked for the same shape and none has it.
+
+**Then the tests ran for the first time since round 19: 411 executed, 5 failures, in three
+tests — and all three were faults in the tests.** Each contradicted something in its own file:
+
+- `testASecondRunCountsOnlyItsOwnDeletions` asked Select all to pick the two videos the run had
+  just finished. `selectableAssets` leaves those out on purpose, so Select all correctly picked
+  nothing, `start()` correctly did nothing, and the case timed out waiting for a run that never
+  began - then read the *previous* run's deletion count and reported the clearing it was written
+  to check as broken. It ticks by hand now, which is the supported route.
+- `testThePausedCountsDescribeOnlyWhatIsAccountedFor` demanded the plural for `saved: 1` in one
+  case and the singular in the case above it, for the same `saved: 1`.
+- `testAVideoThatCannotShrinkIsNotCountedInTheCopyFigure` asserted `mayShrinkCount == 2` in a
+  case whose own doc comment says the 50 MB video is below the band's bottom and whose next
+  assertions say only the 200 MB original gets a copy.
+
+**The state after the fix, on `e105a5d`:** all three jobs green.
+
+```
+===== VIDEOSHRINK TEST TARGET COMPILE ===== PASSED
+===== VIDEOSHRINK TEST RUN ===== PASSED
+     Executed 411 tests, with 1 test skipped and 0 failures (0 unexpected)
+Build the Expo iOS app for the simulator     success   <- the shipping app compiles
+Launch the app on a simulator and check a screen renders  success
+```
+
+That last line is the second time anything in this repository has watched the app run, and the
+first time it has done so with round 30's icon, splash and screens in the tree. It is still one
+launch and one navigation on a simulator with no Photos library.
+
+**What is still blocked: an installable build for the phone.** The EAS iOS build allowance is a
+different quota from Actions minutes and still resets on 1 October. The candidate route that
+costs nothing is `eas build --local` on a free public-repo macOS runner, which does not consume
+EAS build minutes; it is unproven, needs an `EXPO_TOKEN` repository secret (a dashboard action,
+not something the CLI can create), and would need the resulting .ipa published with an OTA
+manifest to install without a cable.
+
 **Re-checked 24 September 2026: both build routes are still shut.** An EAS build was attempted
 again for the `preview` profile (the one that produces an .ipa installable on a registered iPhone)
 and was refused before it was created, with nothing queued and nothing charged:
@@ -417,6 +474,7 @@ Sourced from `docs/DEVELOPMENT_REVIEW.md`, which is the project's own review of 
 | 28 | see below | Both previews now say what is happening, and the test suite that will be the only gate in October had four cases repaired that could not fail or pinned the wrong thing | local gates PASS; `prove:guardrails` **70/70 across four gates**; **CI blocked** | 410 tests, none executed |
 | 29 | see below | A visual pass: one shared rhythm, a shorter hero, and one fewer card on each screen that opens a flow | local gates PASS; **CI blocked** | 410 tests, none executed |
 | 30 | see below | The app stops looking like a different product from the one it is: a brand icon, one radius scale, one comparison component and one page inset, and the working screen stops drawing three progress meters | local gates PASS; **CI blocked** | 411 tests, none executed |
+| 31 | `e105a5d` | The repository goes public, the gate unblocks, and the first compile and first test run in fifteen rounds find one compile error and three defective tests | **CI green, all three jobs** | 411 executed, 0 failures, 1 skipped; the Expo app compiles; the app launches |
 
 ### Round 30 — the surfaces stop disagreeing with each other
 
